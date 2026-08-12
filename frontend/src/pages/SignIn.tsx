@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import {
   startAuthentication,
   startRegistration,
@@ -29,8 +29,21 @@ export function SignIn() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
-  const { refresh } = useSession();
+  const { user, loading, refresh } = useSession();
   const navigate = useNavigate();
+
+  if (loading) {
+    return (
+      <p className="status" role="status">
+        Checking session...
+      </p>
+    );
+  }
+  if (user) {
+    // A signed-in user visiting the sign-in page goes straight to the
+    // file browser (spec US1 scenario 1).
+    return <Navigate to="/files" replace />;
+  }
 
   /**
    * Show a human-readable message for a failed action.

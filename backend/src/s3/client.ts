@@ -40,6 +40,8 @@ export interface HeadResult {
 export interface ListOptions {
   /** Continuation token from a previous page. */
   cursor?: string;
+  /** Page size; defaults to the S3 protocol limit of 1000. */
+  pageSize?: number;
 }
 
 /** Default page size for listings, matching the S3 protocol limit. */
@@ -120,7 +122,7 @@ export async function listObjects(
       Bucket: bucket,
       Prefix: fullPrefix,
       Delimiter: "/",
-      MaxKeys: MAX_KEYS,
+      MaxKeys: options?.pageSize ?? MAX_KEYS,
       ContinuationToken: options?.cursor,
     }),
   );

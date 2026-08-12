@@ -181,6 +181,17 @@ describe("listObjects", () => {
     expect(calls[0]?.input).toMatchObject({ ContinuationToken: "token-1" });
   });
 
+  it("honours an injectable page size (defaults to 1000)", async () => {
+    const { client, calls } = s3Input(() => ({
+      Contents: [],
+      CommonPrefixes: [],
+      IsTruncated: false,
+    }));
+
+    await listObjects(client, bucket, userPrefix, "", { pageSize: 5 });
+    expect(calls[0]?.input).toMatchObject({ MaxKeys: 5 });
+  });
+
   it("returns an empty listing for an empty prefix", async () => {
     const { client } = s3Input(() => ({
       Contents: [],

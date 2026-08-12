@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   apiFetch,
+  getDownloadUrl,
   getHealth,
   getMe,
+  listFiles,
   postLoginOptions,
   postLoginVerify,
   postLogout,
@@ -245,6 +247,73 @@ describe("postLogout", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/auth/logout",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+});
+
+describe("listFiles", () => {
+  it("lists the space root when no prefix or cursor is given", async () => {
+    const body = { folders: [], files: [], nextCursor: null };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await listFiles("");
+
+    expect(result).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("sends the relative prefix as a query parameter", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ folders: [], files: [], nextCursor: null }),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await listFiles("docs/reports");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files?prefix=docs%2Freports",
+      expect.anything(),
+    );
+  });
+
+  it("sends the cursor for the next page", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ folders: [], files: [], nextCursor: null }),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await listFiles("", "token-2");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files?cursor=token-2",
+      expect.anything(),
+    );
+  });
+});
+
+describe("getDownloadUrl", () => {
+  it("requests a presigned URL for the key with proper encoding", async () => {
+    const url =
+      "https://s3.example/jivedrive-prod/users/alice/a.txt?X-Amz-Signature=abc";
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ url }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await getDownloadUrl("users/alice/my file #1?.txt");
+
+    expect(result.url).toBe(url);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/files/download-url?key=${encodeURIComponent(
+        "users/alice/my file #1?.txt",
+      )}`,
+      expect.anything(),
     );
   });
 });

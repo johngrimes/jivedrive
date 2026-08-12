@@ -14,6 +14,27 @@ export interface User {
   isAdmin: boolean;
 }
 
+/** A file (object) in a listing, per the contract `FileEntry` schema. */
+export interface FileEntry {
+  /** Full object key within the user's space. */
+  key: string;
+  /** Base name of the object. */
+  name: string;
+  /** Object size in bytes. */
+  size: number;
+  /** ISO 8601 timestamp. */
+  lastModified: string;
+}
+
+/** One page of a folder listing, per the contract. */
+export interface ListFilesResponse {
+  /** Base names of subfolders (single path segment, no trailing slash). */
+  folders: string[];
+  files: FileEntry[];
+  /** Opaque continuation token for the next page, or null. */
+  nextCursor: string | null;
+}
+
 /** Error body returned by the API for failed requests. */
 export interface ApiErrorBody {
   error: string;
@@ -188,4 +209,34 @@ export function postRegisterVerify(body: {
  */
 export async function postLogout(): Promise<void> {
   await apiFetch<void>("/auth/logout", { method: "POST" }, { noBody: true });
+}
+
+/**
+ * List folders and files under a relative prefix within the user's space.
+ *
+ * @param prefix - relative subfolder within the user's prefix ("" for root)
+ * @param cursor - opaque continuation token from a previous page
+ * @returns one page of folders and files
+ */
+export function listFiles(
+  prefix: string,
+  cursor?: string,
+): Promise<ListFilesResponse> {
+  const params = new URLSearchParams();
+  if (prefix !== "") params.set("prefix", prefix);
+  if (cursor) params.set("cursor", cursor);
+  const query = params.toString();
+  return apiFetch<ListFilesResponse>(`/api/files${query ? `?${query}` : ""}`);
+}
+
+/**
+ * Obtain a short-lived presigned GET URL that downloads a file.
+ *
+ * @param key - full object key within the user's space
+ * @returns the presigned download URL
+ */
+export function getDownloadUrl(key: string): Promise<{ url: string }> {
+  return apiFetch<{ url: string }>(
+    `/api/files/download-url?key=${encodeURIComponent(key)}`,
+  );
 }

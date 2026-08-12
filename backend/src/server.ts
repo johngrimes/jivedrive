@@ -5,6 +5,7 @@ import { serveStatic } from "hono/bun";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Database } from "bun:sqlite";
+import type { S3Client } from "@aws-sdk/client-s3";
 import { loadConfig } from "./config";
 import type { AppConfig } from "./config";
 import { migrateFromDir, openDatabase } from "./db/migrate";
@@ -14,6 +15,8 @@ import type { User } from "./db/repository";
 import { SESSION_COOKIE_NAME, validateSession } from "./auth/sessions";
 import { createChallengeStore } from "./auth/webauthn";
 import { authRoutes } from "./routes/auth";
+import { filesRoutes } from "./routes/files";
+import { createS3Client } from "./s3/client";
 
 /** Variables stored on the Hono context for the current request. */
 export type ServerEnv = {
@@ -28,6 +31,10 @@ export interface ServerDeps {
   db: Database;
   /** Directory of the built SPA; defaults to CWD/frontend/dist. */
   staticDir?: string;
+  /** S3 client for file operations; defaults to one built from config. */
+  s3Client?: S3Client;
+  /** Folder listing page size; defaults to 1000 (S3's page size). */
+  listPageSize?: number;
 }
 
 /**
@@ -54,6 +61,17 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
       config: deps.config,
       db: deps.db,
       challenges: createChallengeStore(),
+    }),
+  );
+
+  // File routes (folder listing, download URLs) mounted under /api/files.
+  // The S3 client is injectable so tests can substitute a stub or mock.
+  app.route(
+    "/api/files",
+    filesRoutes({
+      s3Client: deps.s3Client ?? createS3Client(deps.config.s3),
+      requireUser: requireUser(deps.db),
+      listPageSize: deps.listPageSize,
     }),
   );
 

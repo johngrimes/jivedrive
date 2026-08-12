@@ -5,7 +5,7 @@ import { SessionProvider } from "./auth/SessionProvider";
 import { AppShell } from "./components/AppShell";
 import { SignIn } from "./pages/SignIn";
 import { Register } from "./pages/Register";
-import { FilesPage } from "./pages/FilesPage";
+import { FilesPage } from "./pages/Files";
 import { AdminPage } from "./pages/AdminPage";
 import "./index.css";
 

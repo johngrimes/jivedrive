@@ -1,16 +1,178 @@
 /**
  * E2E test server: serves the built SPA and the API on port 5173 with an
- * in-memory database seeded for the Playwright auth tests.
+ * in-memory database and an in-memory mock S3 object store.
  *
  * Runs via `bun run ../backend/src/e2eServer.ts` from the e2e directory
  * (see playwright.config.ts). The RP ID is `localhost` so passkey
  * ceremonies work against the virtual authenticator.
+ *
+ * The mock S3 layer has two parts: a fake S3 client injected into the app
+ * (serves listings and presigned URLs from an in-memory map) and a mock
+ * S3 HTTP server on port 5299 (serves downloads at presigned URLs).
  */
 import { resolve } from "node:path";
+import { Hono } from "hono";
+import type { S3Client } from "@aws-sdk/client-s3";
 import { loadConfig } from "./config";
 import { migrateFromDir, openDatabase } from "./db/migrate";
 import { createInvite, createUser } from "./db/repository";
 import { createApp } from "./server";
+import { createS3Client } from "./s3/client";
+import { createSession } from "./auth/sessions";
+
+/** An object stored in the mock S3. */
+interface MockObject {
+  body: string;
+  /** Displayed size, which may differ from the body length. */
+  size: number;
+  /** ISO 8601 timestamp. */
+  lastModified: string;
+}
+
+/** In-memory mock object store keyed by full object key. */
+const objectStore = new Map<string, MockObject>();
+
+/** Port of the mock S3 HTTP server (downloads). */
+const MOCK_S3_PORT = 5299;
+
+/**
+ * Seed an object into the mock store.
+ *
+ * @param key - full object key
+ * @param body - file content served on download
+ * @param size - displayed size, defaults to the body length
+ * @param lastModified - ISO timestamp, defaults to a fixed date
+ */
+function seedObject(
+  key: string,
+  body: string,
+  size?: number,
+  lastModified?: string,
+): void {
+  objectStore.set(key, {
+    body,
+    size: size ?? Buffer.byteLength(body),
+    lastModified:
+      lastModified ?? new Date("2026-08-10T12:00:00Z").toISOString(),
+  });
+}
+
+/**
+ * List the direct children of a prefix in the mock store, matching the
+ * shape of an S3 ListObjectsV2 response with delimiter "/" and opaque
+ * continuation tokens (offsets).
+ *
+ * @param input - the ListObjectsV2 command input
+ * @returns a mock S3 listing response
+ */
+function listObjectsV2(input: {
+  Prefix?: string;
+  Delimiter?: string;
+  MaxKeys?: number;
+  ContinuationToken?: string;
+}) {
+  const prefix = input.Prefix ?? "";
+  const maxKeys = input.MaxKeys ?? 1000;
+
+  const entries: Array<{ kind: "folder" | "file"; key: string }> = [];
+  const seenFolders = new Set<string>();
+  for (const key of [...objectStore.keys()]
+    .filter((k) => k.startsWith(prefix))
+    .sort()) {
+    const rest = key.slice(prefix.length);
+    if (rest === "") continue;
+    if (rest.includes("/")) {
+      const folder = prefix + rest.slice(0, rest.indexOf("/") + 1);
+      if (!seenFolders.has(folder)) {
+        seenFolders.add(folder);
+        entries.push({ kind: "folder", key: folder });
+      }
+    } else {
+      entries.push({ kind: "file", key });
+    }
+  }
+
+  let start = 0;
+  if (input.ContinuationToken) {
+    const offset = Number(
+      Buffer.from(input.ContinuationToken, "base64url").toString(),
+    );
+    if (Number.isInteger(offset) && offset > 0) start = offset;
+  }
+  const page = entries.slice(start, start + maxKeys);
+  const nextStart = start + page.length;
+  const isTruncated = nextStart < entries.length;
+
+  return {
+    Contents: page
+      .filter((entry) => entry.kind === "file")
+      .map((entry) => {
+        const object = objectStore.get(entry.key);
+        return {
+          Key: entry.key,
+          Size: object?.size ?? 0,
+          LastModified: object ? new Date(object.lastModified) : new Date(0),
+        };
+      }),
+    CommonPrefixes: page
+      .filter((entry) => entry.kind === "folder")
+      .map((entry) => ({ Prefix: entry.key })),
+    IsTruncated: isTruncated,
+    ...(isTruncated
+      ? {
+          NextContinuationToken: Buffer.from(String(nextStart)).toString(
+            "base64url",
+          ),
+        }
+      : {}),
+  };
+}
+
+/** The fake S3 client injected into the app for e2e runs. */
+function createMockS3Client(): S3Client {
+  const client = createS3Client({
+    endpoint: `http://localhost:${MOCK_S3_PORT}`,
+    region: "gra",
+    accessKeyId: "e2e-access-key",
+    secretAccessKey: "e2e-secret-key",
+  });
+  client.send = (async (command: unknown) => {
+    const name = (command as { constructor: { name: string } }).constructor
+      .name;
+    const input = (command as { input: Record<string, unknown> }).input ?? {};
+    switch (name) {
+      case "ListObjectsV2Command":
+        return listObjectsV2(input as never);
+      case "HeadObjectCommand": {
+        const object = objectStore.get(input.Key as string);
+        if (!object) {
+          const err = new Error("Not Found") as Error & { name: string };
+          err.name = "NotFound";
+          throw err;
+        }
+        return {
+          ContentLength: object.size,
+          LastModified: new Date(object.lastModified),
+        };
+      }
+      case "DeleteObjectCommand":
+        objectStore.delete(input.Key as string);
+        return {};
+      case "GetObjectCommand": {
+        const object = objectStore.get(input.Key as string);
+        if (!object) {
+          const err = new Error("NoSuchKey") as Error & { name: string };
+          err.name = "NoSuchKey";
+          throw err;
+        }
+        return { Body: object.body };
+      }
+      default:
+        throw new Error(`Unhandled mock S3 command: ${name}`);
+    }
+  }) as unknown as S3Client["send"];
+  return client;
+}
 
 const env: Record<string, string | undefined> = {
   ...process.env,
@@ -32,11 +194,16 @@ const db = openDatabase(config.dbPath);
 migrateFromDir(db, config.migrationsDir);
 
 // Seed a user with no passkey: the first sign-in registers one.
-createUser(db, {
+const alice = createUser(db, {
   username: "alice",
   bucket: "jivedrive-prod",
   prefix: "users/alice/",
 });
+
+// Pre-seed a session for the browse e2e spec so it can start signed in
+// without a WebAuthn ceremony (sign-in flows are covered by auth.spec;
+// reusing alice there would race the single-use passkey registration).
+createSession(db, alice.id, { token: "browse-session" });
 
 // Seed an admin who issues invites for the register flow.
 const admin = createUser(db, {
@@ -67,10 +234,46 @@ createInvite(db, {
   expiresAt: past,
 });
 
+// Alice's space: three subfolders (docs, photos, empty) and seven root
+// files, more than one page of the e2e page size (5).
+seedObject("users/alice/archive.zip", "zip-bytes", 1258291);
+seedObject("users/alice/budget.xlsx", "spreadsheet-bytes", 831488);
+seedObject("users/alice/data.csv", "a,b,c\n1,2,3", 123);
+seedObject("users/alice/launch-deck.pptx", "deck-bytes", 18979226);
+seedObject("users/alice/readme.md", "# Readme\n", 42);
+seedObject("users/alice/report.pdf", "%PDF-1.4 hello report", 2516582);
+seedObject("users/alice/todo.txt", "buy milk\n", 7);
+seedObject("users/alice/docs/notes.txt", "hello from notes", 64);
+seedObject("users/alice/docs/my file #1?.txt", "special file content", 128);
+seedObject("users/alice/photos/pic.jpg", "jpeg-bytes", 4096);
+seedObject("users/alice/empty/", "", 0);
+
+// Mock S3 HTTP server: serves downloads at path-style presigned URLs.
+const mockS3 = new Hono();
+mockS3.get("/:bucket/*", (c) => {
+  const path = c.req.path;
+  const slash = path.indexOf("/", 1);
+  const key = decodeURIComponent(slash === -1 ? "" : path.slice(slash + 1));
+  const object = objectStore.get(key);
+  if (!object) return c.json({ error: "NoSuchKey" }, 404);
+  const fileName = encodeURIComponent(key.split("/").pop() ?? "download");
+  c.header("Content-Disposition", `attachment; filename="${fileName}"`);
+  return c.body(object.body);
+});
+Bun.serve({ port: MOCK_S3_PORT, fetch: mockS3.fetch });
+
 const staticDir = resolve(import.meta.dir, "../../frontend/dist");
-const app = createApp({ config, db, staticDir });
+const app = createApp({
+  config,
+  db,
+  staticDir,
+  s3Client: createMockS3Client(),
+  // Small page size so the browse e2e exercises load more without
+  // seeding 1000 objects.
+  listPageSize: 5,
+});
 
 Bun.serve({ port: config.port, fetch: app.fetch });
 console.log(
-  `E2E JiveDrive listening on http://localhost:${config.port} (db seeded)`,
+  `E2E JiveDrive listening on http://localhost:${config.port} (db + mock S3 seeded)`,
 );

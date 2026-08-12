@@ -1,67 +1,10 @@
 import { expect, test } from "@playwright/test";
-import type { BrowserContext, CDPSession, Page } from "@playwright/test";
-
-/**
- * Enable a virtual WebAuthn authenticator on the page's context so passkey
- * ceremonies (create and get) complete without a real device.
- *
- * @param context - the browser context
- * @param page - the page
- * @returns the CDP session
- */
-async function enableVirtualAuthenticator(
-  context: BrowserContext,
-  page: Page,
-): Promise<CDPSession> {
-  const cdp = await context.newCDPSession(page);
-  await cdp.send("WebAuthn.enable");
-  await cdp.send("WebAuthn.addVirtualAuthenticator", {
-    options: {
-      protocol: "ctap2",
-      transport: "internal",
-      hasResidentKey: true,
-      hasUserVerification: true,
-      isUserVerified: true,
-    },
-  });
-  return cdp;
-}
-
-/**
- * Fill in the username and submit the sign-in form.
- *
- * @param page - the page
- * @param username - the username to sign in as
- */
-async function signIn(page: Page, username: string): Promise<void> {
-  await page.getByLabel("Username").fill(username);
-  await page.getByRole("button", { name: "Continue with passkey" }).click();
-}
-
-/**
- * Assert that the persistent header shows the signed-in user.
- *
- * @param page - the page
- * @param username - the expected username
- */
-async function expectSignedInAs(page: Page, username: string): Promise<void> {
-  await expect(page.locator(".app-session-user")).toHaveText(
-    `Signed in as ${username}`,
-  );
-}
-
-/**
- * Sign out via the header button and wait for the sign-in state.
- *
- * @param page - the page
- */
-async function signOut(page: Page): Promise<void> {
-  await page
-    .locator(".app-session")
-    .getByRole("button", { name: "Sign out" })
-    .click();
-  await expect(page.locator(".app-session")).toContainText("Sign in");
-}
+import {
+  enableVirtualAuthenticator,
+  expectSignedInAs,
+  signIn,
+  signOut,
+} from "./helpers";
 
 test("a seeded user signs in with a passkey and signs out", async ({
   page,
