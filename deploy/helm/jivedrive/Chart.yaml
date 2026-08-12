@@ -1,0 +1,17 @@
+apiVersion: v2
+name: jivedrive
+description: JiveDrive - a passkey-authenticated file browser for OVHcloud Object Storage
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - file-browser
+  - object-storage
+  - s3
+  - webauthn
+home: https://drive.grimes.id.au
+sources:
+  - https://github.com/johngrimes/jivedrive
+maintainers:
+  - name: John Grimes
+    email: john@grimes.id.au

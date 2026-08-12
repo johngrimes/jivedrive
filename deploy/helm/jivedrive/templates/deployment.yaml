@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-deployment
+  labels:
+    {{- include "jivedrive.labels" . | nindent 4 }}
+spec:
+  # The app is SQLite-backed and single-writer; Recreate avoids two pods
+  # racing on the database during a rolling update.
+  strategy:
+    type: Recreate
+  replicas: {{ .Values.jivedrive.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: jivedrive
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "jivedrive.labels" . | nindent 8 }}
+    spec:
+      # The runtime image runs as the non-root "bun" user (UID 1000);
+      # fsGroup 1000 gives that user write access to mounted volumes.
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 1000
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: jivedrive
+          image: "{{ .Values.jivedrive.image.repository }}:{{ .Values.jivedrive.image.tag }}"
+          imagePullPolicy: {{ .Values.jivedrive.image.pullPolicy | quote }}
+          ports:
+            # Must match jivedrive.config.JIVEDRIVE_PORT (default 3000).
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          envFrom:
+            {{- if gt (len .Values.jivedrive.config) 0 }}
+            - configMapRef:
+                name: {{ .Release.Name }}-configmap
+            {{- end }}
+            {{- if gt (len .Values.jivedrive.secretConfig) 0 }}
+            - secretRef:
+                name: {{ .Release.Name }}-secret
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.jivedrive.persistence.mountPath | quote }}
+          startupProbe:
+            httpGet:
+              path: /healthcheck
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /healthcheck
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthcheck
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          resources: {{ toJson .Values.jivedrive.resources }}
+      volumes:
+        {{- if .Values.jivedrive.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-pvc
+        {{- else }}
+        # Ephemeral database: data is lost when the pod is recreated.
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      nodeSelector: {{ toJson .Values.jivedrive.nodeSelector }}
+      tolerations: {{ toJson .Values.jivedrive.tolerations }}
+      affinity: {{ toJson .Values.jivedrive.affinity }}

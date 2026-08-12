@@ -1,0 +1,17 @@
+{{- if .Values.jivedrive.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-pvc
+  labels:
+    {{- include "jivedrive.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.jivedrive.persistence.size | quote }}
+  {{- if .Values.jivedrive.persistence.storageClassName }}
+  storageClassName: {{ .Values.jivedrive.persistence.storageClassName | quote }}
+  {{- end }}
+{{- end }}
