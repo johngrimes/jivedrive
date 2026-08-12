@@ -128,6 +128,8 @@ export interface FileListingProps {
   onDownload: (file: FileEntry) => void;
   /** Open the share modal for a file. */
   onShare: (file: FileEntry) => void;
+  /** Open the delete confirmation dialog for a file. */
+  onDelete: (file: FileEntry) => void;
   /** Load the next page. */
   onLoadMore: () => void;
   /** Retry the failed initial load. */
@@ -152,6 +154,7 @@ export function FileListing({
   onOpenFolder,
   onDownload,
   onShare,
+  onDelete,
   onLoadMore,
   onRetry,
 }: FileListingProps) {
@@ -232,6 +235,19 @@ export function FileListing({
                   }}
                 >
                   Share
+                </a>
+                <span className="file-action-sep" aria-hidden="true">
+                  ·
+                </span>
+                <a
+                  className="file-action"
+                  href="#"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    onDelete(file);
+                  }}
+                >
+                  Delete
                 </a>
               </td>
             </tr>

@@ -7,6 +7,7 @@ import type {
   ListFilesResponse,
 } from "../api/client";
 import { useSession } from "../auth/sessionContext";
+import { DeleteDialog } from "../components/DeleteDialog";
 import { Breadcrumbs, FileListing } from "../components/FileListing";
 import { ShareModal } from "../components/ShareModal";
 import { UploadControl } from "../components/UploadControl";
@@ -33,6 +34,7 @@ export function FilesPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
   const [shareFile, setShareFile] = useState<FileEntry | null>(null);
+  const [deleteFile, setDeleteFile] = useState<FileEntry | null>(null);
 
   // Adjust state during render when navigating to a different folder, so
   // the stale listing is cleared and the skeleton shows for the new one.
@@ -187,6 +189,7 @@ export function FilesPage() {
           onOpenFolder={(folder) => setPrefix(prefix + folder + "/")}
           onDownload={(file) => void handleDownload(file)}
           onShare={setShareFile}
+          onDelete={setDeleteFile}
           onLoadMore={() => void loadMore()}
           onRetry={retry}
         />
@@ -194,6 +197,16 @@ export function FilesPage() {
 
       {shareFile && (
         <ShareModal file={shareFile} onClose={() => setShareFile(null)} />
+      )}
+      {deleteFile && (
+        <DeleteDialog
+          file={deleteFile}
+          onDeleted={() => {
+            setDeleteFile(null);
+            refreshListing();
+          }}
+          onClose={() => setDeleteFile(null)}
+        />
       )}
     </div>
   );

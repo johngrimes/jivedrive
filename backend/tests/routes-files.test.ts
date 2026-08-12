@@ -66,6 +66,26 @@ interface CallRecord {
 }
 
 /**
+ * Row counts per table. Deleting an object in storage must never touch
+ * the database (data-model.md deletion rules: share links are never
+ * stored and object deletion leaves all DB records alone).
+ *
+ * @param db - database connection
+ * @returns table name to row count
+ */
+function dbRowCounts(db: Database): Record<string, number> {
+  const tables = ["users", "passkey_credentials", "invites", "sessions"];
+  const counts: Record<string, number> = {};
+  for (const table of tables) {
+    const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as {
+      n: number;
+    };
+    counts[table] = row.n;
+  }
+  return counts;
+}
+
+/**
  * Create an app over a fresh in-memory database with a seeded user and a
  * recording S3 stub.
  *
@@ -530,26 +550,6 @@ describe("POST /api/files/share-url", () => {
     });
   }
 
-  /**
-   * Row counts per table. The share route must never write to the
-   * database (FR-012: links are fire-and-forget), so every request must
-   * leave these counts untouched.
-   *
-   * @param db - database connection
-   * @returns table name to row count
-   */
-  function dbRowCounts(db: Database): Record<string, number> {
-    const tables = ["users", "passkey_credentials", "invites", "sessions"];
-    const counts: Record<string, number> = {};
-    for (const table of tables) {
-      const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as {
-        n: number;
-      };
-      counts[table] = row.n;
-    }
-    return counts;
-  }
-
   it("returns a presigned GET URL with the default 7-day expiry", async () => {
     const { app, calls } = createFilesApp();
 
@@ -694,6 +694,116 @@ describe("POST /api/files/share-url", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ key: "users/alice/a.txt" }),
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("DELETE /api/files", () => {
+  /** DELETE a file key with the alice session cookie. */
+  async function deleteFile(
+    app: ReturnType<typeof createApp>,
+    key: string,
+  ): Promise<Response> {
+    return app.request(`/api/files?key=${encodeURIComponent(key)}`, {
+      method: "DELETE",
+      headers: { cookie: aliceCookie },
+    });
+  }
+
+  it("deletes an existing object and returns 204 with no body", async () => {
+    const { app, calls } = createFilesApp((name, input) => {
+      // The delete command is answered with an empty payload; the head
+      // command reports the object as existing.
+      if (name === "DeleteObjectCommand") return {};
+      expect(name).toBe("HeadObjectCommand");
+      expect(String(input.Key)).toBe("users/alice/old.txt");
+      return {
+        ContentLength: 10,
+        LastModified: new Date("2026-08-12T00:00:00Z"),
+      };
+    });
+
+    const res = await deleteFile(app, "users/alice/old.txt");
+
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe("");
+    // The scoped HEAD runs first, then the delete on the same key.
+    expect(calls.map((c) => c.name)).toEqual([
+      "HeadObjectCommand",
+      "DeleteObjectCommand",
+    ]);
+    expect(calls[1]?.input).toMatchObject({
+      Bucket: bucket,
+      Key: "users/alice/old.txt",
+    });
+  });
+
+  it("returns 404 for a missing object and never deletes", async () => {
+    const { app, calls } = createFilesApp((name, input) => {
+      expect(name).toBe("HeadObjectCommand");
+      expect(String(input.Key)).toBe("users/alice/gone.txt");
+      const err = new Error("Not Found") as Error & { name: string };
+      err.name = "NotFound";
+      throw err;
+    });
+
+    const res = await deleteFile(app, "users/alice/gone.txt");
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ code: "not_found" });
+    // No delete is attempted for an object that does not exist.
+    expect(calls.map((c) => c.name)).toEqual(["HeadObjectCommand"]);
+  });
+
+  it("rejects a key outside the user's prefix without touching storage", async () => {
+    const { app, calls } = createFilesApp();
+
+    for (const key of ["users/bob/a.txt", "users/alice2/x.txt"]) {
+      const res = await deleteFile(app, key);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "out_of_scope" });
+    }
+    // No head or delete ever runs against an out-of-scope key.
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects a missing key", async () => {
+    const { app, calls } = createFilesApp();
+
+    const res = await app.request("/api/files", {
+      method: "DELETE",
+      headers: { cookie: aliceCookie },
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: "bad_request" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("persists nothing: the database is untouched by delete requests", async () => {
+    const { app, db } = createFilesApp((name) => {
+      // The object exists, so the delete proceeds.
+      if (name === "DeleteObjectCommand") return {};
+      expect(name).toBe("HeadObjectCommand");
+      return {
+        ContentLength: 10,
+        LastModified: new Date("2026-08-12T00:00:00Z"),
+      };
+    });
+
+    const before = dbRowCounts(db);
+    // A successful delete must leave every table unchanged (deleting an
+    // object in storage does not touch any database records).
+    await deleteFile(app, "users/alice/a.txt");
+
+    expect(dbRowCounts(db)).toEqual(before);
+  });
+
+  it("requires a signed-in session", async () => {
+    const { app } = createFilesApp();
+    const res = await app.request("/api/files?key=users%2Falice%2Fa.txt", {
+      method: "DELETE",
     });
     expect(res.status).toBe(401);
   });

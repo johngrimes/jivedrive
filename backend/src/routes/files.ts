@@ -9,6 +9,7 @@ import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import type { S3Client } from "@aws-sdk/client-s3";
 import {
+  deleteObject,
   headObject,
   listObjects,
   presignedGetUrl,
@@ -60,7 +61,7 @@ const SHARE_DEFAULT_EXPIRES_IN = "7d";
  */
 function jsonError(
   c: Context<ServerEnv>,
-  status: 400 | 409,
+  status: 400 | 404 | 409,
   message: string,
   code: string,
 ): Response {
@@ -305,6 +306,42 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
       }
       throw error;
     }
+  });
+
+  // Permanently delete one object within the user's space (US5, T047).
+  // Scope enforcement comes first (constitution IV): headObject rejects
+  // keys outside the user's prefix, mapped to a 400 below. A missing
+  // object is reported as 404; only an object that exists is deleted.
+  // Deleting an object in storage touches no database records
+  // (data-model.md deletion rules). The delete itself is idempotent at
+  // S3, so a concurrently removed object still yields a successful 204.
+  app.delete("/", async (c) => {
+    const user = c.get("user");
+    const key = c.req.query("key") ?? "";
+    if (key === "") {
+      return jsonError(c, 400, "A file key is required", "bad_request");
+    }
+
+    let existing: HeadResult | null;
+    try {
+      existing = await headObject(s3Client, user.bucket, user.prefix, key);
+    } catch (error) {
+      if (error instanceof RangeError) {
+        return jsonError(
+          c,
+          400,
+          "The key is outside your space",
+          "out_of_scope",
+        );
+      }
+      throw error;
+    }
+    if (existing === null) {
+      return jsonError(c, 404, "The file does not exist", "not_found");
+    }
+
+    await deleteObject(s3Client, user.bucket, user.prefix, key);
+    return c.body(null, 204);
   });
 
   return app;

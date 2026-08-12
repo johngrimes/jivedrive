@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   apiFetch,
+  deleteFile,
   getDownloadUrl,
   getHealth,
   getMe,
@@ -363,6 +364,22 @@ describe("postShareUrl", () => {
       expect.objectContaining({
         body: JSON.stringify({ key: "users/alice/a.txt", expiresIn: "7d" }),
       }),
+    );
+  });
+});
+
+describe("deleteFile", () => {
+  it("sends a DELETE request for the encoded key without parsing a body", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await deleteFile("users/alice/my file #1?.txt");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/files?key=${encodeURIComponent("users/alice/my file #1?.txt")}`,
+      expect.objectContaining({ method: "DELETE" }),
     );
   });
 });

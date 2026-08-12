@@ -35,6 +35,9 @@ const objectStore = new Map<string, MockObject>();
 /** Port of the mock S3 HTTP server (downloads). */
 const MOCK_S3_PORT = 5299;
 
+/** Keep a delete in flight so the UI's pending state is observable. */
+const DELETE_DELAY_MS = 400;
+
 /**
  * Seed an object into the mock store.
  *
@@ -156,6 +159,9 @@ function createMockS3Client(): S3Client {
         };
       }
       case "DeleteObjectCommand":
+        // Keep deletes in flight long enough for the e2e suite to assert
+        // the dialog's pending state (visibility of system status).
+        await Bun.sleep(DELETE_DELAY_MS);
         objectStore.delete(input.Key as string);
         return {};
       case "GetObjectCommand": {
@@ -249,6 +255,14 @@ seedObject("users/alice/todo.txt", "buy milk\n", 7);
 seedObject("users/alice/docs/notes.txt", "hello from notes", 64);
 seedObject("users/alice/docs/my file #1?.txt", "special file content", 128);
 seedObject("users/alice/photos/pic.jpg", "jpeg-bytes", 4096);
+// Dedicated objects for the delete e2e spec: each test targets its own
+// object so the tests can run in parallel without racing each other or
+// the other specs. They live in photos/ because upload.spec uploads into
+// docs/ and browse.spec asserts the root item counts; the e2e page size
+// is 5, so adding files to docs would push its listings past one page.
+seedObject("users/alice/photos/delete-me-cancel.txt", "keep me", 7);
+seedObject("users/alice/photos/delete-me-confirm.txt", "delete me", 9);
+seedObject("users/alice/photos/delete-me-missing.txt", "gone soon", 9);
 seedObject("users/alice/empty/", "", 0);
 
 // Mock S3 HTTP server: serves downloads at path-style presigned URLs and

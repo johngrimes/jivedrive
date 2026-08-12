@@ -299,3 +299,21 @@ export function postShareUrl(
     body: JSON.stringify({ key, expiresIn }),
   });
 }
+
+/**
+ * Permanently delete an object within the user's space.
+ *
+ * Deletion is immediate and irreversible (FR-010); the route touches no
+ * database records. The key is validated server-side against the user's
+ * prefix.
+ *
+ * @param key - full object key within the user's space
+ * @throws {ApiClientError} on failure; a 404 carries code "not_found"
+ */
+export async function deleteFile(key: string): Promise<void> {
+  await apiFetch<void>(
+    `/api/files?key=${encodeURIComponent(key)}`,
+    { method: "DELETE" },
+    { noBody: true },
+  );
+}

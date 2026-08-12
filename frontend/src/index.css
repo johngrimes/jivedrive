@@ -146,6 +146,13 @@ body {
   font-weight: 600;
 }
 
+.button-danger {
+  background: #c44;
+  border-color: #933;
+  color: #fff;
+  font-weight: 600;
+}
+
 .button:disabled {
   opacity: 0.6;
   cursor: progress;
