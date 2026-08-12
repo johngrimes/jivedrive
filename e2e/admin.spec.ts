@@ -29,13 +29,26 @@ async function openAdmin(page: Page, context: BrowserContext): Promise<void> {
 }
 
 /** A row in the invites table matching the given text. */
+/**
+ * A row in the invites table whose username cell exactly matches the given
+ * text. Exact cell matching (not substring) so usernames like "ina" never
+ * match a row for "gina" in the same table.
+ *
+ * @param page - the page
+ * @param text - the exact username
+ * @returns the matching row locator
+ */
 function inviteRow(page: Page, text: string) {
-  return page.locator(".invites-table tbody tr", { hasText: text });
+  return page.locator(".invites-table tbody tr", {
+    has: page.getByRole("cell", { name: text, exact: true }),
+  });
 }
 
-/** A row in the users table matching the given text. */
+/** A row in the users table whose username cell exactly matches the text. */
 function userRow(page: Page, text: string) {
-  return page.locator(".users-table tbody tr", { hasText: text });
+  return page.locator(".users-table tbody tr", {
+    has: page.getByRole("cell", { name: text, exact: true }),
+  });
 }
 
 /**
