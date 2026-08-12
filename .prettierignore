@@ -1,0 +1,10 @@
+.local/
+deploy/
+docs/
+docker/
+coverage/
+dist/
+node_modules/
+bun.lock
+e2e/playwright-report/
+e2e/test-results/

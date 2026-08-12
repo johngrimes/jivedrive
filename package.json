@@ -1,0 +1,36 @@
+{
+  "name": "jivedrive",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "typecheck": "bun run typecheck:backend && bun run typecheck:frontend",
+    "typecheck:backend": "tsc -p backend/tsconfig.json",
+    "typecheck:frontend": "tsc -p frontend/tsconfig.json",
+    "lint": "eslint .",
+    "test": "bun run test:backend && bun run test:frontend",
+    "test:backend": "vitest run --config backend/vitest.config.ts",
+    "test:frontend": "vitest run --config frontend/vitest.config.ts",
+    "test:e2e": "playwright test --config e2e/playwright.config.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^26.2.0",
+    "eslint": "^10.8.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.4",
+    "jsdom": "^30.0.1",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.10"
+  }
+}

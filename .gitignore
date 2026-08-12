@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+.env
+.env.*
+e2e/playwright-report/
+e2e/test-results/
+playwright-report/
+test-results/
+.DS_Store
