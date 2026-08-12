@@ -317,3 +317,113 @@ export async function deleteFile(key: string): Promise<void> {
     { noBody: true },
   );
 }
+
+/** An invite as returned by the admin API, per the contract `Invite` schema. */
+export interface Invite {
+  id: string;
+  username: string;
+  bucket: string;
+  prefix: string;
+  isAdmin: boolean;
+  /** ISO 8601 expiry timestamp (creation + 48 hours). */
+  expiresAt: string;
+  status: "pending" | "claimed" | "expired";
+}
+
+/** A user in the admin user list: the contract `User` shape plus createdAt. */
+export interface AdminUser extends User {
+  /** ISO 8601 timestamp; an admin extension beyond the contract schema. */
+  createdAt: string;
+}
+
+/** Response of the create and resend invite endpoints. */
+export interface InviteResponse {
+  invite: Invite;
+  /** Full registration URL containing the invite token. */
+  link: string;
+}
+
+/**
+ * List all users (admin only).
+ *
+ * @returns the user list
+ * @throws {ApiClientError} on failure; a 403 carries code "forbidden"
+ */
+export function listAdminUsers(): Promise<{ users: AdminUser[] }> {
+  return apiFetch<{ users: AdminUser[] }>("/api/admin/users");
+}
+
+/**
+ * List pending, claimed and expired invites (admin only).
+ *
+ * @returns the invite list with derived statuses
+ * @throws {ApiClientError} on failure; a 403 carries code "forbidden"
+ */
+export function listAdminInvites(): Promise<{ invites: Invite[] }> {
+  return apiFetch<{ invites: Invite[] }>("/api/admin/invites");
+}
+
+/**
+ * Create an invite with a 48-hour expiry (admin only).
+ *
+ * @param body - username, bucket, prefix and optional admin flag
+ * @returns the created invite and its full registration link
+ * @throws {ApiClientError} on failure; a 409 carries code "username_taken"
+ *   or "invite_pending"
+ */
+export function createAdminInvite(body: {
+  username: string;
+  bucket: string;
+  prefix: string;
+  isAdmin?: boolean;
+}): Promise<InviteResponse> {
+  return apiFetch<InviteResponse>("/api/admin/invites", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Re-send an invite: a fresh token and a new 48-hour expiry (admin only).
+ *
+ * @param id - invite id
+ * @returns the refreshed invite and its new registration link
+ * @throws {ApiClientError} on failure; a 404 carries code "not_found" or
+ *   "invite_claimed"
+ */
+export function resendAdminInvite(id: string): Promise<InviteResponse> {
+  return apiFetch<InviteResponse>(`/api/admin/invites/${id}/resend`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Cancel a pending or expired invite (admin only).
+ *
+ * @param id - invite id
+ * @throws {ApiClientError} on failure; a 404 carries code "not_found" or
+ *   "invite_claimed"
+ */
+export async function cancelAdminInvite(id: string): Promise<void> {
+  await apiFetch<void>(
+    `/api/admin/invites/${id}`,
+    { method: "DELETE" },
+    { noBody: true },
+  );
+}
+
+/**
+ * Remove a user account; their storage objects are left untouched (admin
+ * only, FR-014).
+ *
+ * @param id - user id
+ * @throws {ApiClientError} on failure; a 400 carries code "remove_self" or
+ *   "last_admin"
+ */
+export async function removeAdminUser(id: string): Promise<void> {
+  await apiFetch<void>(
+    `/api/admin/users?id=${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    { noBody: true },
+  );
+}

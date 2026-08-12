@@ -167,7 +167,7 @@ function mapSessionRow(row: SessionRow): Session {
  * @param username - username to validate
  * @throws {Error} when the username does not match [a-z0-9][a-z0-9._-]{0,31}
  */
-function validateUsername(username: string): void {
+export function validateUsername(username: string): void {
   if (!/^[a-z0-9][a-z0-9._-]{0,31}$/.test(username)) {
     throw new Error(
       `Invalid username "${username}": must match [a-z0-9][a-z0-9._-]{0,31}`,
@@ -181,7 +181,7 @@ function validateUsername(username: string): void {
  * @param bucket - bucket name to validate
  * @throws {Error} when the name is not a valid S3 bucket name
  */
-function validateBucket(bucket: string): void {
+export function validateBucket(bucket: string): void {
   if (!/^(?!.*\.\.)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) {
     throw new Error(`Invalid bucket name "${bucket}"`);
   }
@@ -498,6 +498,28 @@ export function markInviteClaimed(
  */
 export function deleteInvite(db: Database, id: string): void {
   db.query("DELETE FROM invites WHERE id = ?").run(id);
+}
+
+/**
+ * Replace an invite's token and expiry (admin re-send). Everything else
+ * about the invite is untouched.
+ *
+ * @param db - database connection
+ * @param id - invite id
+ * @param token - the fresh cryptographic token
+ * @param expiresAt - the new expiry timestamp (creation + 48 hours)
+ */
+export function refreshInvite(
+  db: Database,
+  id: string,
+  token: string,
+  expiresAt: string,
+): void {
+  db.query("UPDATE invites SET token = ?, expiresAt = ? WHERE id = ?").run(
+    token,
+    expiresAt,
+    id,
+  );
 }
 
 /**

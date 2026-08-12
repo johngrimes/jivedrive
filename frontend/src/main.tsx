@@ -6,7 +6,7 @@ import { AppShell } from "./components/AppShell";
 import { SignIn } from "./pages/SignIn";
 import { Register } from "./pages/Register";
 import { FilesPage } from "./pages/Files";
-import { AdminPage } from "./pages/AdminPage";
+import { AdminUsersPage } from "./pages/AdminUsers";
 import "./index.css";
 
 const root = document.getElementById("root");
@@ -23,7 +23,7 @@ createRoot(root).render(
             <Route path="/" element={<SignIn />} />
             <Route path="/register" element={<Register />} />
             <Route path="/files" element={<FilesPage />} />
-            <Route path="/admin" element={<AdminPage />} />
+            <Route path="/admin" element={<AdminUsersPage />} />
           </Route>
         </Routes>
       </SessionProvider>

@@ -16,6 +16,7 @@ import { SESSION_COOKIE_NAME, validateSession } from "./auth/sessions";
 import { createChallengeStore } from "./auth/webauthn";
 import { authRoutes } from "./routes/auth";
 import { filesRoutes } from "./routes/files";
+import { adminRoutes } from "./routes/admin";
 import { createS3Client } from "./s3/client";
 
 /** Variables stored on the Hono context for the current request. */
@@ -72,6 +73,18 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
       s3Client: deps.s3Client ?? createS3Client(deps.config.s3),
       requireUser: requireUser(deps.db),
       listPageSize: deps.listPageSize,
+    }),
+  );
+
+  // Admin routes (user and invite management) mounted under /api/admin.
+  // The requireUser middleware plus an admin check guards every route
+  // (FR-015); the admin routes have no S3 dependency (FR-014).
+  app.route(
+    "/api/admin",
+    adminRoutes({
+      config: deps.config,
+      db: deps.db,
+      requireUser: requireUser(deps.db),
     }),
   );
 

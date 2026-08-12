@@ -222,6 +222,19 @@ const admin = createUser(db, {
   isAdmin: true,
 });
 
+// Pre-seed an admin session so the admin e2e spec (admin.spec.ts) starts
+// signed in without a WebAuthn ceremony, mirroring alice's browse-session.
+createSession(db, admin.id, { token: "admin-session" });
+
+// A dedicated user the admin e2e spec removes. No other spec depends on
+// frank, so his removal is safe in the shared server and database.
+const frank = createUser(db, {
+  username: "frank",
+  bucket: "jivedrive-prod",
+  prefix: "users/frank/",
+});
+createSession(db, frank.id, { token: "frank-session" });
+
 const future = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
@@ -239,6 +252,17 @@ createInvite(db, {
   username: "dave",
   bucket: "jivedrive-prod",
   prefix: "users/dave/",
+  issuedByUserId: admin.id,
+  expiresAt: past,
+});
+// A second expired invite used only by the admin e2e spec (which re-sends
+// it); dave's invite must stay expired because auth.spec asserts its
+// refusal, and both specs share one server.
+createInvite(db, {
+  token: "invite-ina-expired",
+  username: "ina",
+  bucket: "jivedrive-prod",
+  prefix: "users/ina/",
   issuedByUserId: admin.id,
   expiresAt: past,
 });

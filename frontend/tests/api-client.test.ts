@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   apiFetch,
+  cancelAdminInvite,
+  createAdminInvite,
   deleteFile,
   getDownloadUrl,
   getHealth,
   getMe,
+  listAdminInvites,
+  listAdminUsers,
   listFiles,
   postLoginOptions,
   postLoginVerify,
@@ -13,6 +17,8 @@ import {
   postRegisterVerify,
   postShareUrl,
   postUploadUrl,
+  removeAdminUser,
+  resendAdminInvite,
 } from "../src/api/client";
 
 type FetchMock = ReturnType<typeof vi.fn>;
@@ -399,6 +405,111 @@ describe("getDownloadUrl", () => {
         "users/alice/my file #1?.txt",
       )}`,
       expect.anything(),
+    );
+  });
+});
+
+describe("admin API", () => {
+  it("listAdminUsers fetches the admin user list", async () => {
+    const body = { users: [{ username: "admin", isAdmin: true }] };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await listAdminUsers();
+
+    expect(result).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/users",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("listAdminInvites fetches the invite list", async () => {
+    const body = { invites: [{ username: "carol", status: "pending" }] };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await listAdminInvites();
+
+    expect(result).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/invites",
+      expect.anything(),
+    );
+  });
+
+  it("createAdminInvite posts username, bucket, prefix and admin flag", async () => {
+    const body = {
+      invite: { username: "carol", status: "pending" },
+      link: "http://localhost:5173/register?token=abc",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body, 201));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await createAdminInvite({
+      username: "carol",
+      bucket: "jivedrive-prod",
+      prefix: "users/carol/",
+      isAdmin: true,
+    });
+
+    expect(result).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/invites",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          username: "carol",
+          bucket: "jivedrive-prod",
+          prefix: "users/carol/",
+          isAdmin: true,
+        }),
+      }),
+    );
+  });
+
+  it("resendAdminInvite posts to the invite's resend endpoint", async () => {
+    const body = {
+      invite: { username: "carol", status: "pending" },
+      link: "http://localhost:5173/register?token=new",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await resendAdminInvite("invite-1");
+
+    expect(result).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/invites/invite-1/resend",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("cancelAdminInvite sends a DELETE without parsing a body", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await cancelAdminInvite("invite-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/invites/invite-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("removeAdminUser sends a DELETE with the encoded user id", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await removeAdminUser("user id/with slashes");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/admin/users?id=${encodeURIComponent("user id/with slashes")}`,
+      expect.objectContaining({ method: "DELETE" }),
     );
   });
 });

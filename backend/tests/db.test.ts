@@ -22,6 +22,7 @@ import {
   listCredentialsByUser,
   listInvites,
   listUsers,
+  refreshInvite,
   markInviteClaimed,
   normalizePrefix,
   updateCredentialCounter,
@@ -427,6 +428,32 @@ describe("invites", () => {
 
     deleteInvite(db, invite.id);
     expect(getInviteById(db, invite.id)).toBeNull();
+  });
+
+  it("refreshes an invite token and expiry (admin re-send)", () => {
+    const db = createDb();
+    const admin = seedUser(db, { username: "admin" });
+    const invite = createInvite(db, {
+      token: "old-token",
+      username: "alice",
+      bucket: "jivedrive-test",
+      prefix: "alice/",
+      issuedByUserId: admin.id,
+      expiresAt: "2026-08-14T00:00:00.000Z",
+    });
+
+    refreshInvite(db, invite.id, "new-token", "2026-08-16T00:00:00.000Z");
+
+    const refreshed = getInviteById(db, invite.id);
+    expect(refreshed?.token).toBe("new-token");
+    expect(refreshed?.expiresAt).toBe("2026-08-16T00:00:00.000Z");
+    // Everything else is untouched by a re-send.
+    expect(refreshed?.username).toBe("alice");
+    expect(refreshed?.issuedByUserId).toBe(admin.id);
+    expect(refreshed?.claimedByUserId).toBeNull();
+    // The old token no longer resolves; the new one does.
+    expect(getInviteByToken(db, "old-token")).toBeNull();
+    expect(getInviteByToken(db, "new-token")?.id).toBe(invite.id);
   });
 });
 
