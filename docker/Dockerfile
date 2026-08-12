@@ -30,6 +30,8 @@ ENV NODE_ENV=production
 
 COPY --from=build /app/server.js ./server.js
 COPY --from=build /app/frontend/dist ./frontend/dist
+# SQL migrations are read from disk at startup.
+COPY --from=build /app/backend/migrations ./migrations
 COPY --from=build /app/node_modules ./node_modules
 
 # The Hono server listens on this port (Phase 2 config default).
