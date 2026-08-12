@@ -24,6 +24,10 @@ Every storage operation MUST be scoped to the signed-in user's configured bucket
 
 Every user action produces a perceptible response. Listings and uploads show progress; every action surfaces an explicit success or failure; sign-in state is always visible; an error never crashes the app or loses the session.
 
+#### VI. Mobile-First, Responsive UI
+
+The UI is designed mobile-first: layouts are built for the smallest supported viewport and progressively enhanced for larger screens. Every view MUST remain fully usable on a narrow viewport - no horizontal scrolling, no clipped or unreachable content - and touch targets MUST be large enough to operate by touch. A feature is not complete until its UI is exercised at mobile, tablet, and desktop widths.
+
 ### Security Requirements
 
 - Authentication is WebAuthn passkeys only. Password credentials are never accepted.
