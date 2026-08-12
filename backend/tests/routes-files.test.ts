@@ -513,3 +513,188 @@ describe("POST /api/files/upload-url", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("POST /api/files/share-url", () => {
+  /** POST a share-url request with the alice session cookie. */
+  async function postShareUrl(
+    app: ReturnType<typeof createApp>,
+    body: unknown,
+  ): Promise<Response> {
+    return app.request("/api/files/share-url", {
+      method: "POST",
+      headers: {
+        cookie: aliceCookie,
+        "Content-Type": "application/json",
+      },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+  }
+
+  /**
+   * Row counts per table. The share route must never write to the
+   * database (FR-012: links are fire-and-forget), so every request must
+   * leave these counts untouched.
+   *
+   * @param db - database connection
+   * @returns table name to row count
+   */
+  function dbRowCounts(db: Database): Record<string, number> {
+    const tables = ["users", "passkey_credentials", "invites", "sessions"];
+    const counts: Record<string, number> = {};
+    for (const table of tables) {
+      const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as {
+        n: number;
+      };
+      counts[table] = row.n;
+    }
+    return counts;
+  }
+
+  it("returns a presigned GET URL with the default 7-day expiry", async () => {
+    const { app, calls } = createFilesApp();
+
+    const before = Date.now();
+    const res = await postShareUrl(app, { key: "users/alice/readme.md" });
+    const after = Date.now();
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { url: string; expiresAt: string };
+    expect(body.url).toContain(
+      "https://s3.gra.io.cloud.ovh.net/jivedrive-prod/users/alice/readme.md",
+    );
+    // Default expiry: 7 days = 604800 seconds, visible in the URL.
+    expect(body.url).toContain("X-Amz-Expires=604800");
+    expect(body.url).toContain("X-Amz-Signature");
+    // expiresAt is now + 7 days.
+    const expiresAt = new Date(body.expiresAt).getTime();
+    expect(expiresAt).toBeGreaterThanOrEqual(before + 604800_000);
+    expect(expiresAt).toBeLessThanOrEqual(after + 604800_000);
+    // The link is generated without contacting storage (US4 scenario 5:
+    // no HEAD; a missing object is refused later by the provider).
+    expect(calls).toHaveLength(0);
+  });
+
+  it("honours the expiresIn overrides in both the URL and expiresAt", async () => {
+    const { app } = createFilesApp();
+
+    // 1h, 24h and 7d map to their exact contract values. The "30d" case
+    // is covered separately: SigV4 presigned URLs are capped at 7 days
+    // (604800s) by the SDK and by OVHcloud's S3 gateway, which refuse
+    // longer expiries ("X-Amz-Expires must be less than 604800 seconds").
+    const cases = [
+      { expiresIn: "1h", seconds: 3600 },
+      { expiresIn: "24h", seconds: 86400 },
+      { expiresIn: "7d", seconds: 604800 },
+    ] as const;
+    for (const { expiresIn, seconds } of cases) {
+      const before = Date.now();
+      const res = await postShareUrl(app, {
+        key: "users/alice/readme.md",
+        expiresIn,
+      });
+      const after = Date.now();
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { url: string; expiresAt: string };
+      expect(body.url).toContain(`X-Amz-Expires=${seconds}`);
+      const expiresAt = new Date(body.expiresAt).getTime();
+      expect(expiresAt).toBeGreaterThanOrEqual(before + seconds * 1000);
+      expect(expiresAt).toBeLessThanOrEqual(after + seconds * 1000);
+    }
+  });
+
+  it("signs the 30d choice at the provider maximum of 7 days", async () => {
+    const { app } = createFilesApp();
+
+    // Deviation from the contract's nominal 2592000 seconds: presigned GET
+    // URLs cannot outlive 604800s. Both the AWS SDK and OVHcloud's S3
+    // gateway reject X-Amz-Expires above 604800, so a 30-day link is
+    // impossible; the longest working link is signed at 604800s and
+    // expiresAt truthfully reflects that provider-enforced lifetime.
+    const before = Date.now();
+    const res = await postShareUrl(app, {
+      key: "users/alice/readme.md",
+      expiresIn: "30d",
+    });
+    const after = Date.now();
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { url: string; expiresAt: string };
+    expect(body.url).toContain("X-Amz-Expires=604800");
+    const expiresAt = new Date(body.expiresAt).getTime();
+    expect(expiresAt).toBeGreaterThanOrEqual(before + 604800_000);
+    expect(expiresAt).toBeLessThanOrEqual(after + 604800_000);
+  });
+
+  it("URL-encodes special characters in the key", async () => {
+    const { app } = createFilesApp();
+
+    const res = await postShareUrl(app, {
+      key: "users/alice/my file #1?.txt",
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { url: string };
+    expect(body.url).toContain(encodeURIComponent("my file #1?.txt"));
+  });
+
+  it("rejects a key outside the user's prefix without touching storage", async () => {
+    const { app, calls } = createFilesApp();
+
+    for (const key of ["users/bob/a.txt", "users/alice2/x.txt"]) {
+      const res = await postShareUrl(app, { key });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "out_of_scope" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects a missing or empty key", async () => {
+    const { app } = createFilesApp();
+
+    for (const body of [{}, { key: "" }]) {
+      const res = await postShareUrl(app, body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "bad_request" });
+    }
+  });
+
+  it("rejects an invalid expiresIn", async () => {
+    const { app, calls } = createFilesApp();
+
+    const badExpiries: unknown[] = ["2h", "7", "7 days", 7, null, true];
+    for (const expiresIn of badExpiries) {
+      const res = await postShareUrl(app, {
+        key: "users/alice/a.txt",
+        expiresIn,
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "invalid_expiry" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("persists nothing: the database is untouched by any share request", async () => {
+    const { app, db } = createFilesApp();
+
+    const before = dbRowCounts(db);
+    // A mix of successful and rejected requests must all be side-effect
+    // free (FR-012: links are generated, displayed, never stored).
+    await postShareUrl(app, { key: "users/alice/readme.md" });
+    await postShareUrl(app, { key: "users/alice/readme.md", expiresIn: "1h" });
+    await postShareUrl(app, { key: "users/bob/a.txt" });
+    await postShareUrl(app, { key: "users/alice/a.txt", expiresIn: "2h" });
+
+    expect(dbRowCounts(db)).toEqual(before);
+  });
+
+  it("requires a signed-in session", async () => {
+    const { app } = createFilesApp();
+    const res = await app.request("/api/files/share-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: "users/alice/a.txt" }),
+    });
+    expect(res.status).toBe(401);
+  });
+});

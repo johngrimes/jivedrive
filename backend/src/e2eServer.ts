@@ -177,8 +177,11 @@ function createMockS3Client(): S3Client {
 const env: Record<string, string | undefined> = {
   ...process.env,
   NODE_ENV: "test",
-  JIVEDRIVE_PORT: "5173",
-  JIVEDRIVE_DB_PATH: ":memory:",
+  // Overridable so verification scripts can run this server on another
+  // port with a file-backed database to inspect persistence; Playwright
+  // leaves both unset and gets the defaults.
+  JIVEDRIVE_PORT: process.env.JIVEDRIVE_PORT ?? "5173",
+  JIVEDRIVE_DB_PATH: process.env.JIVEDRIVE_DB_PATH ?? ":memory:",
   JIVEDRIVE_MIGRATIONS_DIR: resolve(import.meta.dir, "../migrations"),
   JIVEDRIVE_S3_ENDPOINT:
     process.env.JIVEDRIVE_S3_ENDPOINT ?? "https://s3.gra.io.cloud.ovh.net",

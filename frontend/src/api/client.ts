@@ -268,3 +268,34 @@ export function getDownloadUrl(key: string): Promise<{ url: string }> {
     `/api/files/download-url?key=${encodeURIComponent(key)}`,
   );
 }
+
+/** A share link expiry choice, per the contract's expiresIn enum. */
+export type ShareExpiresIn = "1h" | "24h" | "7d" | "30d";
+
+/** Response of POST /api/files/share-url. */
+export interface ShareUrlResponse {
+  /** Presigned GET URL served directly by the storage provider. */
+  url: string;
+  /** ISO 8601 timestamp of when the provider will refuse the link. */
+  expiresAt: string;
+}
+
+/**
+ * Generate a fire-and-forget share link for an object in the user's space.
+ *
+ * The link is served directly by the storage provider to anyone holding
+ * it; JiveDrive never stores it (FR-012).
+ *
+ * @param key - full object key within the user's space
+ * @param expiresIn - expiry choice, defaults to 7 days
+ * @returns the presigned URL and its expiry timestamp
+ */
+export function postShareUrl(
+  key: string,
+  expiresIn: ShareExpiresIn = "7d",
+): Promise<ShareUrlResponse> {
+  return apiFetch<ShareUrlResponse>("/api/files/share-url", {
+    method: "POST",
+    body: JSON.stringify({ key, expiresIn }),
+  });
+}

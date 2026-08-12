@@ -126,6 +126,8 @@ export interface FileListingProps {
   onOpenFolder: (folder: string) => void;
   /** Start a download for a file. */
   onDownload: (file: FileEntry) => void;
+  /** Open the share modal for a file. */
+  onShare: (file: FileEntry) => void;
   /** Load the next page. */
   onLoadMore: () => void;
   /** Retry the failed initial load. */
@@ -149,6 +151,7 @@ export function FileListing({
   hasParent,
   onOpenFolder,
   onDownload,
+  onShare,
   onLoadMore,
   onRetry,
 }: FileListingProps) {
@@ -216,6 +219,19 @@ export function FileListing({
                   }}
                 >
                   Download
+                </a>
+                <span className="file-action-sep" aria-hidden="true">
+                  ·
+                </span>
+                <a
+                  className="file-action"
+                  href="#"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    onShare(file);
+                  }}
+                >
+                  Share
                 </a>
               </td>
             </tr>

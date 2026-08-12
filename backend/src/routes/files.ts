@@ -33,6 +33,22 @@ const DOWNLOAD_URL_TTL_SECONDS = 15 * 60;
 /** Lifetime of an upload (presigned PUT) URL in seconds (15 minutes). */
 const UPLOAD_URL_TTL_SECONDS = 15 * 60;
 
+/** Share link lifetimes in seconds, keyed by the contract's expiresIn enum. */
+const SHARE_EXPIRIES_SECONDS: Record<string, number> = {
+  "1h": 60 * 60,
+  "24h": 24 * 60 * 60,
+  "7d": 7 * 24 * 60 * 60,
+  // Nominal contract value is 30 days (2592000s), but SigV4 presigned GET
+  // URLs cannot outlive 7 days: the AWS SDK and OVHcloud's S3 gateway both
+  // refuse X-Amz-Expires above 604800 ("must be less than 604800 seconds"),
+  // so a 30-day link could never be signed or served. The 30d choice is
+  // signed at the provider maximum and expiresAt reflects that lifetime.
+  "30d": 7 * 24 * 60 * 60,
+};
+
+/** Default share expiry per the contract (7 days). */
+const SHARE_DEFAULT_EXPIRES_IN = "7d";
+
 /**
  * Build a JSON error response.
  *
@@ -233,6 +249,62 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
       UPLOAD_URL_TTL_SECONDS,
     );
     return c.json({ url, key }, 200);
+  });
+
+  app.post("/share-url", async (c) => {
+    const user = c.get("user");
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return jsonError(c, 400, "Invalid JSON body", "bad_request");
+    }
+    const { key, expiresIn } = (body ?? {}) as {
+      key?: unknown;
+      expiresIn?: unknown;
+    };
+    if (typeof key !== "string" || key === "") {
+      return jsonError(c, 400, "A file key is required", "bad_request");
+    }
+    const expiry =
+      expiresIn === undefined ? SHARE_DEFAULT_EXPIRES_IN : expiresIn;
+    const ttlSeconds =
+      typeof expiry === "string" ? SHARE_EXPIRIES_SECONDS[expiry] : undefined;
+    if (ttlSeconds === undefined) {
+      return jsonError(
+        c,
+        400,
+        "expiresIn must be one of 1h, 24h, 7d, 30d",
+        "invalid_expiry",
+      );
+    }
+
+    try {
+      // Scope enforcement lives here: presignedGetUrl rejects keys outside
+      // the user's prefix, mapped to a 400 below. No head request is made;
+      // a missing object is refused later by the storage provider (US4
+      // scenario 5). Nothing is written to the database (FR-012): the link
+      // is generated, displayed, and expires naturally.
+      const url = await presignedGetUrl(
+        s3Client,
+        user.bucket,
+        user.prefix,
+        key,
+        ttlSeconds,
+      );
+      const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+      return c.json({ url, expiresAt }, 200);
+    } catch (error) {
+      if (error instanceof RangeError) {
+        return jsonError(
+          c,
+          400,
+          "The key is outside your space",
+          "out_of_scope",
+        );
+      }
+      throw error;
+    }
   });
 
   return app;

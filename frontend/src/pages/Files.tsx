@@ -8,6 +8,7 @@ import type {
 } from "../api/client";
 import { useSession } from "../auth/sessionContext";
 import { Breadcrumbs, FileListing } from "../components/FileListing";
+import { ShareModal } from "../components/ShareModal";
 import { UploadControl } from "../components/UploadControl";
 
 /** Extract a readable message from an unknown error. */
@@ -31,6 +32,7 @@ export function FilesPage() {
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
+  const [shareFile, setShareFile] = useState<FileEntry | null>(null);
 
   // Adjust state during render when navigating to a different folder, so
   // the stale listing is cleared and the skeleton shows for the new one.
@@ -184,10 +186,15 @@ export function FilesPage() {
           hasParent={prefix !== ""}
           onOpenFolder={(folder) => setPrefix(prefix + folder + "/")}
           onDownload={(file) => void handleDownload(file)}
+          onShare={setShareFile}
           onLoadMore={() => void loadMore()}
           onRetry={retry}
         />
       </main>
+
+      {shareFile && (
+        <ShareModal file={shareFile} onClose={() => setShareFile(null)} />
+      )}
     </div>
   );
 }

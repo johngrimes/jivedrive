@@ -10,6 +10,7 @@ import {
   postLogout,
   postRegisterOptions,
   postRegisterVerify,
+  postShareUrl,
   postUploadUrl,
 } from "../src/api/client";
 
@@ -321,6 +322,46 @@ describe("postUploadUrl", () => {
           fileName: "a.txt",
           overwrite: false,
         }),
+      }),
+    );
+  });
+});
+
+describe("postShareUrl", () => {
+  it("posts the key and the chosen expiry and returns the link", async () => {
+    const body = {
+      url: "https://s3.example/jivedrive-prod/users/alice/a.txt?X-Amz-Expires=3600&X-Amz-Signature=abc",
+      expiresAt: "2026-08-13T00:00:00.000Z",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await postShareUrl("users/alice/a.txt", "1h");
+
+    expect(result).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files/share-url",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ key: "users/alice/a.txt", expiresIn: "1h" }),
+      }),
+    );
+  });
+
+  it("defaults to the 7-day expiry when none is given", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ url: "https://s3.example/x", expiresAt: "now" }),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await postShareUrl("users/alice/a.txt");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files/share-url",
+      expect.objectContaining({
+        body: JSON.stringify({ key: "users/alice/a.txt", expiresIn: "7d" }),
       }),
     );
   });
