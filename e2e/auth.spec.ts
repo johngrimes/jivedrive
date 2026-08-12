@@ -118,3 +118,29 @@ test("an expired invite is refused with a clear message", async ({ page }) => {
     page.getByRole("button", { name: "Create passkey" }),
   ).toHaveCount(0);
 });
+
+test("sign-in page is usable at mobile, tablet and desktop widths", async ({
+  page,
+}) => {
+  for (const viewport of [
+    { width: 375, height: 667 },
+    { width: 768, height: 1024 },
+    { width: 1280, height: 800 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    await expect(page.getByLabel("Username")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Continue with passkey" }),
+    ).toBeVisible();
+    // No horizontal scrolling at any supported width.
+    const hasHorizontalOverflow = await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+    );
+    expect(hasHorizontalOverflow, `overflow at ${viewport.width}px`).toBe(
+      false,
+    );
+  }
+});
