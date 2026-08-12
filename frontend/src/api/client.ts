@@ -229,6 +229,34 @@ export function listFiles(
   return apiFetch<ListFilesResponse>(`/api/files${query ? `?${query}` : ""}`);
 }
 
+/** Response of POST /api/files/upload-url. */
+export interface UploadUrlResponse {
+  /** Presigned PUT URL the browser uploads to directly. */
+  url: string;
+  /** Full object key within the user's space. */
+  key: string;
+}
+
+/**
+ * Obtain a presigned PUT URL for uploading a file into a folder.
+ *
+ * @param folder - destination folder relative to the user's prefix ("" for root)
+ * @param fileName - base file name, stored verbatim
+ * @param overwrite - true to replace an existing object with the same key
+ * @returns the presigned URL and the full object key
+ * @throws {ApiClientError} on failure; a 409 carries code "already_exists"
+ */
+export function postUploadUrl(
+  folder: string,
+  fileName: string,
+  overwrite: boolean,
+): Promise<UploadUrlResponse> {
+  return apiFetch<UploadUrlResponse>("/api/files/upload-url", {
+    method: "POST",
+    body: JSON.stringify({ folder, fileName, overwrite }),
+  });
+}
+
 /**
  * Obtain a short-lived presigned GET URL that downloads a file.
  *

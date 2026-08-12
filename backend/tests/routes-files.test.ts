@@ -311,3 +311,205 @@ describe("GET /api/files/download-url", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("POST /api/files/upload-url", () => {
+  /** A handler that reports the object as missing (HEAD throws NotFound). */
+  function missingHandler(): (
+    name: string,
+    input: Record<string, unknown>,
+  ) => unknown {
+    return (name, input) => {
+      expect(name).toBe("HeadObjectCommand");
+      expect(String(input.Key)).toStartWith(userPrefix);
+      const err = new Error("Not Found") as Error & { name: string };
+      err.name = "NotFound";
+      throw err;
+    };
+  }
+
+  /** A handler that reports the object as existing with the given size. */
+  function existingHandler(size = 42): (name: string) => unknown {
+    return (name) => {
+      expect(name).toBe("HeadObjectCommand");
+      return {
+        ContentLength: size,
+        LastModified: new Date("2026-08-12T00:00:00Z"),
+      };
+    };
+  }
+
+  /** POST an upload-url request with the alice session cookie. */
+  async function postUploadUrl(
+    app: ReturnType<typeof createApp>,
+    body: unknown,
+  ): Promise<Response> {
+    return app.request("/api/files/upload-url", {
+      method: "POST",
+      headers: {
+        cookie: aliceCookie,
+        "Content-Type": "application/json",
+      },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+  }
+
+  it("returns a short-lived presigned PUT URL for a new file", async () => {
+    const { app, calls } = createFilesApp(missingHandler());
+
+    const res = await postUploadUrl(app, {
+      folder: "docs",
+      fileName: "report.pdf",
+      overwrite: false,
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { url: string; key: string };
+    expect(body.key).toBe("users/alice/docs/report.pdf");
+    expect(body.url).toContain(
+      "https://s3.gra.io.cloud.ovh.net/jivedrive-prod/users/alice/docs/report.pdf",
+    );
+    // Short-lived: 15 minutes per the phase contract.
+    expect(body.url).toContain("X-Amz-Expires=900");
+    expect(body.url).toContain("X-Amz-Signature");
+    // Exactly one storage call: the scoped HEAD for the existence check.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.name).toBe("HeadObjectCommand");
+    expect(calls[0]?.input.Key).toBe("users/alice/docs/report.pdf");
+  });
+
+  it("builds the key from an empty folder as the user prefix root", async () => {
+    const { app, calls } = createFilesApp(missingHandler());
+
+    const res = await postUploadUrl(app, {
+      folder: "",
+      fileName: "a.txt",
+      overwrite: false,
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { key: string };
+    expect(body.key).toBe("users/alice/a.txt");
+    expect(calls[0]?.input.Key).toBe("users/alice/a.txt");
+  });
+
+  it("normalises the folder when building the key", async () => {
+    const { app, calls } = createFilesApp(missingHandler());
+
+    for (const folder of ["docs", "docs/", "docs/reports"]) {
+      const res = await postUploadUrl(app, {
+        folder,
+        fileName: "a.txt",
+        overwrite: false,
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { key: string };
+      expect(body.key).toBe(`users/alice/${folder.replace(/\/+$/, "")}/a.txt`);
+    }
+    expect(calls).toHaveLength(3);
+  });
+
+  it("preserves file names with spaces and special characters verbatim", async () => {
+    const { app } = createFilesApp(missingHandler());
+
+    const res = await postUploadUrl(app, {
+      folder: "docs",
+      fileName: "my file #1?.txt",
+      overwrite: false,
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { url: string; key: string };
+    // The key stores the name verbatim; the URL carries the encoded form.
+    expect(body.key).toBe("users/alice/docs/my file #1?.txt");
+    expect(body.url).toContain(encodeURIComponent("my file #1?.txt"));
+  });
+
+  it("returns 409 when the object exists and overwrite is not requested", async () => {
+    const { app, calls } = createFilesApp(existingHandler(2516582));
+
+    const res = await postUploadUrl(app, {
+      folder: "",
+      fileName: "report.pdf",
+      overwrite: false,
+    });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "already_exists" });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("returns a presigned PUT URL when overwrite is confirmed", async () => {
+    const { app, calls } = createFilesApp(existingHandler(2516582));
+
+    const res = await postUploadUrl(app, {
+      folder: "",
+      fileName: "report.pdf",
+      overwrite: true,
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { url: string; key: string };
+    expect(body.key).toBe("users/alice/report.pdf");
+    expect(body.url).toContain("X-Amz-Signature");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("rejects a folder that escapes the user's space without touching storage", async () => {
+    const { app, calls } = createFilesApp();
+
+    for (const folder of ["../bob", "/etc", "a/../../bob"]) {
+      const res = await postUploadUrl(app, {
+        folder,
+        fileName: "x.txt",
+        overwrite: false,
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "invalid_folder" });
+    }
+    // The scoped HEAD must never run against an out-of-scope key.
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects a file name that is not a single base name", async () => {
+    const { app, calls } = createFilesApp();
+
+    for (const fileName of ["a/b.txt", ".", "..", ""]) {
+      const res = await postUploadUrl(app, {
+        folder: "",
+        fileName,
+        overwrite: false,
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "invalid_file_name" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects a malformed request body", async () => {
+    const { app, calls } = createFilesApp();
+
+    const badBodies: unknown[] = [
+      {},
+      { folder: "", fileName: "a.txt" },
+      { folder: "", overwrite: false },
+      { folder: "", fileName: "a.txt", overwrite: "yes" },
+      "not json",
+    ];
+    for (const body of badBodies) {
+      const res = await postUploadUrl(app, body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "bad_request" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("requires a signed-in session", async () => {
+    const { app } = createFilesApp();
+    const res = await app.request("/api/files/upload-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder: "", fileName: "a.txt", overwrite: false }),
+    });
+    expect(res.status).toBe(401);
+  });
+});

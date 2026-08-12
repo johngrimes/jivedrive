@@ -50,7 +50,10 @@ const MAX_KEYS = 1000;
 /**
  * Build an S3 client configured for OVHcloud Object Storage.
  *
- * Path-style addressing is always used, which OVHcloud requires.
+ * Path-style addressing is always used, which OVHcloud requires. Automatic
+ * request checksums are disabled (when_required): the SDK otherwise signs
+ * presigned PUT URLs with a CRC32 of the empty body, which the storage
+ * provider would reject once the browser sends the real payload.
  *
  * @param s3 - S3 endpoint, region and credentials
  * @returns a configured S3 client
@@ -60,6 +63,7 @@ export function createS3Client(s3: S3Config): S3Client {
     region: s3.region,
     endpoint: s3.endpoint,
     forcePathStyle: true,
+    requestChecksumCalculation: "WHEN_REQUIRED",
     credentials: {
       accessKeyId: s3.accessKeyId,
       secretAccessKey: s3.secretAccessKey,

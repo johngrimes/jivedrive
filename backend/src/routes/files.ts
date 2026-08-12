@@ -8,7 +8,13 @@
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import type { S3Client } from "@aws-sdk/client-s3";
-import { listObjects, presignedGetUrl } from "../s3/client";
+import {
+  headObject,
+  listObjects,
+  presignedGetUrl,
+  presignedPutUrl,
+} from "../s3/client";
+import type { HeadResult } from "../s3/client";
 import type { ServerEnv } from "../server";
 
 /** Dependencies for {@link filesRoutes}. */
@@ -24,6 +30,9 @@ export interface FileRouteDeps {
 /** Lifetime of a download URL in seconds (15 minutes). */
 const DOWNLOAD_URL_TTL_SECONDS = 15 * 60;
 
+/** Lifetime of an upload (presigned PUT) URL in seconds (15 minutes). */
+const UPLOAD_URL_TTL_SECONDS = 15 * 60;
+
 /**
  * Build a JSON error response.
  *
@@ -35,7 +44,7 @@ const DOWNLOAD_URL_TTL_SECONDS = 15 * 60;
  */
 function jsonError(
   c: Context<ServerEnv>,
-  status: 400,
+  status: 400 | 409,
   message: string,
   code: string,
 ): Response {
@@ -132,6 +141,98 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
       }
       throw error;
     }
+  });
+
+  app.post("/upload-url", async (c) => {
+    const user = c.get("user");
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return jsonError(c, 400, "Invalid JSON body", "bad_request");
+    }
+    const { folder, fileName, overwrite } = (body ?? {}) as {
+      folder?: unknown;
+      fileName?: unknown;
+      overwrite?: unknown;
+    };
+    if (
+      typeof folder !== "string" ||
+      typeof fileName !== "string" ||
+      typeof overwrite !== "boolean"
+    ) {
+      return jsonError(
+        c,
+        400,
+        "folder, fileName and overwrite are required",
+        "bad_request",
+      );
+    }
+
+    // Scope enforcement (constitution IV): the folder must stay inside the
+    // user's space and the file name must be a single base name, so the
+    // derived key can never escape the user's prefix. The existence check
+    // below only ever runs against a key validated to be in scope.
+    if (!isSafeRelativePrefix(folder)) {
+      return jsonError(
+        c,
+        400,
+        "The folder must stay within your space",
+        "invalid_folder",
+      );
+    }
+    if (
+      fileName === "" ||
+      fileName === "." ||
+      fileName === ".." ||
+      fileName.includes("/")
+    ) {
+      return jsonError(
+        c,
+        400,
+        "The file name must be a single base name",
+        "invalid_file_name",
+      );
+    }
+
+    // Key = user prefix + normalised folder + verbatim file name. The file
+    // name is stored exactly as given (spaces and special characters are
+    // preserved; the SDK URL-encodes it in the presigned URL).
+    const normalizedFolder =
+      folder === "" ? "" : folder.replace(/\/+$/, "") + "/";
+    const key = user.prefix + normalizedFolder + fileName;
+
+    let existing: HeadResult | null;
+    try {
+      existing = await headObject(s3Client, user.bucket, user.prefix, key);
+    } catch (error) {
+      if (error instanceof RangeError) {
+        return jsonError(
+          c,
+          400,
+          "The file is outside your space",
+          "out_of_scope",
+        );
+      }
+      throw error;
+    }
+    if (existing !== null && !overwrite) {
+      return jsonError(
+        c,
+        409,
+        `A file named "${fileName}" already exists`,
+        "already_exists",
+      );
+    }
+
+    const url = await presignedPutUrl(
+      s3Client,
+      user.bucket,
+      user.prefix,
+      key,
+      UPLOAD_URL_TTL_SECONDS,
+    );
+    return c.json({ url, key }, 200);
   });
 
   return app;

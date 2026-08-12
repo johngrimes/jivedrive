@@ -10,6 +10,7 @@ import {
   postLogout,
   postRegisterOptions,
   postRegisterVerify,
+  postUploadUrl,
 } from "../src/api/client";
 
 type FetchMock = ReturnType<typeof vi.fn>;
@@ -295,6 +296,32 @@ describe("listFiles", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/files?cursor=token-2",
       expect.anything(),
+    );
+  });
+});
+
+describe("postUploadUrl", () => {
+  it("posts the folder, file name and overwrite flag", async () => {
+    const body = {
+      url: "https://s3.example/jivedrive-prod/users/alice/docs/a.txt?X-Amz-Signature=abc",
+      key: "users/alice/docs/a.txt",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await postUploadUrl("docs", "a.txt", false);
+
+    expect(result).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files/upload-url",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          folder: "docs",
+          fileName: "a.txt",
+          overwrite: false,
+        }),
+      }),
     );
   });
 });

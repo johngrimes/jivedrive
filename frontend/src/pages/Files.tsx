@@ -8,6 +8,7 @@ import type {
 } from "../api/client";
 import { useSession } from "../auth/sessionContext";
 import { Breadcrumbs, FileListing } from "../components/FileListing";
+import { UploadControl } from "../components/UploadControl";
 
 /** Extract a readable message from an unknown error. */
 function messageOf(err: unknown): string {
@@ -22,7 +23,7 @@ function messageOf(err: unknown): string {
  * Shown only when signed in; otherwise redirects to the sign-in page.
  */
 export function FilesPage() {
-  const { user, loading: sessionLoading } = useSession();
+  const { user, loading: sessionLoading, refresh } = useSession();
   const [prefix, setPrefix] = useState("");
   const [listing, setListing] = useState<ListFilesResponse | null>(null);
   const [listingPrefix, setListingPrefix] = useState<string | null>(null);
@@ -71,6 +72,14 @@ export function FilesPage() {
    */
   function retry(): void {
     setError(null);
+    setListingPrefix(null);
+    setRetryKey((key) => key + 1);
+  }
+
+  /**
+   * Re-fetch the current folder so a newly uploaded file appears.
+   */
+  function refreshListing(): void {
     setListingPrefix(null);
     setRetryKey((key) => key + 1);
   }
@@ -152,6 +161,11 @@ export function FilesPage() {
           <span className="files-count">
             {itemCount} {itemCount === 1 ? "item" : "items"}
           </span>
+          <UploadControl
+            folder={prefix}
+            onUploaded={refreshListing}
+            onSessionExpired={() => void refresh()}
+          />
         </div>
 
         {actionError && (

@@ -248,8 +248,20 @@ seedObject("users/alice/docs/my file #1?.txt", "special file content", 128);
 seedObject("users/alice/photos/pic.jpg", "jpeg-bytes", 4096);
 seedObject("users/alice/empty/", "", 0);
 
-// Mock S3 HTTP server: serves downloads at path-style presigned URLs.
+// Mock S3 HTTP server: serves downloads at path-style presigned URLs and
+// accepts browser uploads (PUT) into the in-memory store.
 const mockS3 = new Hono();
+
+// The browser uploads cross-origin from localhost:5173, so the mock must
+// answer the CORS preflight and tag responses with the page origin.
+mockS3.use("*", async (c, next) => {
+  c.header("Access-Control-Allow-Origin", "http://localhost:5173");
+  c.header("Access-Control-Allow-Methods", "GET, PUT, OPTIONS");
+  c.header("Access-Control-Allow-Headers", "Content-Type");
+  if (c.req.method === "OPTIONS") return c.body(null, 204);
+  await next();
+});
+
 mockS3.get("/:bucket/*", (c) => {
   const path = c.req.path;
   const slash = path.indexOf("/", 1);
@@ -259,6 +271,29 @@ mockS3.get("/:bucket/*", (c) => {
   const fileName = encodeURIComponent(key.split("/").pop() ?? "download");
   c.header("Content-Disposition", `attachment; filename="${fileName}"`);
   return c.body(object.body);
+});
+
+// Keep uploads in flight long enough for the e2e suite to assert on the
+// progress indicator (visibility of system status).
+const UPLOAD_DELAY_MS = 600;
+
+mockS3.put("/:bucket/*", async (c) => {
+  const path = c.req.path;
+  const slash = path.indexOf("/", 1);
+  const key = decodeURIComponent(slash === -1 ? "" : path.slice(slash + 1));
+  // A specific name the mock refuses, so the e2e suite can exercise the
+  // failed-upload path deterministically.
+  if (key.endsWith("broken.txt")) {
+    return c.json({ error: "mock rejection" }, 500);
+  }
+  await Bun.sleep(UPLOAD_DELAY_MS);
+  const body = new TextDecoder().decode(await c.req.arrayBuffer());
+  objectStore.set(key, {
+    body,
+    size: Buffer.byteLength(body),
+    lastModified: new Date().toISOString(),
+  });
+  return c.body(null, 200);
 });
 Bun.serve({ port: MOCK_S3_PORT, fetch: mockS3.fetch });
 
