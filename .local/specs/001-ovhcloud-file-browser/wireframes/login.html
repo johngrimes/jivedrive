@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wireframe - Sign in</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #f0f0f0;
+      color: #333;
+      line-height: 1.4;
+    }
+    .wf-container { max-width: 1200px; margin: 0 auto; background: #fff; min-height: 100vh; display: flex; flex-direction: column; }
+    .wf-header { background: #e8e8e8; border-bottom: 2px solid #bbb; padding: 1rem 1.5rem; display: flex; align-items: center; justify-content: space-between; }
+    .wf-logo { font-weight: bold; font-size: 1.2rem; color: #666; }
+    .wf-nav { display: flex; gap: 1.5rem; }
+    .wf-nav a { color: #555; text-decoration: none; font-size: 0.9rem; }
+    .wf-nav a:hover { text-decoration: underline; }
+    .wf-main { flex: 1; padding: 1.5rem; display: flex; align-items: flex-start; justify-content: center; }
+    .wf-auth-card { width: 100%; max-width: 420px; background: #fafafa; border: 2px solid #ccc; border-radius: 6px; padding: 2rem; margin-top: 4rem; }
+    .wf-auth-title { font-size: 1.3rem; font-weight: 600; color: #444; margin-bottom: 0.25rem; text-align: center; }
+    .wf-auth-sub { font-size: 0.85rem; color: #888; margin-bottom: 1.5rem; text-align: center; }
+    .wf-form-group { margin-bottom: 1rem; }
+    .wf-label { display: block; font-size: 0.85rem; color: #666; margin-bottom: 0.25rem; }
+    .wf-input { width: 100%; padding: 0.5rem; border: 2px solid #bbb; border-radius: 4px; background: #fff; font-size: 0.9rem; color: #777; }
+    .wf-button { display: block; width: 100%; padding: 0.6rem 1rem; background: #ddd; border: 2px solid #aaa; border-radius: 4px; color: #555; font-size: 0.9rem; text-align: center; text-decoration: none; cursor: pointer; }
+    .wf-button-primary { background: #ccc; border-color: #888; font-weight: 600; }
+    .wf-divider { display: flex; align-items: center; gap: 0.75rem; margin: 1.25rem 0; color: #999; font-size: 0.8rem; }
+    .wf-divider::before, .wf-divider::after { content: ""; flex: 1; border-top: 2px solid #ddd; }
+    .wf-annotation { font-size: 0.8rem; color: #999; font-style: italic; margin-top: 0.75rem; }
+    .wf-placeholder { background: #e0e0e0; border: 2px dashed #bbb; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: #999; font-size: 0.85rem; min-height: 80px; margin: 1rem 0; }
+  </style>
+</head>
+<body>
+  <div class="wf-container">
+    <header class="wf-header">
+      <div class="wf-logo">JiveDrive</div>
+      <nav class="wf-nav">
+        <a href="./login.html">Sign in</a>
+      </nav>
+    </header>
+
+    <main class="wf-main">
+      <div class="wf-auth-card">
+        <div class="wf-auth-title">Sign in</div>
+        <div class="wf-auth-sub">Use your passkey to access your files</div>
+
+        <div class="wf-form-group">
+          <label class="wf-label">Username</label>
+          <input class="wf-input" type="text" value="alice" readonly>
+        </div>
+
+        <a href="./files.html" class="wf-button wf-button-primary">Continue with passkey</a>
+        <div class="wf-annotation">On click: browser prompts for the passkey (Touch ID / Windows Hello / security key).</div>
+
+        <div class="wf-divider">or</div>
+
+        <a href="./register-invite.html" class="wf-button">Register with an invite link</a>
+        <div class="wf-annotation">Shown only when an invite link was opened. Admin users also land here on first setup.</div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

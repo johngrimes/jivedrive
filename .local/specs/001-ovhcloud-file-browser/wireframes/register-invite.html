@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wireframe - Register with invite</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #f0f0f0;
+      color: #333;
+      line-height: 1.4;
+    }
+    .wf-container { max-width: 1200px; margin: 0 auto; background: #fff; min-height: 100vh; display: flex; flex-direction: column; }
+    .wf-header { background: #e8e8e8; border-bottom: 2px solid #bbb; padding: 1rem 1.5rem; display: flex; align-items: center; justify-content: space-between; }
+    .wf-logo { font-weight: bold; font-size: 1.2rem; color: #666; }
+    .wf-main { flex: 1; padding: 1.5rem; display: flex; align-items: flex-start; justify-content: center; }
+    .wf-auth-card { width: 100%; max-width: 420px; background: #fafafa; border: 2px solid #ccc; border-radius: 6px; padding: 2rem; margin-top: 4rem; }
+    .wf-auth-title { font-size: 1.3rem; font-weight: 600; color: #444; margin-bottom: 0.25rem; text-align: center; }
+    .wf-auth-sub { font-size: 0.85rem; color: #888; margin-bottom: 1.5rem; text-align: center; }
+    .wf-form-group { margin-bottom: 1rem; }
+    .wf-label { display: block; font-size: 0.85rem; color: #666; margin-bottom: 0.25rem; }
+    .wf-input { width: 100%; padding: 0.5rem; border: 2px solid #bbb; border-radius: 4px; background: #fff; font-size: 0.9rem; color: #777; }
+    .wf-button { display: block; width: 100%; padding: 0.6rem 1rem; background: #ddd; border: 2px solid #aaa; border-radius: 4px; color: #555; font-size: 0.9rem; text-align: center; text-decoration: none; cursor: pointer; }
+    .wf-button-primary { background: #ccc; border-color: #888; font-weight: 600; }
+    .wf-annotation { font-size: 0.8rem; color: #999; font-style: italic; margin-top: 0.75rem; }
+    .wf-tag { display: inline-block; padding: 0.15rem 0.5rem; background: #e0e0e0; border: 1px solid #bbb; border-radius: 3px; font-size: 0.75rem; color: #666; margin-right: 0.5rem; }
+  </style>
+</head>
+<body>
+  <div class="wf-container">
+    <header class="wf-header">
+      <div class="wf-logo">JiveDrive</div>
+    </header>
+
+    <main class="wf-main">
+      <div class="wf-auth-card">
+        <div class="wf-auth-title">Register your passkey</div>
+        <div class="wf-auth-sub">You have been invited to JiveDrive</div>
+
+        <div class="wf-form-group">
+          <label class="wf-label">Your name (this will be your username)</label>
+          <input class="wf-input" type="text" value="Charlie" readonly>
+          <div class="wf-annotation">Suggested from the invite; invitee can change unless the admin fixed it.</div>
+        </div>
+
+        <div class="wf-form-group">
+          <label class="wf-label">Storage space</label>
+          <div><span class="wf-tag">Bucket: jivedrive-prod</span><span class="wf-tag">Prefix: teams/charlie/</span></div>
+          <div class="wf-annotation">Pre-set by the admin who invited you.</div>
+        </div>
+
+        <a href="./files.html" class="wf-button wf-button-primary">Create passkey</a>
+        <div class="wf-annotation">On click: browser creates the passkey (Touch ID / Windows Hello / security key), then you are signed in.</div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
