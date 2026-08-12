@@ -8,9 +8,12 @@ import type { Database } from "bun:sqlite";
 import { loadConfig } from "./config";
 import type { AppConfig } from "./config";
 import { migrateFromDir, openDatabase } from "./db/migrate";
+import { bootstrapAdmin } from "./db/bootstrap";
 import { getUserById } from "./db/repository";
 import type { User } from "./db/repository";
 import { SESSION_COOKIE_NAME, validateSession } from "./auth/sessions";
+import { createChallengeStore } from "./auth/webauthn";
+import { authRoutes } from "./routes/auth";
 
 /** Variables stored on the Hono context for the current request. */
 export type ServerEnv = {
@@ -43,6 +46,17 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
 
   app.get("/healthcheck", (c) => c.json({ status: "ok" }));
 
+  // Auth routes (passkey registration, sign-in, logout, current user),
+  // mounted under /auth per the API contract.
+  app.route(
+    "/auth",
+    authRoutes({
+      config: deps.config,
+      db: deps.db,
+      challenges: createChallengeStore(),
+    }),
+  );
+
   // Static SPA serving, mounted only when the build output exists. In
   // development the Vite dev server serves the SPA instead.
   const staticDir = deps.staticDir ?? resolve(process.cwd(), "frontend/dist");
@@ -55,7 +69,9 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
 
   app.notFound((c) => {
     const isApi =
-      c.req.path.startsWith("/api") || c.req.path === "/healthcheck";
+      c.req.path.startsWith("/api") ||
+      c.req.path.startsWith("/auth") ||
+      c.req.path === "/healthcheck";
     if (isApi || indexHtml === null) {
       return c.json({ error: "Not found", code: "not_found" }, 404);
     }
@@ -127,6 +143,7 @@ export function main(): void {
   const config = loadConfig();
   const db = openDatabase(config.dbPath);
   migrateFromDir(db, config.migrationsDir);
+  bootstrapAdmin(db, config.bootstrapAdmin);
   const app = createApp({ config, db });
   Bun.serve({ port: config.port, fetch: app.fetch });
   console.log(`JiveDrive listening on http://localhost:${config.port}`);

@@ -18,12 +18,15 @@ export default defineConfig({
     },
   ],
   webServer: {
-    // Starts the Hono backend and the Vite dev server (which proxies API
-    // calls to the backend). The root `dev` script is added in Phase 2 when
-    // the backend and frontend entry points exist.
-    command: "bun run dev",
+    // Builds the SPA, then starts a test-only server that serves the built
+    // SPA and the API on 5173 with an in-memory seeded database. Passkey
+    // ceremonies use a CDP virtual authenticator with RP ID "localhost".
+    command:
+      "bun run --cwd ../frontend build && bun run ../backend/src/e2eServer.ts",
     url: "http://localhost:5173",
-    reuseExistingServer: !process.env.CI,
+    // Always start a fresh server: the in-memory database must be re-seeded
+    // for every run, so a leftover server on 5173 must not be reused.
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });

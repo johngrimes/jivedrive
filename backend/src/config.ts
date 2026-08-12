@@ -21,6 +21,8 @@ export interface BootstrapAdminConfig {
   bucket: string | null;
   /** Normalised prefix, always ending with "/", possibly empty. */
   prefix: string;
+  /** Whether the bootstrap account is created as an admin (default true). */
+  isAdmin: boolean;
 }
 
 /** WebAuthn relying party settings. */
@@ -174,6 +176,20 @@ export function loadConfig(
     "JIVEDRIVE_BOOTSTRAP_ADMIN_PREFIX",
   );
 
+  let bootstrapIsAdmin = true;
+  if (bootstrapUsername !== null) {
+    const rawIsAdmin = env.JIVEDRIVE_BOOTSTRAP_ADMIN_IS_ADMIN ?? "true";
+    if (rawIsAdmin === "true") bootstrapIsAdmin = true;
+    else if (rawIsAdmin === "false") bootstrapIsAdmin = false;
+    else {
+      errors.push(
+        'JIVEDRIVE_BOOTSTRAP_ADMIN_IS_ADMIN must be "true" or "false", got "' +
+          rawIsAdmin +
+          '"',
+      );
+    }
+  }
+
   const isProduction = nodeEnv === "production";
   const rpId = env.JIVEDRIVE_WEBAUTHN_RP_ID;
   const origin = env.JIVEDRIVE_WEBAUTHN_ORIGIN;
@@ -219,6 +235,7 @@ export function loadConfig(
       username: bootstrapUsername,
       bucket: bootstrapBucket,
       prefix: bootstrapPrefix,
+      isAdmin: bootstrapIsAdmin,
     },
     webauthn: {
       rpId: rpId ?? "localhost",

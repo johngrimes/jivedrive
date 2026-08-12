@@ -1,10 +1,13 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
-import { HomePage } from "./pages/HomePage";
+import { SessionProvider } from "./auth/SessionProvider";
+import { AppShell } from "./components/AppShell";
+import { SignIn } from "./pages/SignIn";
+import { Register } from "./pages/Register";
 import { FilesPage } from "./pages/FilesPage";
-import { RegisterPage } from "./pages/RegisterPage";
 import { AdminPage } from "./pages/AdminPage";
+import "./index.css";
 
 const root = document.getElementById("root");
 if (!root) {
@@ -14,12 +17,16 @@ if (!root) {
 createRoot(root).render(
   <StrictMode>
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/files" element={<FilesPage />} />
-        <Route path="/register" element={<RegisterPage />} />
-        <Route path="/admin" element={<AdminPage />} />
-      </Routes>
+      <SessionProvider>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/" element={<SignIn />} />
+            <Route path="/register" element={<Register />} />
+            <Route path="/files" element={<FilesPage />} />
+            <Route path="/admin" element={<AdminPage />} />
+          </Route>
+        </Routes>
+      </SessionProvider>
     </BrowserRouter>
   </StrictMode>,
 );

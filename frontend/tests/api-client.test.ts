@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiFetch, getHealth, getMe } from "../src/api/client";
+import {
+  apiFetch,
+  getHealth,
+  getMe,
+  postLoginOptions,
+  postLoginVerify,
+  postLogout,
+  postRegisterOptions,
+  postRegisterVerify,
+} from "../src/api/client";
 
 type FetchMock = ReturnType<typeof vi.fn>;
 
@@ -105,8 +114,137 @@ describe("getMe", () => {
 
     await getMe();
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/auth/me",
+      "/auth/me",
       expect.objectContaining({ credentials: "include" }),
+    );
+  });
+});
+
+describe("postLoginOptions", () => {
+  it("posts the username and returns the options response", async () => {
+    const body = {
+      options: { challenge: "abc" },
+      needsRegistration: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await postLoginOptions("alice");
+
+    expect(result).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/auth/login/options",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ username: "alice" }),
+      }),
+    );
+  });
+});
+
+describe("postLoginVerify", () => {
+  it("posts username and credential", async () => {
+    const credential = { id: "cred" };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ user: { username: "alice" } }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await postLoginVerify("alice", credential as never);
+
+    expect(result.user.username).toBe("alice");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/auth/login/verify",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ username: "alice", credential }),
+      }),
+    );
+  });
+});
+
+describe("postRegisterOptions", () => {
+  it("posts the invite token and returns invite details", async () => {
+    const body = {
+      options: { challenge: "abc" },
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await postRegisterOptions("token-1");
+
+    expect(result).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/auth/register/options",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ token: "token-1" }),
+      }),
+    );
+  });
+});
+
+describe("postRegisterVerify", () => {
+  it("posts token and credential for invite registration", async () => {
+    const credential = { id: "cred" };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ user: { username: "alice" } }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await postRegisterVerify({
+      token: "token-1",
+      credential: credential as never,
+    });
+
+    expect(result.user.username).toBe("alice");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/auth/register/verify",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ token: "token-1", credential }),
+      }),
+    );
+  });
+
+  it("posts username and credential for first-passkey registration", async () => {
+    const credential = { id: "cred" };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ user: { username: "admin" } }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await postRegisterVerify({
+      username: "admin",
+      credential: credential as never,
+    });
+
+    expect(result.user.username).toBe("admin");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/auth/register/verify",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ username: "admin", credential }),
+      }),
+    );
+  });
+});
+
+describe("postLogout", () => {
+  it("posts to logout without parsing the empty body", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await postLogout();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/auth/logout",
+      expect.objectContaining({ method: "POST" }),
     );
   });
 });

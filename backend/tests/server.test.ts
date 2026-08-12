@@ -28,7 +28,7 @@ const config: AppConfig = {
     accessKeyId: "AKIAEXAMPLE123",
     secretAccessKey: "s3cr3t",
   },
-  bootstrapAdmin: { username: null, bucket: null, prefix: "" },
+  bootstrapAdmin: { username: null, bucket: null, prefix: "", isAdmin: true },
   webauthn: { rpId: "localhost", origin: "http://localhost:5173" },
 };
 
@@ -122,6 +122,24 @@ describe("404 handling", () => {
     const res = await app.request("/no/such/route");
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("JiveDrive SPA");
+  });
+});
+
+describe("auth routes", () => {
+  it("mounts /auth/me returning null when signed out", async () => {
+    const app = createApp({ config, db: createDb(), staticDir });
+    const res = await app.request("/auth/me");
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ user: null });
+  });
+
+  it("returns a JSON error for unknown auth routes", async () => {
+    const app = createApp({ config, db: createDb(), staticDir });
+    const res = await app.request("/auth/nope");
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "Not found", code: "not_found" });
   });
 });
 

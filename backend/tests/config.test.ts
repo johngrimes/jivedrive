@@ -27,6 +27,7 @@ describe("loadConfig", () => {
       username: null,
       bucket: null,
       prefix: "",
+      isAdmin: true,
     });
     expect(config.webauthn.rpId).toBe("localhost");
     expect(config.webauthn.origin).toBe("http://localhost:5173");
@@ -63,7 +64,40 @@ describe("loadConfig", () => {
       username: "admin",
       bucket: "jivedrive-prod",
       prefix: "users/admin/",
+      isAdmin: true,
     });
+  });
+
+  it("defaults the bootstrap admin flag to true", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin",
+      JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: "jivedrive-prod",
+    });
+
+    expect(config.bootstrapAdmin.isAdmin).toBe(true);
+  });
+
+  it("parses an explicit bootstrap admin flag", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin",
+      JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: "jivedrive-prod",
+      JIVEDRIVE_BOOTSTRAP_ADMIN_IS_ADMIN: "false",
+    });
+
+    expect(config.bootstrapAdmin.isAdmin).toBe(false);
+  });
+
+  it("rejects an invalid bootstrap admin flag", () => {
+    expect(() =>
+      loadConfig({
+        ...minimalEnv,
+        JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin",
+        JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: "jivedrive-prod",
+        JIVEDRIVE_BOOTSTRAP_ADMIN_IS_ADMIN: "yes",
+      }),
+    ).toThrow(/JIVEDRIVE_BOOTSTRAP_ADMIN_IS_ADMIN/);
   });
 
   it("allows an empty bootstrap admin prefix for the bucket root", () => {
