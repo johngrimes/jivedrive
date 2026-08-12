@@ -57,7 +57,15 @@ export function FilesPage() {
         }
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(messageOf(err));
+        if (cancelled) return;
+        // Session expired mid-browse (spec edge case): the next request
+        // re-prompts for sign-in. Refresh the session, which flips the
+        // user to null and redirects to the sign-in page.
+        if ((err as ApiClientError).status === 401) {
+          void refresh();
+          return;
+        }
+        setError(messageOf(err));
       });
     return () => {
       cancelled = true;
@@ -106,6 +114,10 @@ export function FilesPage() {
           : next,
       );
     } catch (err) {
+      if ((err as ApiClientError).status === 401) {
+        void refresh();
+        return;
+      }
       setError(messageOf(err));
     } finally {
       setLoadingMore(false);

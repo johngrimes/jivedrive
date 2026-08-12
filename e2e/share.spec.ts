@@ -76,10 +76,15 @@ test("generates a share link with the default expiry, copies it, and reflects ex
     /X-Amz-Expires=86400/,
   );
 
-  await dialog.getByLabel("Link expires in").selectOption({ label: "30 days" });
+  await dialog
+    .getByLabel("Link expires in")
+    .selectOption({ label: "30 days (7-day maximum)" });
   await expect(dialog.getByLabel("Share link")).toHaveValue(
     /X-Amz-Expires=604800/,
   );
+  // The dialog states the real expiry rather than the nominal 30 days
+  // (the SigV4 presigned-TTL cap is 7 days).
+  await expect(dialog.getByText(/Link expires \d/)).toBeVisible();
 
   await dialog
     .getByLabel("Link expires in")

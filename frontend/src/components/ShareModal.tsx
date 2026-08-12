@@ -14,7 +14,10 @@ const EXPIRY_OPTIONS = [
   { value: "1h", label: "1 hour" },
   { value: "24h", label: "24 hours" },
   { value: "7d", label: "7 days (default)" },
-  { value: "30d", label: "30 days" },
+  // The nominal 30d choice cannot be signed: SigV4 presigned GET URLs are
+  // capped at 7 days, so the route signs it at the provider maximum. The
+  // label says so and the dialog shows the real expiry date.
+  { value: "30d", label: "30 days (7-day maximum)" },
 ] as const;
 
 /** A valid share expiry value. */
@@ -40,6 +43,8 @@ export function ShareModal({ file, onClose }: ShareModalProps) {
   const [link, setLink] = useState<{
     url: string;
     expiresIn: ShareExpiresIn;
+    /** The expiry the link was actually signed for (ISO 8601). */
+    expiresAt: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -53,8 +58,8 @@ export function ShareModal({ file, onClose }: ShareModalProps) {
   useEffect(() => {
     let cancelled = false;
     postShareUrl(file.key, expiresIn)
-      .then(({ url }) => {
-        if (!cancelled) setLink({ url, expiresIn });
+      .then(({ url, expiresAt }) => {
+        if (!cancelled) setLink({ url, expiresIn, expiresAt });
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -136,6 +141,12 @@ export function ShareModal({ file, onClose }: ShareModalProps) {
             />
           )}
         </div>
+
+        {link && !loading && (
+          <p className="share-expiry" role="status">
+            Link expires {new Date(link.expiresAt).toLocaleString()}
+          </p>
+        )}
 
         {error && (
           <p className="error" role="alert">

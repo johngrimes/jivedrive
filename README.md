@@ -119,6 +119,30 @@ ConfigMap for non-secret configuration, and a Secret for S3 credentials. It
 creates no Ingress; expose the Service with your own Ingress at
 `https://drive.grimes.id.au`.
 
+### Bucket setup (once per bucket)
+
+Uploads PUT files directly from the browser to the OVHcloud S3 endpoint
+(FR-008), so the bucket needs a CORS policy allowing the app origin.
+Without it, production uploads fail with a browser CORS error and no server
+log. In the OVHcloud console, set the bucket CORS policy to:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <CORSRule>
+    <AllowedOrigin>https://drive.grimes.id.au</AllowedOrigin>
+    <AllowedMethod>GET</AllowedMethod>
+    <AllowedMethod>PUT</AllowedMethod>
+    <AllowedHeader>Content-Type</AllowedHeader>
+    <ExposeHeader>ETag</ExposeHeader>
+    <MaxAgeSeconds>3000</MaxAgeSeconds>
+  </CORSRule>
+</CORSConfiguration>
+```
+
+Use `http://localhost:5173` as the origin in development. (The e2e mock S3
+server applies an equivalent policy itself.)
+
 ### 1. Build and push the image
 
 ```bash

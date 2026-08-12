@@ -293,7 +293,7 @@ export function adminRoutes(deps: AdminRouteDeps): Hono<ServerEnv> {
       return jsonError(
         c,
         409,
-        `A pending invite already exists for "${username}"`,
+        `A pending or expired invite already exists for "${username}"`,
         "invite_pending",
       );
     }

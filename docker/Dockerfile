@@ -15,8 +15,8 @@ RUN bun install --frozen-lockfile
 COPY frontend ./frontend
 RUN bun run --cwd frontend build
 
-# Bundle the backend into a single file. Native modules such as
-# better-sqlite3 are externalised, so node_modules is copied into the
+# Bundle the backend into a single file. Runtime dependencies (including
+# any native modules) are externalised, so node_modules is copied into the
 # runtime image as well.
 COPY backend ./backend
 RUN cd backend && bun build ./src/server.ts --target=bun --outfile=/app/server.js

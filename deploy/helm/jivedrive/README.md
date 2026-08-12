@@ -31,6 +31,11 @@ accessed over the S3 API.
   image is not published yet.
 - An OVHcloud Object Storage bucket and S3 credentials (access key id and
   secret access key).
+- A bucket CORS policy allowing the app origin: uploads PUT files directly
+  from the browser to the S3 endpoint (FR-008), so the bucket must allow
+  `PUT` and `Content-Type` from the app origin (default
+  `https://drive.grimes.id.au`; use `http://localhost:5173` in development).
+  See the CORS policy in the root [README](../README.md) "Bucket setup".
 - A domain whose TLS is terminated in front of the service. This chart
   intentionally creates no Ingress; for the WebAuthn relying party to work,
   the app must be reachable at the origin configured via
