@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @plugin "daisyui" {
-  themes: corporate --default, business --prefersdark;
+  themes:
+    corporate --default,
+    business --prefersdark;
 }
 
 /* daisyUI control sizing: 44px touch targets (constitution VI). daisyUI

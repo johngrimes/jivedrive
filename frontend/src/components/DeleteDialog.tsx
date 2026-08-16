@@ -62,7 +62,10 @@ export function DeleteDialog({ file, onDeleted, onClose }: DeleteDialogProps) {
         aria-modal="true"
         aria-labelledby="delete-dialog-title"
       >
-        <h2 id="delete-dialog-title" className="text-lg font-semibold break-all">
+        <h2
+          id="delete-dialog-title"
+          className="text-lg font-semibold break-all"
+        >
           Delete {file.name}?
         </h2>
         <p className="py-4">

@@ -130,7 +130,11 @@ export function SignIn() {
             placeholder="alice"
           />
 
-          <button className="btn btn-primary w-full" type="submit" disabled={busy}>
+          <button
+            className="btn btn-primary w-full"
+            type="submit"
+            disabled={busy}
+          >
             {busy ? "Waiting for passkey..." : "Continue with passkey"}
           </button>
         </form>

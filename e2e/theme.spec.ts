@@ -71,9 +71,7 @@ async function expectAppliedTheme(page: Page, base100: string): Promise<void> {
 
 test.describe("system-following theming (US1)", () => {
   test.describe("light color scheme → corporate", () => {
-    test("applies the corporate theme on the home screen", async ({
-      page,
-    }) => {
+    test("applies the corporate theme on the home screen", async ({ page }) => {
       await page.emulateMedia({ colorScheme: "light" });
       await page.goto("/");
       await expectAppliedTheme(page, CORPORATE_BASE_100);

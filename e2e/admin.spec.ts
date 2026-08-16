@@ -40,11 +40,9 @@ async function openAdmin(page: Page, context: BrowserContext): Promise<void> {
  * @returns the matching row locator
  */
 function inviteRow(page: Page, text: string) {
-  return page
-    .getByRole("table", { name: "Invites" })
-    .locator("tbody tr", {
-      has: page.getByRole("cell", { name: text, exact: true }),
-    });
+  return page.getByRole("table", { name: "Invites" }).locator("tbody tr", {
+    has: page.getByRole("cell", { name: text, exact: true }),
+  });
 }
 
 /**
@@ -56,11 +54,9 @@ function inviteRow(page: Page, text: string) {
  * @returns the matching row locator
  */
 function userRow(page: Page, text: string) {
-  return page
-    .getByRole("table", { name: "Users" })
-    .locator("tbody tr", {
-      has: page.getByRole("cell", { name: text, exact: true }),
-    });
+  return page.getByRole("table", { name: "Users" }).locator("tbody tr", {
+    has: page.getByRole("cell", { name: text, exact: true }),
+  });
 }
 
 /**

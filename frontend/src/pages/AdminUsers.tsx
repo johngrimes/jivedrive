@@ -346,9 +346,7 @@ export function AdminUsersPage() {
                         className="checkbox checkbox-primary"
                         type="checkbox"
                         checked={isAdmin}
-                        onChange={(event) =>
-                          setIsAdmin(event.target.checked)
-                        }
+                        onChange={(event) => setIsAdmin(event.target.checked)}
                       />
                       <span className="label-text">Admin?</span>
                     </label>
@@ -437,7 +435,10 @@ export function AdminUsersPage() {
           <div className="card bg-base-100 shadow-xl">
             {loading ? (
               <div className="card-body">
-                <p className="py-4 text-center text-sm opacity-70" role="status">
+                <p
+                  className="py-4 text-center text-sm opacity-70"
+                  role="status"
+                >
                   Loading invites...
                 </p>
               </div>
@@ -456,7 +457,10 @@ export function AdminUsersPage() {
                     <th scope="col" className="hidden md:table-cell">
                       Expires
                     </th>
-                    <th scope="col" className="whitespace-nowrap pr-0 text-right">
+                    <th
+                      scope="col"
+                      className="whitespace-nowrap pr-0 text-right"
+                    >
                       Actions
                     </th>
                   </tr>
@@ -528,7 +532,10 @@ export function AdminUsersPage() {
           <div className="card bg-base-100 shadow-xl">
             {loading ? (
               <div className="card-body">
-                <p className="py-4 text-center text-sm opacity-70" role="status">
+                <p
+                  className="py-4 text-center text-sm opacity-70"
+                  role="status"
+                >
                   Loading users...
                 </p>
               </div>
@@ -546,7 +553,10 @@ export function AdminUsersPage() {
                     <th scope="col" className="hidden md:table-cell">
                       Created
                     </th>
-                    <th scope="col" className="whitespace-nowrap pr-0 text-right">
+                    <th
+                      scope="col"
+                      className="whitespace-nowrap pr-0 text-right"
+                    >
                       Actions
                     </th>
                   </tr>
@@ -596,8 +606,8 @@ export function AdminUsersPage() {
             )}
             <div className="card-body border-t border-base-300/50">
               <p className="text-xs italic opacity-60">
-                Removing a user deletes the account and invite links only.
-                Their objects in storage are left untouched.
+                Removing a user deletes the account and invite links only. Their
+                objects in storage are left untouched.
               </p>
             </div>
           </div>
@@ -620,8 +630,8 @@ export function AdminUsersPage() {
             </h2>
             <p className="py-4">
               "{removal.username}" will no longer be able to sign in, and any
-              invite links will stop working. Objects in their storage space
-              are left untouched.
+              invite links will stop working. Objects in their storage space are
+              left untouched.
             </p>
 
             {error && (
