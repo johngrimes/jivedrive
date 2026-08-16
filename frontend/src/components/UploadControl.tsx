@@ -16,7 +16,7 @@
  */
 import { useState } from "react";
 import type { ChangeEvent } from "react";
-import { UploadIcon } from "@primer/octicons-react";
+import { SyncIcon, UploadIcon, XIcon } from "@primer/octicons-react";
 import { postUploadUrl } from "../api/client";
 import type { ApiClientError } from "../api/client";
 
@@ -231,6 +231,7 @@ export function UploadControl({
                 type="button"
                 onClick={() => setState({ kind: "idle" })}
               >
+                <XIcon aria-hidden="true" />
                 Cancel
               </button>
               <button
@@ -238,6 +239,7 @@ export function UploadControl({
                 type="button"
                 onClick={() => void handleReplace()}
               >
+                <SyncIcon aria-hidden="true" />
                 Replace
               </button>
             </div>
