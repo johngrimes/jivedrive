@@ -458,13 +458,15 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     await expectNoHorizontalOverflow(page);
 
     // And usable: a file upload actually starts from the toolbar at 375px.
-    // Upload into docs/ (not the root) so the root item counts asserted by
-    // browse.spec stay stable. The name is unique per attempt so a Playwright
-    // retry (CI sets retries=2) never hits the overwrite confirmation.
-    await page.getByRole("link", { name: /docs/ }).click();
+    // Upload into photos/ (not the root or docs/): the root item counts are
+    // asserted by browse.spec, and docs/ must stay within one page for
+    // upload.spec. The name is unique per attempt so a Playwright retry
+    // (CI sets retries=2) never hits the overwrite confirmation.
+    await page.getByRole("button", { name: "Load more" }).click();
+    await page.getByRole("link", { name: /photos/ }).click();
     await expect(
       page.getByRole("navigation", { name: "Breadcrumbs" }),
-    ).toContainText("docs");
+    ).toContainText("photos");
     const fileName = `mobile upload check ${Date.now()}.txt`;
     await page.locator('input[type="file"]').setInputFiles({
       name: fileName,
@@ -502,7 +504,15 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
 
     // A genuinely long name wraps onto multiple lines instead of widening
     // the page: upload one at 375px and check its row is taller than a
-    // normal single-line row (unique name per attempt, retry-safe).
+    // normal single-line row (unique name per attempt, retry-safe). Upload
+    // into photos/ for the same page-size reasons as the toolbar test; the
+    // comparison row is a seeded photos file that delete.spec never removes.
+    await page.getByRole("link", { name: "Home" }).click();
+    await page.getByRole("button", { name: "Load more" }).click();
+    await page.getByRole("link", { name: /photos/ }).click();
+    await expect(
+      page.getByRole("navigation", { name: "Breadcrumbs" }),
+    ).toContainText("photos");
     const longName = `a-very-long-file-name-that-wraps-onto-multiple-lines-when-rendered-on-a-375px-phone-screen-${Date.now()}.txt`;
     await page.locator('input[type="file"]').setInputFiles({
       name: longName,
@@ -512,7 +522,10 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     await expect(page.getByText(`Uploaded ${longName}`)).toBeVisible();
     const longRow = page.locator("tbody tr", { hasText: longName });
     await expect(longRow).toBeVisible();
-    const normalRow = page.locator("tbody tr", { hasText: "notes.txt" });
+    const normalRow = page.locator("tbody tr", {
+      hasText: "delete-me-cancel.txt",
+    });
+    await expect(normalRow).toBeVisible();
     const longHeight = await longRow.evaluate(
       (el) => el.getBoundingClientRect().height,
     );
