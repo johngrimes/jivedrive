@@ -3,12 +3,22 @@
  * and loading skeletons, plus human-readable formatting helpers (T036).
  *
  * Rebuilt on daisyUI primitives (T011): breadcrumbs, table, link, btn,
- * skeleton, alert. Folder rows are links; file rows carry link-class
- * Download/Share/Delete actions. Size and Modified columns are hidden
- * below `sm` so the table fits 375px without horizontal scrolling
- * (spec SC-004).
+ * skeleton, alert (US2). Folder rows are links (they navigate); file rows
+ * carry button Download/Share/Delete actions with octicons — icon+text at
+ * `sm` and up, icon-only below with the accessible name on the button
+ * (FR-007). Size and Modified relocate below `sm` into a secondary line
+ * under the file name (FR-005) and return to their own columns at `sm`+,
+ * so the table fits 375px without horizontal scrolling (FR-009).
  */
 import type { FileEntry } from "../api/client";
+import {
+  DownloadIcon,
+  FileDirectoryFillIcon,
+  FileIcon,
+  HomeIcon,
+  ShareAndroidIcon,
+  TrashIcon,
+} from "@primer/octicons-react";
 import { formatDate, formatSize } from "../lib/format";
 
 /** Props for {@link Breadcrumbs}. */
@@ -32,13 +42,14 @@ export function Breadcrumbs({ segments, onNavigate }: BreadcrumbsProps) {
       <ul>
         <li>
           <a
-            className="min-h-11 inline-flex items-center"
+            className="min-h-11 inline-flex items-center gap-1"
             href="#"
             onClick={(event) => {
               event.preventDefault();
               onNavigate("");
             }}
           >
+            <HomeIcon aria-hidden="true" />
             Home
           </a>
         </li>
@@ -213,7 +224,11 @@ export function FileListing({
                     onOpenFolder(folder);
                   }}
                 >
-                  <span aria-hidden="true">📁</span> {folder}
+                  <FileDirectoryFillIcon
+                    aria-hidden="true"
+                    className="shrink-0"
+                  />
+                  {folder}
                 </a>
               </td>
               <td className="hidden sm:table-cell">—</td>
@@ -224,49 +239,48 @@ export function FileListing({
           {files.map((file) => (
             <tr key={file.key}>
               <td className="break-all">
-                <span aria-hidden="true">📄</span> {file.name}
+                <div className="min-h-11 flex items-center gap-1">
+                  <FileIcon aria-hidden="true" className="shrink-0" />
+                  <span className="min-w-0">{file.name}</span>
+                </div>
+                <span className="block text-xs opacity-60 sm:hidden">
+                  {formatSize(file.size)} · {formatDate(file.lastModified)}
+                </span>
               </td>
               <td className="hidden sm:table-cell">{formatSize(file.size)}</td>
               <td className="hidden sm:table-cell">
                 {formatDate(file.lastModified)}
               </td>
               <td className="whitespace-nowrap text-right">
-                <a
-                  className="link min-h-11 inline-flex items-center px-1"
-                  href="#"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    onDownload(file);
-                  }}
-                >
-                  Download
-                </a>
-                <span className="opacity-50" aria-hidden="true">
-                  ·
-                </span>
-                <a
-                  className="link min-h-11 inline-flex items-center px-1"
-                  href="#"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    onShare(file);
-                  }}
-                >
-                  Share
-                </a>
-                <span className="opacity-50" aria-hidden="true">
-                  ·
-                </span>
-                <a
-                  className="link min-h-11 inline-flex items-center px-1"
-                  href="#"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    onDelete(file);
-                  }}
-                >
-                  Delete
-                </a>
+                <div className="flex items-center justify-end gap-1">
+                  <button
+                    type="button"
+                    className="btn btn-ghost min-h-11"
+                    aria-label="Download"
+                    onClick={() => onDownload(file)}
+                  >
+                    <DownloadIcon aria-hidden="true" />
+                    <span className="hidden sm:inline">Download</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost min-h-11"
+                    aria-label="Share"
+                    onClick={() => onShare(file)}
+                  >
+                    <ShareAndroidIcon aria-hidden="true" />
+                    <span className="hidden sm:inline">Share</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost min-h-11"
+                    aria-label="Delete"
+                    onClick={() => onDelete(file)}
+                  >
+                    <TrashIcon aria-hidden="true" />
+                    <span className="hidden sm:inline">Delete</span>
+                  </button>
+                </div>
               </td>
             </tr>
           ))}
