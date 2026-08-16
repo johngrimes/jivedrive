@@ -16,6 +16,7 @@
  */
 import { useState } from "react";
 import type { ChangeEvent } from "react";
+import { UploadIcon } from "@primer/octicons-react";
 import { postUploadUrl } from "../api/client";
 import type { ApiClientError } from "../api/client";
 
@@ -174,6 +175,7 @@ export function UploadControl({
   return (
     <div className="flex min-w-0 max-w-full flex-col items-start gap-2">
       <label className="btn cursor-pointer border-2 border-dashed rounded-lg">
+        <UploadIcon aria-hidden="true" />
         Upload file
         <input
           className="sr-only"
