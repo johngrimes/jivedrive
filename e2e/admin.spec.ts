@@ -28,11 +28,13 @@ async function openAdmin(page: Page, context: BrowserContext): Promise<void> {
   ).toBeVisible();
 }
 
-/** A row in the invites table matching the given text. */
 /**
- * A row in the invites table whose username cell exactly matches the given
- * text. Exact cell matching (not substring) so usernames like "ina" never
- * match a row for "gina" in the same table. The table is scoped by its
+ * A row in the invites table whose username cell contains the given text
+ * exactly. Exact matching (not substring) so usernames like "ina" never
+ * match a row for "gina" in the same table. The match targets the
+ * username's own nested span: since US3 the cell also carries stacked
+ * metadata below the breakpoints, so its accessible name is the
+ * concatenation, not the bare username (T015). The table is scoped by its
  * accessible name (aria-label="Invites", added in T018).
  *
  * @param page - the page
@@ -41,13 +43,14 @@ async function openAdmin(page: Page, context: BrowserContext): Promise<void> {
  */
 function inviteRow(page: Page, text: string) {
   return page.getByRole("table", { name: "Invites" }).locator("tbody tr", {
-    has: page.getByRole("cell", { name: text, exact: true }),
+    has: page.getByRole("cell").getByText(text, { exact: true }),
   });
 }
 
 /**
- * A row in the users table whose username cell exactly matches the text.
- * Scoped by the accessible name (aria-label="Users", added in T018).
+ * A row in the users table whose username cell contains the given text
+ * exactly (same nested-span rationale as {@link inviteRow}, T015). Scoped
+ * by the accessible name (aria-label="Users", added in T018).
  *
  * @param page - the page
  * @param text - the exact username
@@ -55,7 +58,7 @@ function inviteRow(page: Page, text: string) {
  */
 function userRow(page: Page, text: string) {
   return page.getByRole("table", { name: "Users" }).locator("tbody tr", {
-    has: page.getByRole("cell", { name: text, exact: true }),
+    has: page.getByRole("cell").getByText(text, { exact: true }),
   });
 }
 

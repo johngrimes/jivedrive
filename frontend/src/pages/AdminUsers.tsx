@@ -14,13 +14,19 @@
  * checkbox), generated-link card with readonly input + copy `btn`,
  * invites and users tables with status `badge`s, and a `modal modal-open`
  * removal confirmation (research R5). Navigation lives in the AppShell
- * drawer/sidebar (US1), so the page renders only its content card. The
- * tables carry `aria-label`s ("Invites"/"Users") and hide wide columns
- * below breakpoints so they never scroll horizontally at 375px
- * (spec SC-004).
+ * drawer/sidebar (US1), so the page renders only its content card.
+ *
+ * Mobile-first (US3, FR-006/007): breakpoint-hidden column values (role
+ * below `sm`; bucket/prefix and expires/created below `md`) stack as
+ * secondary lines under the username, returning to their own columns at
+ * the breakpoint and up; row actions are octicon buttons — icon+text at
+ * `sm` and up, icon-only below with the accessible name on the button
+ * (`aria-label` identical to the visible label). The removal dialog's
+ * Cancel/Remove buttons carry decorative octicons (FR-004).
  */
 import { useEffect, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
+import { PaperAirplaneIcon, TrashIcon, XIcon } from "@primer/octicons-react";
 import {
   cancelAdminInvite,
   createAdminInvite,
@@ -455,7 +461,20 @@ export function AdminUsersPage() {
                 <tbody>
                   {invites.map((invite) => (
                     <tr key={invite.id}>
-                      <td className="break-all">{invite.username}</td>
+                      <td className="break-all">
+                        <span className="font-semibold break-all">
+                          {invite.username}
+                        </span>
+                        <span className="block text-xs opacity-60 sm:hidden">
+                          {roleLabel(invite.isAdmin)}
+                        </span>
+                        <span className="block break-all text-xs opacity-60 md:hidden">
+                          {invite.bucket} / {invite.prefix}
+                        </span>
+                        <span className="block text-xs opacity-60 md:hidden">
+                          Expires {formatDate(invite.expiresAt)}
+                        </span>
+                      </td>
                       <td className="hidden sm:table-cell">
                         {roleLabel(invite.isAdmin)}
                       </td>
@@ -476,24 +495,27 @@ export function AdminUsersPage() {
                         {invite.status !== "claimed" && (
                           <>
                             <button
-                              className="btn btn-ghost px-0"
+                              className="btn btn-ghost min-h-11"
                               type="button"
+                              aria-label="Re-send"
                               onClick={() => void handleResend(invite)}
                               disabled={resending?.id === invite.id}
                             >
-                              {resending?.id === invite.id
-                                ? "Re-sending..."
-                                : "Re-send"}
+                              <PaperAirplaneIcon aria-hidden="true" />
+                              <span className="hidden sm:inline">
+                                {resending?.id === invite.id
+                                  ? "Re-sending..."
+                                  : "Re-send"}
+                              </span>
                             </button>
-                            <span className="opacity-50" aria-hidden="true">
-                              ·
-                            </span>
                             <button
-                              className="btn btn-ghost px-0"
+                              className="btn btn-ghost min-h-11"
                               type="button"
+                              aria-label="Cancel"
                               onClick={() => void handleCancel(invite)}
                             >
-                              Cancel
+                              <XIcon aria-hidden="true" />
+                              <span className="hidden sm:inline">Cancel</span>
                             </button>
                           </>
                         )}
@@ -551,7 +573,20 @@ export function AdminUsersPage() {
                 <tbody>
                   {users.map((entry) => (
                     <tr key={entry.id}>
-                      <td className="break-all">{entry.username}</td>
+                      <td className="break-all">
+                        <span className="font-semibold break-all">
+                          {entry.username}
+                        </span>
+                        <span className="block text-xs opacity-60 sm:hidden">
+                          {roleLabel(entry.isAdmin)}
+                        </span>
+                        <span className="block break-all text-xs opacity-60 md:hidden">
+                          {entry.bucket} / {entry.prefix}
+                        </span>
+                        <span className="block text-xs opacity-60 md:hidden">
+                          Created {formatDate(entry.createdAt)}
+                        </span>
+                      </td>
                       <td className="hidden sm:table-cell">
                         {roleLabel(entry.isAdmin)}
                       </td>
@@ -564,8 +599,9 @@ export function AdminUsersPage() {
                       <td className="whitespace-nowrap pr-0 text-right">
                         {entry.id !== user.id ? (
                           <button
-                            className="btn btn-error"
+                            className="btn btn-error min-h-11"
                             type="button"
+                            aria-label="Remove"
                             onClick={() =>
                               setRemoval({
                                 id: entry.id,
@@ -574,7 +610,8 @@ export function AdminUsersPage() {
                             }
                             disabled={removing}
                           >
-                            Remove
+                            <TrashIcon aria-hidden="true" />
+                            <span className="hidden sm:inline">Remove</span>
                           </button>
                         ) : (
                           <span className="opacity-60">(you)</span>
@@ -634,6 +671,7 @@ export function AdminUsersPage() {
                 onClick={() => setRemoval(null)}
                 disabled={removing}
               >
+                <XIcon aria-hidden="true" />
                 Cancel
               </button>
               <button
@@ -642,6 +680,7 @@ export function AdminUsersPage() {
                 onClick={() => void handleRemoveConfirm()}
                 disabled={removing}
               >
+                <TrashIcon aria-hidden="true" />
                 {removing ? "Removing..." : "Remove"}
               </button>
             </div>

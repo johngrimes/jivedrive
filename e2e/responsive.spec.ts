@@ -1,10 +1,5 @@
 import { expect, test } from "@playwright/test";
-import type {
-  BrowserContext,
-  Locator,
-  Page,
-  TestInfo,
-} from "@playwright/test";
+import type { BrowserContext, Locator, Page, TestInfo } from "@playwright/test";
 import {
   expectNoHorizontalOverflow,
   expectSignedInAs,
@@ -636,7 +631,9 @@ test.describe("User Story 3 - admin screen rendered for mobile, with octicons", 
    */
   function testUsername(base: string, testInfo: TestInfo): string {
     const ts = Date.now();
-    return testInfo.retry > 0 ? `${base}-${ts}-r${testInfo.retry}` : `${base}-${ts}`;
+    return testInfo.retry > 0
+      ? `${base}-${ts}-r${testInfo.retry}`
+      : `${base}-${ts}`;
   }
 
   test("at 375px an invite row stacks the role under the username and shows icon-only Re-send/Cancel buttons", async ({
