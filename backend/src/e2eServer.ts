@@ -270,6 +270,16 @@ const longname = createUser(db, {
 });
 createSession(db, longname.id, { token: "longname-session" });
 
+// A dedicated user the responsive e2e spec removes (US4 remove-confirmation
+// flow). frank is the admin spec's removal target, so rosa is a second
+// user owned by exactly one spec; no other spec depends on her.
+const rosa = createUser(db, {
+  username: "rosa",
+  bucket: "jivedrive-prod",
+  prefix: "users/rosa/",
+});
+createSession(db, rosa.id, { token: "rosa-session" });
+
 const future = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
@@ -301,6 +311,19 @@ createInvite(db, {
   issuedByUserId: admin.id,
   expiresAt: past,
 });
+// A valid invite for the register-page width sweep (US4 sc.6): the
+// responsive spec renders /register?token=invite-vera at 375/768/1280 and
+// never claims it, so it must stay pending. auth.spec claims invite-carol,
+// so vera is a separate invite owned by exactly one spec; dave and ina
+// stay expired for their specs.
+createInvite(db, {
+  token: "invite-vera",
+  username: "vera",
+  bucket: "jivedrive-prod",
+  prefix: "users/vera/",
+  issuedByUserId: admin.id,
+  expiresAt: future,
+});
 
 // Alice's space: three subfolders (docs, photos, empty) and seven root
 // files, more than one page of the e2e page size (5).
@@ -322,6 +345,13 @@ seedObject("users/alice/photos/pic.jpg", "jpeg-bytes", 4096);
 seedObject("users/alice/photos/delete-me-cancel.txt", "keep me", 7);
 seedObject("users/alice/photos/delete-me-confirm.txt", "delete me", 9);
 seedObject("users/alice/photos/delete-me-missing.txt", "gone soon", 9);
+// Dedicated objects for the responsive e2e spec's dialog flows (US4): the
+// delete-confirm test actually deletes 0-responsive-delete-me.txt and the
+// overwrite test replaces 0-responsive-overwrite.txt. The "0-" prefix
+// sorts them ahead of delete.spec's objects and pic.jpg so both stay on
+// the first page of photos/ (page size 5, no count assertions on photos).
+seedObject("users/alice/photos/0-responsive-delete-me.txt", "delete me", 9);
+seedObject("users/alice/photos/0-responsive-overwrite.txt", "v1", 2);
 seedObject("users/alice/empty/", "", 0);
 
 // Mock S3 HTTP server: serves downloads at path-style presigned URLs and

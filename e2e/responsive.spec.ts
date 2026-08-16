@@ -461,13 +461,16 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     // Upload into photos/ (not the root or docs/): the root item counts are
     // asserted by browse.spec, and docs/ must stay within one page for
     // upload.spec. The name is unique per attempt so a Playwright retry
-    // (CI sets retries=2) never hits the overwrite confirmation.
+    // (CI sets retries=2) never hits the overwrite confirmation. The "0-"
+    // prefix sorts the new file onto photos/' first page: the US4 dialog
+    // seeds pushed photos/ past the 5-item page size, and the listing
+    // refresh after an upload only returns the first page.
     await page.getByRole("button", { name: "Load more" }).click();
     await page.getByRole("link", { name: /photos/ }).click();
     await expect(
       page.getByRole("navigation", { name: "Breadcrumbs" }),
     ).toContainText("photos");
-    const fileName = `mobile upload check ${Date.now()}.txt`;
+    const fileName = `0-mobile upload check ${Date.now()}.txt`;
     await page.locator('input[type="file"]').setInputFiles({
       name: fileName,
       mimeType: "text/plain",
@@ -872,5 +875,377 @@ test.describe("User Story 3 - admin screen rendered for mobile, with octicons", 
     expect(removeBox).not.toBeNull();
     expect(removeBox!.height).toBeGreaterThanOrEqual(44);
     await expectNoHorizontalOverflow(page);
+  });
+});
+
+test.describe("User Story 4 - dialogs and auth screens verified on mobile", () => {
+  /**
+   * Start signed in as alice with the pre-seeded session (no WebAuthn
+   * ceremony) and open /files at 375px.
+   *
+   * @param page - the page
+   * @param context - the browser context
+   */
+  async function startSignedIn(
+    page: Page,
+    context: BrowserContext,
+  ): Promise<void> {
+    await context.addCookies([BROWSE_SESSION_COOKIE]);
+    await page.setViewportSize(MOBILE_VIEWPORT);
+    await page.goto("/files");
+    await expectSignedInAs(page, "alice");
+  }
+
+  /**
+   * From /files, load the rest of the root listing and open photos/ (it
+   * sorts onto the second page), following delete.spec's openPhotos
+   * pattern.
+   *
+   * @param page - the page
+   * @param context - the browser context
+   */
+  async function openPhotos(
+    page: Page,
+    context: BrowserContext,
+  ): Promise<void> {
+    await startSignedIn(page, context);
+    await page.getByRole("button", { name: "Load more" }).click();
+    await page.getByRole("link", { name: /photos/ }).click();
+    await expect(
+      page.getByRole("navigation", { name: "Breadcrumbs" }),
+    ).toContainText("photos");
+  }
+
+  /**
+   * Start signed in as the pre-seeded admin and open /admin at 375px.
+   *
+   * @param page - the page
+   * @param context - the browser context
+   */
+  async function startAdmin(
+    page: Page,
+    context: BrowserContext,
+  ): Promise<void> {
+    await context.addCookies([ADMIN_SESSION_COOKIE]);
+    await page.setViewportSize(MOBILE_VIEWPORT);
+    await page.goto("/admin");
+    await expect(
+      page.getByRole("heading", { name: "User management" }),
+    ).toBeVisible();
+  }
+
+  test("the share dialog at 375px is fully usable with octicon actions, in both themes", async ({
+    page,
+    context,
+  }) => {
+    await startSignedIn(page, context);
+
+    // data.csv sorts onto the first page of the seeded root listing, and
+    // sharing only generates a read-only link (no mutation).
+    await page
+      .locator("tbody tr", { hasText: "data.csv" })
+      .getByRole("button", { name: "Share" })
+      .click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("data.csv");
+    await expect(dialog.getByLabel("Share link")).toHaveValue(
+      /X-Amz-Signature/,
+    );
+
+    // US4 sc.1: every control is visible and usable at 375px.
+    const expiry = dialog.getByLabel("Link expires in");
+    await expect(expiry).toBeVisible();
+    await expect(dialog.getByLabel("Share link")).toBeVisible();
+    const copyButton = dialog.getByRole("button", { name: "Copy link" });
+    const doneButton = dialog.getByRole("button", { name: "Done" });
+    await expect(copyButton).toBeVisible();
+    await expect(doneButton).toBeVisible();
+
+    // The expiry select is usable: changing it regenerates the link.
+    await expiry.selectOption({ label: "1 hour" });
+    await expect(dialog.getByLabel("Share link")).toHaveValue(
+      /X-Amz-Expires=3600/,
+    );
+
+    // FR-004: copy and done carry octicons while keeping their accessible
+    // names (the icons are decorative, the text still names the buttons).
+    await expect(copyButton.locator("svg")).toBeVisible();
+    await expect(doneButton.locator("svg")).toBeVisible();
+
+    // Copy is usable: the clipboard receives exactly the generated link.
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: "http://localhost:5173",
+    });
+    const link = await dialog.getByLabel("Share link").inputValue();
+    await copyButton.click();
+    await expect(dialog.getByRole("button", { name: "Copied" })).toBeVisible();
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    expect(copied).toBe(link);
+
+    // Done closes the dialog; the open dialog never scrolls horizontally.
+    await doneButton.click();
+    await expect(dialog).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+
+    // SC-002: the dialog is also open at 375px in the dark theme with no
+    // overflow (sharing is read-only, so the same file is safe to reopen).
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page
+      .locator("tbody tr", { hasText: "data.csv" })
+      .getByRole("button", { name: "Share" })
+      .click();
+    await expect(dialog).toContainText("data.csv");
+    await expect(dialog.getByLabel("Share link")).toHaveValue(
+      /X-Amz-Signature/,
+    );
+    await expectNoHorizontalOverflow(page);
+    await dialog.getByRole("button", { name: "Done" }).click();
+    await expect(dialog).toHaveCount(0);
+  });
+
+  test("the delete dialog at 375px cancels without deleting, confirms the delete, and stays scroll-free in both themes", async ({
+    page,
+    context,
+  }) => {
+    await openPhotos(page, context);
+
+    // A dedicated object (see e2eServer.ts): this test is the only spec
+    // that deletes it, so the confirm step is safe to actually run.
+    const row = page.locator("tbody tr", {
+      hasText: "0-responsive-delete-me.txt",
+    });
+    await expect(row).toBeVisible();
+
+    // US4 sc.2: the dialog opens with usable Cancel/Delete actions.
+    await row.getByRole("button", { name: "Delete" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("0-responsive-delete-me.txt");
+    const cancel = dialog.getByRole("button", { name: "Cancel" });
+    const confirmDelete = dialog.getByRole("button", { name: "Delete" });
+    await expect(cancel).toBeVisible();
+    await expect(confirmDelete).toBeVisible();
+
+    // FR-004: cancel and delete carry octicons with unchanged names.
+    await expect(cancel.locator("svg")).toBeVisible();
+    await expect(confirmDelete.locator("svg")).toBeVisible();
+
+    // Cancel closes the dialog without any request: the row stays.
+    await cancel.click();
+    await expect(dialog).toHaveCount(0);
+    await expect(row).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    // Confirming deletes: reopen the dialog, click Delete, the row
+    // disappears from the listing.
+    await row.getByRole("button", { name: "Delete" }).click();
+    await expect(dialog).toContainText("0-responsive-delete-me.txt");
+    await confirmDelete.click();
+    await expect(dialog).toHaveCount(0);
+    await expect(row).toHaveCount(0);
+
+    // SC-002: the dialog is also open at 375px in the dark theme with no
+    // overflow. delete-me-cancel.txt is a stable object (delete.spec only
+    // cancels on it), and Cancel leaves it untouched.
+    await page.emulateMedia({ colorScheme: "dark" });
+    const stableRow = page.locator("tbody tr", {
+      hasText: "delete-me-cancel.txt",
+    });
+    await expect(stableRow).toBeVisible();
+    await stableRow.getByRole("button", { name: "Delete" }).click();
+    await expect(dialog).toContainText("delete-me-cancel.txt");
+    await expectNoHorizontalOverflow(page);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+  });
+
+  test("the overwrite confirmation at 375px cancels without replacing, replaces on confirm, and stays scroll-free in both themes", async ({
+    page,
+    context,
+  }) => {
+    await openPhotos(page, context);
+
+    const row = page.locator("tbody tr", {
+      hasText: "0-responsive-overwrite.txt",
+    });
+    await expect(row).toBeVisible();
+    // The seeded object is "v1" (2 bytes); cancel must keep that content.
+    await expect(row).toContainText("2 B");
+
+    // The object exists: uploading the same name is refused until the
+    // user confirms (US4 sc.3).
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles({
+      name: "0-responsive-overwrite.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("v1"),
+    });
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("0-responsive-overwrite.txt");
+    await expect(dialog).toContainText("already exists");
+    const cancel = dialog.getByRole("button", { name: "Cancel" });
+    const replace = dialog.getByRole("button", { name: "Replace" });
+    await expect(cancel).toBeVisible();
+    await expect(replace).toBeVisible();
+
+    // FR-004: cancel and replace carry octicons with unchanged names.
+    await expect(cancel.locator("svg")).toBeVisible();
+    await expect(replace.locator("svg")).toBeVisible();
+
+    // Cancel keeps the stored object: the listing still shows 2 B.
+    await cancel.click();
+    await expect(dialog).toHaveCount(0);
+    await expect(row).toContainText("2 B");
+    await expectNoHorizontalOverflow(page);
+
+    // Confirming replaces the object: success feedback and the new size.
+    await fileInput.setInputFiles({
+      name: "0-responsive-overwrite.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("a longer replacement version"),
+    });
+    await expect(dialog).toContainText("already exists");
+    await replace.click();
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      page.getByText("Uploaded 0-responsive-overwrite.txt"),
+    ).toBeVisible();
+    await expect(row).toContainText("28 B");
+
+    // SC-002: the confirmation is also open at 375px in the dark theme
+    // with no overflow. The object now holds the replacement, so the same
+    // name still triggers the confirmation; Cancel leaves it in place.
+    await page.emulateMedia({ colorScheme: "dark" });
+    await fileInput.setInputFiles({
+      name: "0-responsive-overwrite.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("a longer replacement version"),
+    });
+    await expect(dialog).toContainText("already exists");
+    await expectNoHorizontalOverflow(page);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+  });
+
+  test("the remove confirmation at 375px cancels without removing, removes on confirm, and stays scroll-free in both themes", async ({
+    page,
+    context,
+  }) => {
+    await startAdmin(page, context);
+
+    // rosa is seeded in e2eServer as a dedicated removal target for this
+    // spec (frank belongs to admin.spec, and alice/admin are never
+    // removed).
+    const row = page
+      .getByRole("table", { name: "Users" })
+      .locator("tbody tr", {
+        has: page.getByRole("cell").getByText("rosa", { exact: true }),
+      });
+    await expect(row).toBeVisible();
+
+    // US4 sc.4: the confirmation dialog opens with usable Cancel/Remove.
+    await row.getByRole("button", { name: "Remove" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("rosa");
+    const cancel = dialog.getByRole("button", { name: "Cancel" });
+    const remove = dialog.getByRole("button", { name: "Remove" });
+    await expect(cancel).toBeVisible();
+    await expect(remove).toBeVisible();
+
+    // FR-004: cancel and remove carry octicons with unchanged names.
+    await expect(cancel.locator("svg")).toBeVisible();
+    await expect(remove.locator("svg")).toBeVisible();
+
+    // Cancel closes the dialog without removing: the row stays.
+    await cancel.click();
+    await expect(dialog).toHaveCount(0);
+    await expect(row).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    // Confirming removes: explicit feedback and the row disappears.
+    await row.getByRole("button", { name: "Remove" }).click();
+    await expect(dialog).toContainText("rosa");
+    await remove.click();
+    await expect(page.getByText(/Removed user "rosa"/)).toBeVisible();
+    await expect(row).toHaveCount(0);
+
+    // SC-002: the confirmation is also open at 375px in the dark theme
+    // with no overflow. gina is a stable seeded user no spec removes;
+    // Cancel leaves her in place.
+    await page.emulateMedia({ colorScheme: "dark" });
+    const stableRow = page
+      .getByRole("table", { name: "Users" })
+      .locator("tbody tr", {
+        has: page.getByRole("cell").getByText("gina", { exact: true }),
+      });
+    await expect(stableRow).toBeVisible();
+    await stableRow.getByRole("button", { name: "Remove" }).click();
+    await expect(dialog).toContainText("gina");
+    await expectNoHorizontalOverflow(page);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+  });
+
+  test("the sign-in page is centred with every control reachable at 375, 768 and 1280", async ({
+    page,
+  }) => {
+    for (const viewport of [
+      { width: 375, height: 667 },
+      { width: 768, height: 1024 },
+      { width: 1280, height: 800 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/");
+      const card = page.getByRole("region", { name: "Sign in" });
+      await expect(card).toBeVisible();
+
+      // US4 sc.5: the card is centred horizontally (measured against the
+      // content width so a classic vertical scrollbar cannot skew it).
+      const metrics = await card.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        return {
+          centre: box.left + box.width / 2,
+          viewport: document.documentElement.clientWidth,
+        };
+      });
+      expect(
+        Math.abs(metrics.centre - metrics.viewport / 2),
+        `card not centred at ${viewport.width}px`,
+      ).toBeLessThan(2);
+
+      // Every control is reachable: the username field and the passkey
+      // button, with no horizontal scroll.
+      await expect(page.getByLabel("Username")).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Continue with passkey" }),
+      ).toBeVisible();
+      await expectNoHorizontalOverflow(page);
+    }
+  });
+
+  test("the register page with an invite token shows the invite details at 375, 768 and 1280", async ({
+    page,
+  }) => {
+    // invite-vera is seeded in e2eServer as a dedicated pending invite for
+    // this sweep (auth.spec claims invite-carol, so vera stays pending:
+    // the sweep never clicks Create passkey).
+    for (const viewport of [
+      { width: 375, height: 667 },
+      { width: 768, height: 1024 },
+      { width: 1280, height: 800 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/register?token=invite-vera");
+
+      // US4 sc.6: the invite details render - username prefilled, bucket
+      // and prefix badges - plus the Create passkey button, all usable
+      // with no horizontal scroll.
+      await expect(page.getByLabel("Your username")).toHaveValue("vera");
+      await expect(page.getByText("Bucket: jivedrive-prod")).toBeVisible();
+      await expect(page.getByText("Prefix: users/vera/")).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Create passkey" }),
+      ).toBeVisible();
+      await expectNoHorizontalOverflow(page);
+    }
   });
 });
