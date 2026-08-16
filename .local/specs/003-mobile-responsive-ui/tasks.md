@@ -22,7 +22,7 @@ implemented and tested independently.
 
 **Purpose**: Add the one new dependency.
 
-- [ ] T001 Add `@primer/octicons-react@^19.33.0` to `dependencies` in `frontend/package.json` and refresh the lockfile with `bun install` (`bun.lock`).
+- [x] T001 Add `@primer/octicons-react@^19.33.0` to `dependencies` in `frontend/package.json` and refresh the lockfile with `bun install` (`bun.lock`).
 
 ---
 
