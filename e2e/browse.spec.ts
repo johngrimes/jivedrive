@@ -49,7 +49,7 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
   // Download/Share/Delete actions.
   await expect(page.getByRole("link", { name: /docs/ })).toBeVisible();
   await expect(page.getByText("archive.zip")).toBeVisible();
-  await expect(page.getByText("812 KB")).toBeVisible();
+  await expect(page.getByRole("cell", { name: "812 KB" })).toBeVisible();
   await expect(page.getByText("5 items")).toBeVisible();
 
   // The listing is usable at mobile, tablet and desktop widths.
@@ -71,7 +71,7 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
   await loadMore.click();
   await expect(page.locator("tbody tr")).toHaveCount(10);
   await expect(loadMore).toHaveCount(0);
-  await expect(page.getByText("2.4 MB")).toBeVisible();
+  await expect(page.getByRole("cell", { name: "2.4 MB" })).toBeVisible();
   await expect(page.getByText("10 items")).toBeVisible();
   await expect(page.getByRole("link", { name: /photos/ })).toBeVisible();
 
