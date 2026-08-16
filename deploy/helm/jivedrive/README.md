@@ -155,7 +155,7 @@ The following `JIVEDRIVE_*` variables are read by the backend
 (`backend/src/config.ts`). Non-secret variables belong in `jivedrive.config`;
 secrets belong in `jivedrive.secretConfig`. Defaults below match the backend's
 defaults, except where the chart defaults to the production deployment
-(`drive.grimes.id.au`, OVHcloud GRA).
+(`drive.grimes.id.au`, OVHcloud SGP).
 
 | Variable | Description | Chart default |
 | -------- | ----------- | ------------- |
@@ -163,8 +163,8 @@ defaults, except where the chart defaults to the production deployment
 | `JIVEDRIVE_DB_PATH` | SQLite database file path; keep it under `jivedrive.persistence.mountPath` | `/data/jivedrive.db` |
 | `JIVEDRIVE_MIGRATIONS_DIR` | Directory of SQL migration files (baked into the image) | `/app/migrations` |
 | `JIVEDRIVE_SESSION_TTL_DAYS` | Session lifetime in days | `30` |
-| `JIVEDRIVE_S3_ENDPOINT` | OVHcloud Object Storage S3 endpoint URL | `https://s3.gra.io.cloud.ovh.net` |
-| `JIVEDRIVE_S3_REGION` | OVHcloud region | `gra` |
+| `JIVEDRIVE_S3_ENDPOINT` | OVHcloud Object Storage S3 endpoint URL | `https://s3.sgp.io.cloud.ovh.net` |
+| `JIVEDRIVE_S3_REGION` | OVHcloud region | `sgp` |
 | `JIVEDRIVE_S3_ACCESS_KEY_ID` | S3 access key id (secret; required) | `""` |
 | `JIVEDRIVE_S3_SECRET_ACCESS_KEY` | S3 secret access key (secret; required) | `""` |
 | `JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME` | Bootstrap admin username, provisioned at first start (optional) | unset |
@@ -191,8 +191,8 @@ jivedrive:
     pullPolicy: "IfNotPresent"
 
   config:
-    JIVEDRIVE_S3_ENDPOINT: "https://s3.gra.io.cloud.ovh.net"
-    JIVEDRIVE_S3_REGION: "gra"
+    JIVEDRIVE_S3_ENDPOINT: "https://s3.sgp.io.cloud.ovh.net"
+    JIVEDRIVE_S3_REGION: "sgp"
     JIVEDRIVE_WEBAUTHN_RP_ID: "drive.grimes.id.au"
     JIVEDRIVE_WEBAUTHN_ORIGIN: "https://drive.grimes.id.au"
     JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin"

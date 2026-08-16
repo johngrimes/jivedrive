@@ -37,7 +37,7 @@ jivedrive:
   # Non-sensitive environment variables for the server, passed via a
   # ConfigMap. Defaults match the backend's own defaults, except the
   # WebAuthn and S3 values which default to the production deployment
-  # (drive.grimes.id.au, OVHcloud GRA). See the chart README for the full
+  # (drive.grimes.id.au, OVHcloud SGP). See the chart README for the full
   # list of JIVEDRIVE_* variables.
   config:
     JIVEDRIVE_PORT: "3000"
@@ -47,8 +47,8 @@ jivedrive:
     # Migrations are baked into the image at /app/migrations.
     JIVEDRIVE_MIGRATIONS_DIR: "/app/migrations"
     JIVEDRIVE_SESSION_TTL_DAYS: "30"
-    JIVEDRIVE_S3_ENDPOINT: "https://s3.gra.io.cloud.ovh.net"
-    JIVEDRIVE_S3_REGION: "gra"
+    JIVEDRIVE_S3_ENDPOINT: "https://s3.sgp.io.cloud.ovh.net"
+    JIVEDRIVE_S3_REGION: "sgp"
     JIVEDRIVE_WEBAUTHN_RP_ID: "drive.grimes.id.au"
     JIVEDRIVE_WEBAUTHN_ORIGIN: "https://drive.grimes.id.au"
     # Optional bootstrap admin provisioned at first start. Unset by default;
