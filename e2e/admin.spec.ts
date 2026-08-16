@@ -171,7 +171,7 @@ test("cancelling an invite removes it from the list", async ({
 }, testInfo) => {
   await openAdmin(page, context);
 
-  const username = inviteUsername("gina", testInfo);
+  const username = inviteUsername("grace", testInfo);
   await createInvite(page, username);
   await expect(inviteRow(page, username)).toBeVisible();
 
