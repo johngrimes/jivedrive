@@ -5,6 +5,10 @@
  * confirming sends the DELETE request and reports the outcome. While the
  * request is in flight the buttons are disabled and a pending state is
  * shown (constitution V: visibility of system status).
+ *
+ * Rebuilt on daisyUI primitives (T014): `modal modal-open` overlay,
+ * `modal-box` panel and `modal-backdrop` close button (research R5), with
+ * a `btn-error` Delete action. The dialog keeps `role="alertdialog"`.
  */
 import { useState } from "react";
 import { deleteFile } from "../api/client";
@@ -51,30 +55,30 @@ export function DeleteDialog({ file, onDeleted, onClose }: DeleteDialogProps) {
   }
 
   return (
-    <div className="modal-overlay">
+    <div className="modal modal-open">
       <div
-        className="confirm-dialog"
+        className="modal-box"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="delete-dialog-title"
       >
-        <h2 id="delete-dialog-title" className="confirm-dialog-title">
+        <h2 id="delete-dialog-title" className="text-lg font-semibold break-all">
           Delete {file.name}?
         </h2>
-        <p className="confirm-dialog-text">
+        <p className="py-4">
           "{file.name}" will be permanently deleted from your space. This cannot
           be undone.
         </p>
 
         {error && (
-          <p className="error" role="alert">
+          <p className="alert alert-error" role="alert">
             {error}
           </p>
         )}
 
-        <div className="confirm-dialog-actions">
+        <div className="modal-action">
           <button
-            className="button button-small"
+            className="btn"
             type="button"
             onClick={onClose}
             disabled={deleting}
@@ -82,7 +86,7 @@ export function DeleteDialog({ file, onDeleted, onClose }: DeleteDialogProps) {
             Cancel
           </button>
           <button
-            className="button button-small button-danger"
+            className="btn btn-error"
             type="button"
             onClick={() => void handleDelete()}
             disabled={deleting}
@@ -91,6 +95,12 @@ export function DeleteDialog({ file, onDeleted, onClose }: DeleteDialogProps) {
           </button>
         </div>
       </div>
+      <button
+        className="modal-backdrop"
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+      />
     </div>
   );
 }

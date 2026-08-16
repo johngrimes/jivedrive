@@ -4,6 +4,11 @@
  * (FR-012): generated on demand, never stored, and regenerated whenever
  * the chosen expiry changes (US4 scenario 2). The storage provider
  * expires the link naturally - JiveDrive cannot revoke it early.
+ *
+ * Rebuilt on daisyUI primitives (T013): `modal modal-open` overlay,
+ * `modal-box` panel and `modal-backdrop` close button (research R5),
+ * `select`, `input`, `btn` and `alert`. The dialog keeps
+ * `role="alertdialog"` and its accessible label.
  */
 import { useEffect, useState } from "react";
 import { postShareUrl } from "../api/client";
@@ -89,24 +94,24 @@ export function ShareModal({ file, onClose }: ShareModalProps) {
   }
 
   return (
-    <div className="modal-overlay">
+    <div className="modal modal-open">
       <div
-        className="share-dialog"
+        className="modal-box"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="share-dialog-title"
       >
-        <h2 id="share-dialog-title" className="share-dialog-title">
+        <h2 id="share-dialog-title" className="text-lg font-semibold break-all">
           Share {file.name}
         </h2>
 
-        <div className="share-field">
-          <label className="share-label" htmlFor="share-expiry">
-            Link expires in
+        <div className="mt-4">
+          <label className="label" htmlFor="share-expiry">
+            <span className="label-text">Link expires in</span>
           </label>
           <select
             id="share-expiry"
-            className="share-select"
+            className="select w-full"
             value={expiresIn}
             onChange={(event) => {
               setExpiresIn(event.target.value as ShareExpiresIn);
@@ -123,18 +128,18 @@ export function ShareModal({ file, onClose }: ShareModalProps) {
           </select>
         </div>
 
-        <div className="share-field">
-          <label className="share-label" htmlFor="share-link">
-            Share link
+        <div className="mt-4">
+          <label className="label" htmlFor="share-link">
+            <span className="label-text">Share link</span>
           </label>
           {loading ? (
-            <p className="share-status" role="status">
+            <p className="alert alert-info" role="status">
               Generating link...
             </p>
           ) : (
             <input
               id="share-link"
-              className="share-link-input"
+              className="input w-full text-sm"
               type="text"
               readOnly
               value={link?.url ?? ""}
@@ -143,45 +148,47 @@ export function ShareModal({ file, onClose }: ShareModalProps) {
         </div>
 
         {link && !loading && (
-          <p className="share-expiry" role="status">
+          <p className="mt-3 text-sm opacity-70" role="status">
             Link expires {new Date(link.expiresAt).toLocaleString()}
           </p>
         )}
 
         {error && (
-          <p className="error" role="alert">
+          <p className="alert alert-error mt-3" role="alert">
             {error}
           </p>
         )}
         {copied && (
-          <p className="share-copied" role="status">
+          <p className="alert alert-info mt-3" role="status">
             Link copied to clipboard
           </p>
         )}
 
-        <div className="share-actions">
+        <div className="modal-action">
           <button
-            className="button button-small"
+            className="btn"
             type="button"
             onClick={() => void handleCopy()}
             disabled={!link || loading}
           >
             {copied ? "Copied" : "Copy link"}
           </button>
-          <button
-            className="button button-small button-primary"
-            type="button"
-            onClick={onClose}
-          >
+          <button className="btn btn-primary" type="button" onClick={onClose}>
             Done
           </button>
         </div>
 
-        <p className="annotation">
+        <p className="text-xs opacity-70">
           Presigned URL. Not stored by JiveDrive; cannot be revoked early - it
           expires on its own.
         </p>
       </div>
+      <button
+        className="modal-backdrop"
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+      />
     </div>
   );
 }

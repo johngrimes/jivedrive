@@ -80,80 +80,97 @@ export function Register() {
   }
 
   return (
-    <section className="auth-card" aria-label="Register with invite">
-      <h1 className="auth-title">Register your passkey</h1>
-      <p className="auth-sub">You have been invited to JiveDrive</p>
-
-      {loading && (
-        <p className="status" role="status">
-          Checking your invite...
+    <section
+      className="card bg-base-100 w-full max-w-md shadow-xl"
+      aria-label="Register with invite"
+    >
+      <div className="card-body">
+        <h1 className="card-title justify-center text-2xl">
+          Register your passkey
+        </h1>
+        <p className="text-sm opacity-70 text-center">
+          You have been invited to JiveDrive
         </p>
-      )}
 
-      {!token && !loading && !invite && (
-        <>
-          <p className="error" role="alert">
-            This link is missing an invite token. Open the full invite link to
-            register.
+        {loading && (
+          <p className="alert alert-info" role="status">
+            Checking your invite...
           </p>
-          <Link className="button" to="/">
-            Back to sign in
-          </Link>
-        </>
-      )}
+        )}
 
-      {!loading && error && !invite && (
-        <>
-          <p className="error" role="alert">
+        {!token && !loading && !invite && (
+          <>
+            <p className="alert alert-error" role="alert">
+              This link is missing an invite token. Open the full invite link
+              to register.
+            </p>
+            <Link className="btn btn-outline w-full" to="/">
+              Back to sign in
+            </Link>
+          </>
+        )}
+
+        {!loading && error && !invite && (
+          <>
+            <p className="alert alert-error" role="alert">
+              {error}
+            </p>
+            <Link className="btn btn-outline w-full" to="/">
+              Back to sign in
+            </Link>
+          </>
+        )}
+
+        {!loading && invite && (
+          <>
+            <div className="flex flex-col gap-2">
+              <label className="label" htmlFor="invite-username">
+                <span className="label-text">Your username</span>
+              </label>
+              <input
+                id="invite-username"
+                className="input w-full"
+                type="text"
+                value={invite.username}
+                readOnly
+              />
+              <p className="text-sm opacity-70 italic">
+                Set by the admin who invited you.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <span className="label-text font-medium">Storage space</span>
+              <div className="flex flex-wrap gap-2">
+                <span className="badge badge-outline">
+                  Bucket: {invite.bucket}
+                </span>
+                <span className="badge badge-outline">
+                  Prefix: {invite.prefix}
+                </span>
+              </div>
+              <p className="text-sm opacity-70 italic">
+                Pre-set by the admin who invited you.
+              </p>
+            </div>
+
+            <button
+              className="btn btn-primary w-full"
+              type="button"
+              onClick={() => void handleCreatePasskey()}
+              disabled={busy}
+            >
+              {busy ? "Creating passkey..." : "Create passkey"}
+            </button>
+          </>
+        )}
+
+        {error && invite && (
+          <p className="alert alert-error" role="alert">
             {error}
           </p>
-          <Link className="button" to="/">
-            Back to sign in
-          </Link>
-        </>
-      )}
-
-      {!loading && invite && (
-        <>
-          <div className="field-group">
-            <label className="field-label" htmlFor="invite-username">
-              Your username
-            </label>
-            <input
-              id="invite-username"
-              className="text-input"
-              type="text"
-              value={invite.username}
-              readOnly
-            />
-            <p className="annotation">Set by the admin who invited you.</p>
-          </div>
-
-          <div className="field-group">
-            <label className="field-label">Storage space</label>
-            <div className="tag-row">
-              <span className="tag">Bucket: {invite.bucket}</span>
-              <span className="tag">Prefix: {invite.prefix}</span>
-            </div>
-            <p className="annotation">Pre-set by the admin who invited you.</p>
-          </div>
-
-          <button
-            className="button button-primary"
-            type="button"
-            onClick={() => void handleCreatePasskey()}
-            disabled={busy}
-          >
-            {busy ? "Creating passkey..." : "Create passkey"}
-          </button>
-        </>
-      )}
-
-      {error && invite && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
+        )}
+      </div>
     </section>
   );
 }

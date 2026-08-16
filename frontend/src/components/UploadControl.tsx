@@ -3,6 +3,11 @@
  * that uploads a single file into the viewed folder with visible progress,
  * explicit success/failure feedback, and an overwrite confirmation dialog.
  *
+ * Rebuilt on daisyUI primitives (T012): the picker is a dashed-border
+ * dropzone label, progress uses `progress progress-primary`, status
+ * feedback uses alert variants, and the overwrite confirmation is a
+ * `modal modal-open` + `modal-box` (research R5).
+ *
  * Uploads go browser-to-storage: the backend hands out a short-lived
  * presigned PUT URL, and the file body is PUT directly with an XHR so
  * progress events are available (constitution V: visibility of system
@@ -167,11 +172,11 @@ export function UploadControl({
   }
 
   return (
-    <div className="upload-control">
-      <label className="upload-label">
+    <div className="flex min-w-0 max-w-full flex-col items-start gap-2">
+      <label className="btn cursor-pointer border-2 border-dashed rounded-lg">
         Upload file
         <input
-          className="upload-input"
+          className="sr-only"
           type="file"
           onChange={handleFileChange}
           disabled={state.kind === "uploading"}
@@ -179,55 +184,55 @@ export function UploadControl({
       </label>
 
       {state.kind === "uploading" && (
-        <div className="upload-status" role="status">
+        <div className="w-full" role="status">
           <progress
-            className="upload-progress"
+            className="progress progress-primary w-full"
             max={100}
             value={state.progress}
             aria-label={`Uploading ${state.fileName}`}
           />
-          <span className="upload-status-text">
+          <p className="mt-1 text-sm opacity-70">
             Uploading {state.fileName}... {state.progress}%
-          </span>
+          </p>
         </div>
       )}
 
       {state.kind === "success" && (
-        <p className="upload-success" role="status">
+        <p className="alert alert-success w-full" role="status">
           Uploaded {state.fileName}
         </p>
       )}
 
       {state.kind === "error" && (
-        <p className="error" role="alert">
+        <p className="alert alert-error w-full" role="alert">
           {state.message}
         </p>
       )}
 
       {state.kind === "confirm" && (
-        <div className="modal-overlay">
+        <div className="modal modal-open">
           <div
-            className="confirm-dialog"
+            className="modal-box"
             role="alertdialog"
             aria-modal="true"
             aria-labelledby="upload-confirm-title"
           >
-            <h2 id="upload-confirm-title" className="confirm-dialog-title">
+            <h2 id="upload-confirm-title" className="text-lg font-semibold">
               Replace file?
             </h2>
-            <p className="confirm-dialog-text">
+            <p className="py-4">
               A file named "{state.fileName}" already exists. Replace it?
             </p>
-            <div className="confirm-dialog-actions">
+            <div className="modal-action">
               <button
-                className="button button-small"
+                className="btn"
                 type="button"
                 onClick={() => setState({ kind: "idle" })}
               >
                 Cancel
               </button>
               <button
-                className="button button-small button-primary"
+                className="btn btn-primary"
                 type="button"
                 onClick={() => void handleReplace()}
               >
@@ -235,6 +240,12 @@ export function UploadControl({
               </button>
             </div>
           </div>
+          <button
+            className="modal-backdrop"
+            type="button"
+            aria-label="Close"
+            onClick={() => setState({ kind: "idle" })}
+          />
         </div>
       )}
     </div>
