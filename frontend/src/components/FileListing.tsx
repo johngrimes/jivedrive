@@ -39,7 +39,12 @@ export interface BreadcrumbsProps {
 export function Breadcrumbs({ segments, onNavigate }: BreadcrumbsProps) {
   return (
     <nav className="breadcrumbs" aria-label="Breadcrumbs">
-      <ul>
+      {/* flex-wrap: daisyUI's .breadcrumbs>ul defaults to nowrap with
+          overflow-x:auto, which scrolls/clips a deep trail at 375px; the
+          wrap utility makes the crumbs flow onto multiple lines instead
+          (it only engages when the trail does not fit, so a shallow trail
+          still renders on one line). */}
+      <ul className="flex-wrap">
         <li>
           <a
             className="min-h-11 inline-flex items-center gap-1"

@@ -336,6 +336,15 @@ seedObject("users/alice/report.pdf", "%PDF-1.4 hello report", 2516582);
 seedObject("users/alice/todo.txt", "buy milk\n", 7);
 seedObject("users/alice/docs/notes.txt", "hello from notes", 64);
 seedObject("users/alice/docs/my file #1?.txt", "special file content", 128);
+// A deep folder chain under docs/ for the responsive spec's deep-
+// breadcrumb edge case (US2): the mock derives each folder level from the
+// key, so docs/ gains exactly one new entry (the reports folder) and stays
+// within the 5-item page size that upload.spec relies on.
+seedObject(
+  "users/alice/docs/reports/2026/q1/summary.txt",
+  "quarterly numbers",
+  18,
+);
 seedObject("users/alice/photos/pic.jpg", "jpeg-bytes", 4096);
 // Dedicated objects for the delete e2e spec: each test targets its own
 // object so the tests can run in parallel without racing each other or

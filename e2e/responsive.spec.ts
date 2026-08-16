@@ -535,6 +535,50 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     await expectNoHorizontalOverflow(page);
   });
 
+  test("deep breadcrumbs wrap at 375px with no horizontal scroll", async ({
+    page,
+    context,
+  }) => {
+    await startSignedIn(page, context);
+    await page.setViewportSize(MOBILE_VIEWPORT);
+
+    // A deep chain: docs → reports → 2026 → q1 (seeded in e2eServer.ts as
+    // users/alice/docs/reports/2026/q1/summary.txt; the mock derives each
+    // folder level from the key). Each folder link navigates in turn.
+    for (const segment of ["docs", "reports", "2026", "q1"]) {
+      await page.getByRole("link", { name: segment }).click();
+      await expect(
+        page.getByRole("navigation", { name: "Breadcrumbs" }),
+      ).toContainText(segment);
+    }
+
+    // Every segment of the trail is present, from the space root down.
+    const crumbs = page.getByRole("navigation", { name: "Breadcrumbs" });
+    for (const segment of ["Home", "docs", "reports", "2026", "q1"]) {
+      await expect(crumbs).toContainText(segment);
+    }
+
+    // The trail wraps onto multiple lines instead of scrolling internally
+    // (daisyUI's .breadcrumbs defaults to nowrap + overflow-x: auto, which
+    // would clip the trail at 375px): the ul shows every crumb, its
+    // content never overflows its own box ...
+    const metrics = await crumbs.locator("ul").evaluate((el) => {
+      const style = getComputedStyle(el);
+      return {
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+        height: el.getBoundingClientRect().height,
+        flexWrap: style.flexWrap,
+      };
+    });
+    expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth);
+    expect(metrics.flexWrap).toBe("wrap");
+    // ... and it really wrapped: a wrapped trail is taller than the 44px
+    // minimum height of a single crumb row (min-h-11 on each crumb).
+    expect(metrics.height).toBeGreaterThan(44);
+    await expectNoHorizontalOverflow(page);
+  });
+
   test("no horizontal overflow on /files at 375, 768 and 1280", async ({
     page,
     context,
