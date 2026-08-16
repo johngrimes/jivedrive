@@ -9,6 +9,8 @@ WORKDIR /app
 COPY package.json bun.lock ./
 COPY backend/package.json ./backend/package.json
 COPY frontend/package.json ./frontend/package.json
+# frontend/tsconfig.json extends ../tsconfig.json; the SPA build resolves it.
+COPY tsconfig.json ./
 RUN bun install --frozen-lockfile
 
 # Build the SPA (frontend build script and vite config land in Phase 2).
