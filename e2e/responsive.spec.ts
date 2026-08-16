@@ -110,6 +110,19 @@ test.describe("User Story 1 - responsive navigation: drawer + permanent sidebar"
       page.getByRole("link", { name: "Manage users (admin)" }),
     ).toBeHidden();
     await expectNoHorizontalOverflow(page);
+
+    // A same-route tap also closes the drawer: reopening it on /admin and
+    // tapping "Manage users (admin)" again must not leave it covering the
+    // screen (FR-011 edge: close after any drawer navigation, same-route
+    // pushes included).
+    await page.getByRole("button", { name: "Open menu" }).click();
+    await expect(page.locator(".drawer-toggle")).toBeChecked();
+    await page.getByRole("link", { name: "Manage users (admin)" }).click();
+    await expect(page).toHaveURL(/\/admin/);
+    await expect(page.locator(".drawer-toggle")).not.toBeChecked();
+    await expect(
+      page.getByRole("link", { name: "Manage users (admin)" }),
+    ).toBeHidden();
   });
 
   test("a signed-in non-admin at 375px never sees the Manage users entry in the drawer", async ({
