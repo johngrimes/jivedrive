@@ -291,12 +291,19 @@ jobs:
           # this docker-registry secret (referenced by values-ci.yaml via
           # jivedrive.image.pullSecret). Idempotent: re-runs update in
           # place instead of failing on an existing secret.
+          #
+          # imagePullSecrets is resolved in the pod's namespace, so the
+          # secret must live in jivedrive (where the Deployment runs), not
+          # the kubeconfig's default namespace. Create the namespace
+          # idempotently first (helm's --create-namespace runs later).
+          kubectl create namespace jivedrive --dry-run=client -o yaml | kubectl apply -f -
           kubectl create secret docker-registry ghcr-pull \
             --dry-run=client -o yaml \
+            -n jivedrive \
             --docker-server=ghcr.io \
             --docker-username="$GHCR_PULL_USERNAME" \
             --docker-password="$GHCR_PULL_TOKEN" \
-            | kubectl apply -f -
+            | kubectl apply -f - -n jivedrive
         env:
           GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
@@ -312,3 +319,16 @@ jobs:
 
       - name: Verify rollout
         run: kubectl rollout status deployment/jivedrive-deployment -n jivedrive --timeout=120s
+
+      - name: Diagnose rollout failure
+        if: failure()
+        run: |
+          echo "--- pods ---"
+          kubectl get pods -n jivedrive -o wide
+          POD=$(kubectl get pods -n jivedrive -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+          if [ -n "$POD" ]; then
+            echo "--- pod describe ---"
+            kubectl describe pod "$POD" -n jivedrive
+            echo "--- pod logs ---"
+            kubectl logs "$POD" -n jivedrive --tail=100
+          fi
