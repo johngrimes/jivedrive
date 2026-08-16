@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { ThreeBarsIcon } from "@primer/octicons-react";
+import { SignOutIcon, ThreeBarsIcon } from "@primer/octicons-react";
 import { useSession } from "../auth/sessionContext";
 import { Sidebar } from "./Sidebar";
 
@@ -81,12 +81,18 @@ export function AppShell() {
               </span>
             ) : user ? (
               <>
-                <span>Signed in as {user.username}</span>
+                <span
+                  className="max-w-36 truncate"
+                  title={user.username}
+                >
+                  Signed in as {user.username}
+                </span>
                 <button
-                  className="btn"
+                  className="btn shrink-0"
                   type="button"
                   onClick={() => void handleSignOut()}
                 >
+                  <SignOutIcon size={16} />
                   Sign out
                 </button>
               </>
