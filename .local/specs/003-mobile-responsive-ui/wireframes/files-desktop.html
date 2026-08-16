@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wireframe - Files (desktop)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #f0f0f0;
+      color: #333;
+      line-height: 1.4;
+    }
+    .wf-container { max-width: 1200px; margin: 0 auto; background: #fff; min-height: 100vh; display: flex; flex-direction: column; }
+    .wf-header { background: #e8e8e8; border-bottom: 2px solid #bbb; padding: 0.75rem 1.5rem; display: flex; align-items: center; justify-content: space-between; }
+    .wf-logo { font-weight: bold; font-size: 1.2rem; color: #666; }
+    .wf-session { display: flex; align-items: center; gap: 1rem; font-size: 0.9rem; color: #666; }
+    .wf-button { display: inline-block; padding: 0.4rem 0.9rem; background: #ddd; border: 2px solid #aaa; border-radius: 4px; color: #555; font-size: 0.85rem; text-decoration: none; cursor: pointer; }
+    .wf-body { display: flex; flex: 1; }
+    .wf-sidebar { width: 240px; background: #f5f5f5; border-right: 2px solid #ddd; padding: 1.5rem; }
+    .wf-sidebar-title { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: #888; margin-bottom: 0.75rem; }
+    .wf-sidebar-item { padding: 0.6rem 0.75rem; margin-bottom: 0.25rem; color: #555; font-size: 0.9rem; border-radius: 4px; text-decoration: none; display: block; }
+    .wf-sidebar-item.active { background: #e0e0e0; font-weight: 600; }
+    .wf-sidebar-meta { font-size: 0.75rem; color: #999; margin-top: 0.75rem; overflow-wrap: anywhere; }
+    .wf-main { flex: 1; padding: 1.5rem; min-width: 0; }
+    .wf-page-title { font-size: 1.5rem; font-weight: 600; margin-bottom: 0.5rem; color: #444; }
+    .wf-breadcrumbs { font-size: 0.85rem; color: #777; margin-bottom: 1.25rem; }
+    .wf-breadcrumbs a { color: #555; }
+    .wf-toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.25rem; }
+    .wf-count { font-size: 0.85rem; color: #888; margin-left: auto; }
+    .wf-upload { background: #e8e8e8; border: 2px dashed #aaa; border-radius: 4px; padding: 0.5rem 1rem; color: #666; font-size: 0.85rem; }
+    .wf-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    .wf-table th, .wf-table td { padding: 0.6rem 0.75rem; border: 2px solid #ccc; text-align: left; }
+    .wf-table th { background: #e8e8e8; font-weight: 600; color: #555; }
+    .wf-table td { color: #555; }
+    .wf-actions { display: flex; gap: 0.6rem; align-items: center; }
+    .wf-action { display: inline-flex; align-items: center; gap: 0.3rem; color: #555; text-decoration: none; font-size: 0.85rem; }
+    .wf-icon { width: 1rem; height: 1rem; border: 2px solid #999; border-radius: 3px; }
+    .wf-icon-folder { background: #d0d0d0; }
+    .wf-icon-file { background: #fff; }
+    .wf-load-more { margin-top: 1.25rem; }
+    .wf-annotation { font-size: 0.78rem; color: #999; font-style: italic; margin: 1rem 0; padding: 0.5rem; border: 2px dashed #ccc; border-radius: 4px; }
+    .wf-footer { background: #e8e8e8; border-top: 2px solid #bbb; padding: 0.75rem 1rem; color: #888; font-size: 0.75rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="wf-container">
+    <header class="wf-header">
+      <div class="wf-logo">JiveDrive</div>
+      <div class="wf-session">
+        <span>Signed in as alice</span>
+        <a class="wf-button" href="#">Sign out</a>
+      </div>
+    </header>
+
+    <div class="wf-body">
+      <aside class="wf-sidebar">
+        <div class="wf-sidebar-title">Navigation</div>
+        <a class="wf-sidebar-item active" href="./files-mobile.html">Files</a>
+        <a class="wf-sidebar-item" href="./admin-mobile.html">Manage users (admin)</a>
+        <div class="wf-sidebar-meta">
+          Bucket: jivedrive-prod<br>
+          Space: users/alice/
+        </div>
+      </aside>
+
+      <main class="wf-main">
+        <h1 class="wf-page-title">Files</h1>
+        <nav class="wf-breadcrumbs">
+          <a href="#">Home</a> &rsaquo; <a href="#">docs</a> &rsaquo; <strong>reports</strong>
+        </nav>
+
+        <div class="wf-toolbar">
+          <a class="wf-upload" href="#">&#9650; Upload file</a>
+          <span class="wf-count">6 items</span>
+        </div>
+
+        <table class="wf-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Size</th>
+              <th>Modified</th>
+              <th style="text-align:right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="wf-icon wf-icon-folder" style="display:inline-block; vertical-align:-0.2rem"></span> <a href="#">archive-2026</a></td>
+              <td>&mdash;</td>
+              <td>&mdash;</td>
+              <td style="text-align:right"></td>
+            </tr>
+            <tr>
+              <td><span class="wf-icon wf-icon-file" style="display:inline-block; vertical-align:-0.2rem"></span> report.pdf</td>
+              <td>812 KB</td>
+              <td>12 Aug 2026</td>
+              <td style="text-align:right">
+                <span class="wf-actions" style="justify-content:flex-end">
+                  <a class="wf-action" href="#"><span class="wf-icon"></span> Download</a>
+                  <a class="wf-action" href="#"><span class="wf-icon"></span> Share</a>
+                  <a class="wf-action" href="#"><span class="wf-icon"></span> Delete</a>
+                </span>
+              </td>
+            </tr>
+            <tr>
+              <td><span class="wf-icon wf-icon-file" style="display:inline-block; vertical-align:-0.2rem"></span> very-long-file-name-with-special-characters-and-more.txt</td>
+              <td>18 B</td>
+              <td>10 Aug 2026</td>
+              <td style="text-align:right">
+                <span class="wf-actions" style="justify-content:flex-end">
+                  <a class="wf-action" href="#"><span class="wf-icon"></span> Download</a>
+                  <a class="wf-action" href="#"><span class="wf-icon"></span> Share</a>
+                  <a class="wf-action" href="#"><span class="wf-icon"></span> Delete</a>
+                </span>
+              </td>
+            </tr>
+            <tr>
+              <td><span class="wf-icon wf-icon-file" style="display:inline-block; vertical-align:-0.2rem"></span> notes.txt</td>
+              <td>1.2 KB</td>
+              <td>2 Aug 2026</td>
+              <td style="text-align:right">
+                <span class="wf-actions" style="justify-content:flex-end">
+                  <a class="wf-action" href="#"><span class="wf-icon"></span> Download</a>
+                  <a class="wf-action" href="#"><span class="wf-icon"></span> Share</a>
+                  <a class="wf-action" href="#"><span class="wf-icon"></span> Delete</a>
+                </span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="wf-load-more"><a class="wf-button" href="#">Load more</a></div>
+
+        <p class="wf-annotation">
+          Desktop (lg+, 1024px+). The drawer becomes a permanent sidebar; the
+          hamburger is gone. Size/modified in their own columns; actions show
+          octicon + text. At 768-1023px (tablet) the sidebar is a drawer, but
+          table columns and icon+text actions render as here.
+        </p>
+      </main>
+    </div>
+
+    <footer class="wf-footer">
+      Wireframe 003 &middot; files-desktop &middot; <a href="./files-mobile.html">mobile view</a>
+    </footer>
+  </div>
+</body>
+</html>
