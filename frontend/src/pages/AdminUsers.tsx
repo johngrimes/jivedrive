@@ -10,12 +10,13 @@
  * and removals report their outcome, and removals require a confirm
  * dialog before any request (wireframes/admin-users.html).
  *
- * Rebuilt on daisyUI primitives (T018): card invite form (input, checkbox),
- * generated-link card with readonly input + copy `btn`, invites and users
- * tables with status `badge`s, and a `modal modal-open` removal
- * confirmation (research R5). The sidebar shows at `lg` and up (research
- * R4). The tables carry `aria-label`s ("Invites"/"Users") and hide wide
- * columns below breakpoints so they never scroll horizontally at 375px
+ * Rebuilt on daisyUI primitives (T018): card invite form (input,
+ * checkbox), generated-link card with readonly input + copy `btn`,
+ * invites and users tables with status `badge`s, and a `modal modal-open`
+ * removal confirmation (research R5). Navigation lives in the AppShell
+ * drawer/sidebar (US1), so the page renders only its content card. The
+ * tables carry `aria-label`s ("Invites"/"Users") and hide wide columns
+ * below breakpoints so they never scroll horizontally at 375px
  * (spec SC-004).
  */
 import { useEffect, useState } from "react";
@@ -283,21 +284,7 @@ export function AdminUsersPage() {
   }
 
   return (
-    <div className="flex w-full max-w-5xl flex-col gap-4 pt-2 lg:flex-row lg:items-start">
-      <aside className="hidden lg:block lg:w-56 lg:shrink-0">
-        <div className="flex flex-col gap-1 rounded-box bg-base-200 p-4">
-          <Link
-            className="link link-hover inline-flex min-h-11 items-center"
-            to="/files"
-          >
-            Files
-          </Link>
-          <p className="inline-flex min-h-11 items-center rounded-box bg-base-100 px-2 font-semibold">
-            Manage users
-          </p>
-        </div>
-      </aside>
-
+    <div className="flex w-full max-w-5xl flex-col gap-4 pt-2">
       <main className="min-w-0 flex-1 rounded-box bg-base-200 p-4 md:p-6">
         <h1 className="mb-1 text-2xl font-semibold">User management</h1>
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, Navigate } from "react-router-dom";
+import { Navigate } from "react-router-dom";
 import { getDownloadUrl, listFiles } from "../api/client";
 import type {
   ApiClientError,
@@ -22,10 +22,11 @@ function messageOf(err: unknown): string {
  * File browser page: breadcrumbs, folder/file listing with load more, and
  * download actions for the signed-in user's space (T035).
  *
- * Rebuilt on daisyUI primitives (T015): the sidebar shows at `md` and up
- * (research R4), the page title, toolbar (item count + upload control),
- * breadcrumbs and listing are daisyUI-styled, and action errors surface
- * as an `alert alert-error`.
+ * Rebuilt on daisyUI primitives (T015): the page title, toolbar (item
+ * count + upload control), breadcrumbs and listing are daisyUI-styled,
+ * and action errors surface as an `alert alert-error`. Navigation lives
+ * in the AppShell drawer/sidebar (US1), so the page renders only its
+ * content card.
  *
  * Shown only when signed in; otherwise redirects to the sign-in page.
  */
@@ -167,23 +168,7 @@ export function FilesPage() {
     (listing?.folders.length ?? 0) + (listing?.files.length ?? 0);
 
   return (
-    <div className="flex w-full max-w-4xl flex-col gap-4 pt-2 md:flex-row md:items-start">
-      <aside className="hidden md:block md:w-56 md:shrink-0">
-        <div className="flex flex-col gap-1 rounded-box bg-base-200 p-4">
-          <p className="font-semibold">Files</p>
-          <p className="break-all text-xs opacity-70">Bucket: {user.bucket}</p>
-          <p className="break-all text-xs opacity-70">Space: {user.prefix}</p>
-          {user.isAdmin && (
-            <Link
-              className="link link-hover mt-3 inline-flex min-h-11 items-center"
-              to="/admin"
-            >
-              Manage users (admin)
-            </Link>
-          )}
-        </div>
-      </aside>
-
+    <div className="flex w-full max-w-4xl flex-col gap-4 pt-2">
       <main className="min-w-0 flex-1 rounded-box bg-base-200 p-4 md:p-6">
         <h1 className="mb-1 text-2xl font-semibold">Files</h1>
         <Breadcrumbs segments={segments} onNavigate={setPrefix} />
