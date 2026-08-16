@@ -201,6 +201,18 @@ jobs:
           else
             CA_DATA=$(printf '%s' "$CA_RAW" | base64 -w0)
           fi
+          # The decoded CA must be a PEM certificate: kubectl fails with a
+          # confusing "unable to parse bytes as PEM block" otherwise. Print
+          # the first decoded line so a wrong paste (key, kubeconfig, token)
+          # is identifiable.
+          DECODED=$(printf '%s' "$CA_DATA" | base64 -d 2>/dev/null || true)
+          case "$DECODED" in
+            *"-----BEGIN CERTIFICATE-----"*) ;;
+            *)
+              echo "K8S_CA_CERT does not decode to a PEM certificate; first decoded line: $(printf '%s' "$DECODED" | head -n1)" >&2
+              exit 1
+              ;;
+          esac
           # Single-line enforcement: embedded newlines in either value break
           # the YAML with a confusing parse error, so fail fast instead.
           case "$K8S_SERVER" in
