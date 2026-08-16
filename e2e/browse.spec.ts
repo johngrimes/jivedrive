@@ -45,7 +45,9 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
   await expect(page.getByRole("link", { name: /Manage users/ })).toHaveCount(0);
 
   // Root listing: folders and files with sizes, and the loaded item count.
-  await expect(page.getByRole("button", { name: /docs/ })).toBeVisible();
+  // Folder rows are links (US3 conversion); file rows keep their link
+  // Download/Share/Delete actions.
+  await expect(page.getByRole("link", { name: /docs/ })).toBeVisible();
   await expect(page.getByText("archive.zip")).toBeVisible();
   await expect(page.getByText("812 KB")).toBeVisible();
   await expect(page.getByText("5 items")).toBeVisible();
@@ -71,11 +73,11 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
   await expect(loadMore).toHaveCount(0);
   await expect(page.getByText("2.4 MB")).toBeVisible();
   await expect(page.getByText("10 items")).toBeVisible();
-  await expect(page.getByRole("button", { name: /photos/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /photos/ })).toBeVisible();
 
   // Navigate into a folder: the listing updates and breadcrumbs show the
   // current folder.
-  await page.getByRole("button", { name: /docs/ }).click();
+  await page.getByRole("link", { name: /docs/ }).click();
   await expect(
     page.getByRole("navigation", { name: "Breadcrumbs" }),
   ).toContainText("docs");
@@ -102,7 +104,7 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
   await expect(page.getByText("5 items")).toBeVisible();
 
   // An empty subfolder shows a friendly empty state, not an error.
-  await page.getByRole("button", { name: /empty/ }).click();
+  await page.getByRole("link", { name: /empty/ }).click();
   await expect(page.getByText(/This folder is empty/)).toBeVisible();
   await expect(page.locator("tbody tr")).toHaveCount(0);
 });

@@ -21,7 +21,7 @@ async function openDocs(page: Page, context: BrowserContext): Promise<void> {
   ]);
   await page.goto("/files");
   await expectSignedInAs(page, "alice");
-  await page.getByRole("button", { name: /docs/ }).click();
+  await page.getByRole("link", { name: /docs/ }).click();
   await expect(
     page.getByRole("navigation", { name: "Breadcrumbs" }),
   ).toContainText("docs");

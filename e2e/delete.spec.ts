@@ -24,7 +24,7 @@ async function openPhotos(page: Page, context: BrowserContext): Promise<void> {
   // photos/ sorts onto the second page of the seeded root listing
   // (10 items, page size 5), so load the rest before navigating.
   await page.getByRole("button", { name: "Load more" }).click();
-  await page.getByRole("button", { name: /photos/ }).click();
+  await page.getByRole("link", { name: /photos/ }).click();
   await expect(
     page.getByRole("navigation", { name: "Breadcrumbs" }),
   ).toContainText("photos");

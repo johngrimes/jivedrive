@@ -1,6 +1,12 @@
 /**
  * File listing components: breadcrumbs, the folder/file table, empty state
  * and loading skeletons, plus human-readable formatting helpers (T036).
+ *
+ * Rebuilt on daisyUI primitives (T011): breadcrumbs, table, link, btn,
+ * skeleton, alert. Folder rows are links; file rows carry link-class
+ * Download/Share/Delete actions. Size and Modified columns are hidden
+ * below `sm` so the table fits 375px without horizontal scrolling
+ * (spec SC-004).
  */
 import type { FileEntry } from "../api/client";
 import { formatDate, formatSize } from "../lib/format";
@@ -23,31 +29,30 @@ export interface BreadcrumbsProps {
 export function Breadcrumbs({ segments, onNavigate }: BreadcrumbsProps) {
   return (
     <nav className="breadcrumbs" aria-label="Breadcrumbs">
-      <a
-        className="breadcrumb"
-        href="#"
-        onClick={(event) => {
-          event.preventDefault();
-          onNavigate("");
-        }}
-      >
-        Home
-      </a>
-      {segments.map((segment, index) => {
-        const isLast = index === segments.length - 1;
-        const target = segments.slice(0, index + 1).join("/") + "/";
-        return (
-          <span className="breadcrumb-group" key={`${segment}-${index}`}>
-            <span className="breadcrumb-sep" aria-hidden="true">
-              /
-            </span>
-            {isLast ? (
-              <strong className="breadcrumb-current" aria-current="page">
-                {segment}
-              </strong>
-            ) : (
+      <ul>
+        <li>
+          <a
+            className="min-h-11 inline-flex items-center"
+            href="#"
+            onClick={(event) => {
+              event.preventDefault();
+              onNavigate("");
+            }}
+          >
+            Home
+          </a>
+        </li>
+        {segments.map((segment, index) => {
+          const isLast = index === segments.length - 1;
+          const target = segments.slice(0, index + 1).join("/") + "/";
+          return isLast ? (
+            <li key={`${segment}-${index}`}>
+              <strong aria-current="page">{segment}</strong>
+            </li>
+          ) : (
+            <li key={`${segment}-${index}`}>
               <a
-                className="breadcrumb"
+                className="min-h-11 inline-flex items-center"
                 href="#"
                 onClick={(event) => {
                   event.preventDefault();
@@ -56,10 +61,10 @@ export function Breadcrumbs({ segments, onNavigate }: BreadcrumbsProps) {
               >
                 {segment}
               </a>
-            )}
-          </span>
-        );
-      })}
+            </li>
+          );
+        })}
+      </ul>
     </nav>
   );
 }
@@ -78,11 +83,11 @@ export interface EmptyStateProps {
  */
 export function EmptyState({ hasParent }: EmptyStateProps) {
   return (
-    <div className="empty-state">
-      <p className="empty-state-title">
+    <div className="py-10 text-center text-base-content/70">
+      <p className="text-lg font-semibold text-base-content/80">
         {hasParent ? "This folder is empty" : "Your space is empty"}
       </p>
-      <p className="empty-state-hint">
+      <p className="mt-2 text-sm">
         Files and folders you add here will appear in this list.
       </p>
     </div>
@@ -96,11 +101,15 @@ export function EmptyState({ hasParent }: EmptyStateProps) {
  */
 export function LoadingSkeleton() {
   return (
-    <div className="file-skeleton" role="status" aria-label="Loading files">
+    <div
+      className="flex flex-col gap-4 py-4"
+      role="status"
+      aria-label="Loading files"
+    >
       {Array.from({ length: 5 }, (_, index) => (
-        <div className="skeleton-row" key={index}>
-          <div className="skeleton-block skeleton-name" />
-          <div className="skeleton-block skeleton-size" />
+        <div className="flex items-center gap-4" key={index}>
+          <div className="skeleton h-6 w-3/4" />
+          <div className="skeleton h-6 w-1/4 hidden sm:block" />
         </div>
       ))}
     </div>
@@ -162,9 +171,9 @@ export function FileListing({
 
   if (error) {
     return (
-      <div className="error" role="alert">
-        <p>{error}</p>
-        <button className="button button-small" type="button" onClick={onRetry}>
+      <div className="alert alert-error" role="alert">
+        <span>{error}</span>
+        <button className="btn" type="button" onClick={onRetry}>
           Retry
         </button>
       </div>
@@ -177,13 +186,17 @@ export function FileListing({
 
   return (
     <>
-      <table className="file-table">
+      <table className="table w-full">
         <thead>
           <tr>
             <th scope="col">Name</th>
-            <th scope="col">Size</th>
-            <th scope="col">Modified</th>
-            <th scope="col" className="file-actions">
+            <th scope="col" className="hidden sm:table-cell">
+              Size
+            </th>
+            <th scope="col" className="hidden sm:table-cell">
+              Modified
+            </th>
+            <th scope="col" className="text-right">
               Actions
             </th>
           </tr>
@@ -191,30 +204,35 @@ export function FileListing({
         <tbody>
           {folders.map((folder) => (
             <tr key={`folder:${folder}`}>
-              <td className="file-name">
-                <button
-                  className="folder-link"
-                  type="button"
-                  onClick={() => onOpenFolder(folder)}
+              <td className="break-all">
+                <a
+                  className="link min-h-11 inline-flex items-center gap-1 font-semibold"
+                  href="#"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    onOpenFolder(folder);
+                  }}
                 >
                   <span aria-hidden="true">📁</span> {folder}
-                </button>
+                </a>
               </td>
-              <td className="file-size">—</td>
-              <td className="file-modified">—</td>
-              <td className="file-actions" />
+              <td className="hidden sm:table-cell">—</td>
+              <td className="hidden sm:table-cell">—</td>
+              <td className="text-right" />
             </tr>
           ))}
           {files.map((file) => (
             <tr key={file.key}>
-              <td className="file-name">
+              <td className="break-all">
                 <span aria-hidden="true">📄</span> {file.name}
               </td>
-              <td className="file-size">{formatSize(file.size)}</td>
-              <td className="file-modified">{formatDate(file.lastModified)}</td>
-              <td className="file-actions">
+              <td className="hidden sm:table-cell">{formatSize(file.size)}</td>
+              <td className="hidden sm:table-cell">
+                {formatDate(file.lastModified)}
+              </td>
+              <td className="whitespace-nowrap text-right">
                 <a
-                  className="file-action"
+                  className="link min-h-11 inline-flex items-center px-1"
                   href="#"
                   onClick={(event) => {
                     event.preventDefault();
@@ -223,11 +241,11 @@ export function FileListing({
                 >
                   Download
                 </a>
-                <span className="file-action-sep" aria-hidden="true">
+                <span className="opacity-50" aria-hidden="true">
                   ·
                 </span>
                 <a
-                  className="file-action"
+                  className="link min-h-11 inline-flex items-center px-1"
                   href="#"
                   onClick={(event) => {
                     event.preventDefault();
@@ -236,11 +254,11 @@ export function FileListing({
                 >
                   Share
                 </a>
-                <span className="file-action-sep" aria-hidden="true">
+                <span className="opacity-50" aria-hidden="true">
                   ·
                 </span>
                 <a
-                  className="file-action"
+                  className="link min-h-11 inline-flex items-center px-1"
                   href="#"
                   onClick={(event) => {
                     event.preventDefault();
@@ -255,9 +273,9 @@ export function FileListing({
         </tbody>
       </table>
       {nextCursor && (
-        <div className="load-more">
+        <div className="mt-4 flex justify-center">
           <button
-            className="button"
+            className="btn"
             type="button"
             onClick={onLoadMore}
             disabled={loadingMore}

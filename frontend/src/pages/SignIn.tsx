@@ -34,7 +34,7 @@ export function SignIn() {
 
   if (loading) {
     return (
-      <p className="status" role="status">
+      <p className="alert alert-info max-w-md" role="status">
         Checking session...
       </p>
     );
@@ -104,47 +104,54 @@ export function SignIn() {
   }
 
   return (
-    <section className="auth-card" aria-label="Sign in">
-      <h1 className="auth-title">Sign in</h1>
-      <p className="auth-sub">Use your passkey to access your files</p>
-
-      <form onSubmit={handleSubmit}>
-        <label className="field-label" htmlFor="username">
-          Username
-        </label>
-        <input
-          id="username"
-          className="text-input"
-          type="text"
-          value={username}
-          onChange={(event) => setUsername(event.target.value)}
-          autoComplete="username"
-          autoCapitalize="none"
-          spellCheck={false}
-          placeholder="alice"
-        />
-
-        <button className="button button-primary" type="submit" disabled={busy}>
-          {busy ? "Waiting for passkey..." : "Continue with passkey"}
-        </button>
-      </form>
-
-      {status && (
-        <p className="status" role="status">
-          {status}
+    <section
+      className="card bg-base-100 w-full max-w-md shadow-xl"
+      aria-label="Sign in"
+    >
+      <div className="card-body">
+        <h1 className="card-title justify-center text-2xl">Sign in</h1>
+        <p className="text-sm opacity-70 text-center">
+          Use your passkey to access your files
         </p>
-      )}
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
 
-      <div className="divider">or</div>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-2">
+          <label className="label" htmlFor="username">
+            <span className="label-text">Username</span>
+          </label>
+          <input
+            id="username"
+            className="input w-full"
+            type="text"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
+            placeholder="alice"
+          />
 
-      <Link className="button" to="/register">
-        Register with an invite link
-      </Link>
+          <button className="btn btn-primary w-full" type="submit" disabled={busy}>
+            {busy ? "Waiting for passkey..." : "Continue with passkey"}
+          </button>
+        </form>
+
+        {status && (
+          <p className="alert alert-info" role="status">
+            {status}
+          </p>
+        )}
+        {error && (
+          <p className="alert alert-error" role="alert">
+            {error}
+          </p>
+        )}
+
+        <div className="divider">or</div>
+
+        <Link className="btn btn-outline w-full" to="/register">
+          Register with an invite link
+        </Link>
+      </div>
     </section>
   );
 }

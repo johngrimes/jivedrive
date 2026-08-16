@@ -48,9 +48,9 @@ export async function expectSignedInAs(
   page: Page,
   username: string,
 ): Promise<void> {
-  await expect(page.locator(".app-session-user")).toHaveText(
-    `Signed in as ${username}`,
-  );
+  await expect(
+    page.getByText(`Signed in as ${username}`, { exact: true }),
+  ).toBeVisible();
 }
 
 /**
@@ -59,11 +59,11 @@ export async function expectSignedInAs(
  * @param page - the page
  */
 export async function signOut(page: Page): Promise<void> {
-  await page
-    .locator(".app-session")
-    .getByRole("button", { name: "Sign out" })
-    .click();
-  await expect(page.locator(".app-session")).toContainText("Sign in");
+  await page.getByRole("button", { name: "Sign out" }).click();
+  // The header flips back to the signed-out state: the "Sign in" link is
+  // visible and the "Sign out" button is gone.
+  await expect(page.getByRole("link", { name: "Sign in" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
 }
 
 /**

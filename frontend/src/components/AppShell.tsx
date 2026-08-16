@@ -18,21 +18,23 @@ export function AppShell() {
   }
 
   return (
-    <div className="app-shell">
-      <header className="app-header">
-        <Link to="/" className="app-logo">
-          JiveDrive
-        </Link>
-        <div className="app-session">
+    <div className="min-h-screen flex flex-col">
+      <header className="navbar bg-base-200 border-b border-base-300">
+        <div className="navbar-start">
+          <Link to="/" className="btn btn-ghost text-xl font-bold">
+            JiveDrive
+          </Link>
+        </div>
+        <div className="navbar-end gap-2">
           {loading ? (
-            <span className="annotation">Checking session...</span>
+            <span className="text-sm opacity-70" role="status">
+              Checking session...
+            </span>
           ) : user ? (
             <>
-              <span className="app-session-user">
-                Signed in as {user.username}
-              </span>
+              <span>Signed in as {user.username}</span>
               <button
-                className="button button-small"
+                className="btn"
                 type="button"
                 onClick={() => void handleSignOut()}
               >
@@ -40,13 +42,13 @@ export function AppShell() {
               </button>
             </>
           ) : (
-            <Link className="button button-small" to="/">
+            <Link className="btn" to="/">
               Sign in
             </Link>
           )}
         </div>
       </header>
-      <main className="app-main">
+      <main className="flex-1 p-4 sm:p-8 flex items-start justify-center">
         <Outlet />
       </main>
     </div>

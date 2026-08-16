@@ -32,23 +32,35 @@ async function openAdmin(page: Page, context: BrowserContext): Promise<void> {
 /**
  * A row in the invites table whose username cell exactly matches the given
  * text. Exact cell matching (not substring) so usernames like "ina" never
- * match a row for "gina" in the same table.
+ * match a row for "gina" in the same table. The table is scoped by its
+ * accessible name (aria-label="Invites", added in T018).
  *
  * @param page - the page
  * @param text - the exact username
  * @returns the matching row locator
  */
 function inviteRow(page: Page, text: string) {
-  return page.locator(".invites-table tbody tr", {
-    has: page.getByRole("cell", { name: text, exact: true }),
-  });
+  return page
+    .getByRole("table", { name: "Invites" })
+    .locator("tbody tr", {
+      has: page.getByRole("cell", { name: text, exact: true }),
+    });
 }
 
-/** A row in the users table whose username cell exactly matches the text. */
+/**
+ * A row in the users table whose username cell exactly matches the text.
+ * Scoped by the accessible name (aria-label="Users", added in T018).
+ *
+ * @param page - the page
+ * @param text - the exact username
+ * @returns the matching row locator
+ */
 function userRow(page: Page, text: string) {
-  return page.locator(".users-table tbody tr", {
-    has: page.getByRole("cell", { name: text, exact: true }),
-  });
+  return page
+    .getByRole("table", { name: "Users" })
+    .locator("tbody tr", {
+      has: page.getByRole("cell", { name: text, exact: true }),
+    });
 }
 
 /**
