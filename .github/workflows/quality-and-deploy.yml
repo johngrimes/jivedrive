@@ -227,14 +227,18 @@ jobs:
 
       - name: Wait for Tailscale connectivity
         run: |
+          echo "--- tailscale status ---"
+          tailscale status
           for i in $(seq 1 30); do
-            if kubectl cluster-info 2>/dev/null; then
+            if kubectl cluster-info >/tmp/kube-info.log 2>&1; then
               echo "Cluster reachable"
               exit 0
             fi
             echo "Attempt $i/30 - waiting for cluster..."
             sleep 2
           done
+          echo "--- last kubectl error ---"
+          cat /tmp/kube-info.log
           echo "Cluster not reachable after 60s"
           exit 1
 
