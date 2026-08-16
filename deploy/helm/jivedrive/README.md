@@ -63,6 +63,25 @@ docker build -f docker/Dockerfile -t ghcr.io/johngrimes/jivedrive:0.1.0 .
 docker push ghcr.io/johngrimes/jivedrive:0.1.0
 ```
 
+When the image lives in a private registry (the GHCR package for this
+repository is private), the cluster needs a pull secret and the chart must
+reference it via `jivedrive.image.pullSecret`:
+
+```bash
+kubectl create secret docker-registry ghcr-pull \
+  --docker-server=ghcr.io \
+  --docker-username="<github-user>" \
+  --docker-password="<classic PAT with read:packages>"
+```
+
+Use a classic PAT: GitHub Packages authentication only supports classic
+personal access tokens (fine-grained tokens cannot authenticate to the
+registries, even with the Packages permission).
+
+The CI workflow does this automatically on push to `main` (it creates the
+`ghcr-pull` secret from the `GHCR_PULL_USERNAME` / `GHCR_PULL_TOKEN`
+repository secrets; see `values-ci.yaml`).
+
 ### 2. Install the chart
 
 Provide the required S3 credentials and enable persistent storage. You can
@@ -112,6 +131,7 @@ All values live under the `jivedrive` top-level key. Values are grouped as
 | `jivedrive.image.repository` | Container image repository | `ghcr.io/johngrimes/jivedrive` |
 | `jivedrive.image.tag` | Container image tag | `0.1.0` |
 | `jivedrive.image.pullPolicy` | Image pull policy | `Always` |
+| `jivedrive.image.pullSecret` | Name of an existing `kubernetes.io/dockerconfigjson` Secret for pulling the image from a private registry; empty means no `imagePullSecrets` | `""` (none) |
 | `jivedrive.replicas` | Number of replicas; keep at `1` (SQLite, single-writer) | `1` |
 | `jivedrive.resources.requests.memory` | Memory request for the server container | unset |
 | `jivedrive.resources.requests.cpu` | CPU request for the server container | unset |

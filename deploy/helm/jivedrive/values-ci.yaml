@@ -5,6 +5,8 @@ jivedrive:
   image:
     repository: ghcr.io/johngrimes/jivedrive
     pullPolicy: Always
+    # Created by the deploy job's "Create GHCR image pull secret" step.
+    pullSecret: ghcr-pull
 
   # The minikube cluster has a default storage class; the PVC keeps the
   # SQLite database across pod restarts and upgrades.

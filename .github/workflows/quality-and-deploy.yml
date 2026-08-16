@@ -174,6 +174,10 @@ jobs:
     #     service-account token)
     #   JIVEDRIVE_S3_ACCESS_KEY_ID / JIVEDRIVE_S3_SECRET_ACCESS_KEY - S3
     #     credentials; the app refuses to start without them
+    #   GHCR_PULL_USERNAME / GHCR_PULL_TOKEN - GitHub username + classic PAT
+    #     with read:packages; the cluster pulls the image from the private
+    #     GHCR package via the ghcr-pull image pull secret (GitHub Packages
+    #     authentication only supports classic PATs, not fine-grained)
     steps:
       - uses: actions/checkout@v5
 
@@ -280,6 +284,22 @@ jobs:
           cat /tmp/kube-info.log
           echo "Cluster not reachable after 60s"
           exit 1
+
+      - name: Create GHCR image pull secret
+        run: |
+          # The GHCR package is private; the cluster pulls the image with
+          # this docker-registry secret (referenced by values-ci.yaml via
+          # jivedrive.image.pullSecret). Idempotent: re-runs update in
+          # place instead of failing on an existing secret.
+          kubectl create secret docker-registry ghcr-pull \
+            --dry-run=client -o yaml \
+            --docker-server=ghcr.io \
+            --docker-username="$GHCR_PULL_USERNAME" \
+            --docker-password="$GHCR_PULL_TOKEN" \
+            | kubectl apply -f -
+        env:
+          GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
 
       - name: Deploy with Helm
         run: |

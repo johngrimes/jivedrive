@@ -10,6 +10,9 @@ jivedrive:
     repository: "ghcr.io/johngrimes/jivedrive"
     tag: "0.1.0"
     pullPolicy: "Always"
+    # Name of an existing kubernetes.io/dockerconfigjson Secret used to pull
+    # the image from a private registry. Empty = no imagePullSecrets.
+    pullSecret: ""
 
   # Number of replicas. JiveDrive is SQLite-backed and single-writer: keep
   # this at 1.
