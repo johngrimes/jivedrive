@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
-import type { BrowserContext, Locator, Page } from "@playwright/test";
+import type {
+  BrowserContext,
+  Locator,
+  Page,
+  TestInfo,
+} from "@playwright/test";
 import {
   expectNoHorizontalOverflow,
   expectSignedInAs,
@@ -553,5 +558,322 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
       await expect(page.getByText("archive.zip")).toBeVisible();
       await expectNoHorizontalOverflow(page);
     }
+  });
+});
+
+test.describe("User Story 3 - admin screen rendered for mobile, with octicons", () => {
+  /**
+   * A row in the invites table whose username cell contains the given text
+   * exactly. Matches the username's own nested span (the cell also carries
+   * stacked metadata below the breakpoints, so its accessible name is the
+   * concatenation, not the bare username).
+   *
+   * @param page - the page
+   * @param text - the exact username
+   * @returns the matching row locator
+   */
+  function inviteRow(page: Page, text: string) {
+    return page.getByRole("table", { name: "Invites" }).locator("tbody tr", {
+      has: page.getByRole("cell").getByText(text, { exact: true }),
+    });
+  }
+
+  /**
+   * A row in the users table whose username cell contains the given text
+   * exactly (see {@link inviteRow} for the nested-span rationale).
+   *
+   * @param page - the page
+   * @param text - the exact username
+   * @returns the matching row locator
+   */
+  function userRow(page: Page, text: string) {
+    return page.getByRole("table", { name: "Users" }).locator("tbody tr", {
+      has: page.getByRole("cell").getByText(text, { exact: true }),
+    });
+  }
+
+  /**
+   * Start signed in as the pre-seeded admin at 375px and open /admin.
+   *
+   * @param page - the page
+   * @param context - the browser context
+   */
+  async function startAdmin(
+    page: Page,
+    context: BrowserContext,
+  ): Promise<void> {
+    await context.addCookies([ADMIN_SESSION_COOKIE]);
+    await page.setViewportSize(MOBILE_VIEWPORT);
+    await page.goto("/admin");
+    await expect(
+      page.getByRole("heading", { name: "User management" }),
+    ).toBeVisible();
+  }
+
+  /**
+   * Create an invite through the admin UI form, mirroring admin.spec's
+   * createInvite (fills Username/Bucket/Prefix, submits the form).
+   *
+   * @param page - the page
+   * @param username - the invitee username
+   */
+  async function createInvite(page: Page, username: string): Promise<void> {
+    await page.getByLabel("Username").fill(username);
+    await page.getByLabel("Bucket").fill("jivedrive-prod");
+    await page.getByLabel("Prefix").fill(`users/${username}/`);
+    await page.getByRole("button", { name: "Create invite link" }).click();
+  }
+
+  /**
+   * A username unique to this test attempt. This block creates its own
+   * invites so it never collides with admin.spec's erin/felix/grace/hazel
+   * or the seeded carol/dave/ina; the Date.now() suffix plus the retry
+   * suffix keeps retries (same in-memory server database) unique too.
+   *
+   * @param base - the readable base username
+   * @param testInfo - test info providing the retry count
+   * @returns the attempt-unique username
+   */
+  function testUsername(base: string, testInfo: TestInfo): string {
+    const ts = Date.now();
+    return testInfo.retry > 0 ? `${base}-${ts}-r${testInfo.retry}` : `${base}-${ts}`;
+  }
+
+  test("at 375px an invite row stacks the role under the username and shows icon-only Re-send/Cancel buttons", async ({
+    page,
+    context,
+  }, testInfo) => {
+    await startAdmin(page, context);
+
+    // A row owned by this spec: create the invite through the UI form.
+    const username = testUsername("ursula", testInfo);
+    await createInvite(page, username);
+    const row = inviteRow(page, username);
+    await expect(row).toBeVisible();
+
+    // FR-007 / US3 sc.1: Re-send and Cancel are icon buttons with
+    // accessible names identical to today's labels; below sm the text
+    // label span is hidden and the octicon svg shows.
+    for (const action of ["Re-send", "Cancel"]) {
+      const button = row.getByRole("button", { name: action });
+      await expect(button).toBeVisible();
+      await expect(button.locator("svg")).toBeVisible();
+      await expect(button.getByText(action, { exact: true })).toBeHidden();
+    }
+
+    // FR-006 / US3 sc.1: below sm the role renders as a secondary line
+    // under the username (the username cell is the row's first cell)...
+    const usernameCell = row.locator("td").first();
+    await expect(
+      usernameCell.getByText("Member", { exact: true }),
+    ).toBeVisible();
+
+    // ... while the Role column cell itself is hidden below sm...
+    await expect(
+      row.getByRole("cell", { name: "Member", exact: true }),
+    ).toBeHidden();
+
+    // ... and returns to its column at sm and up (FR-006).
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await expect(
+      row.getByRole("cell", { name: "Member", exact: true }),
+    ).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test("an invite row stacks bucket/prefix and expiry under the username below md and returns them to their columns at 768px", async ({
+    page,
+    context,
+  }, testInfo) => {
+    await startAdmin(page, context);
+
+    const username = testUsername("ursula", testInfo);
+    await createInvite(page, username);
+    const row = inviteRow(page, username);
+    await expect(row).toBeVisible();
+
+    const usernameCell = row.locator("td").first();
+    const stackedPrefix = usernameCell.getByText(
+      `jivedrive-prod / users/${username}/`,
+      { exact: true },
+    );
+    const stackedExpiry = usernameCell.getByText(
+      /^Expires \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/,
+    );
+
+    // FR-006 / US3 sc.2: below md (375px) bucket/prefix and expiry render
+    // as secondary lines under the username while their columns are hidden.
+    await expect(stackedPrefix).toBeVisible();
+    await expect(stackedExpiry).toBeVisible();
+    await expect(
+      row.getByRole("cell", {
+        name: `jivedrive-prod / users/${username}/`,
+        exact: true,
+      }),
+    ).toBeHidden();
+
+    // At md and up they return to their own columns and the stacked lines
+    // hide again (one DOM tree, CSS-only relocation per research R3).
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await expect(
+      row.getByRole("cell", {
+        name: `jivedrive-prod / users/${username}/`,
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      row.getByRole("cell", {
+        name: /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/,
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(stackedPrefix).toBeHidden();
+    await expect(stackedExpiry).toBeHidden();
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test("at 375px a user row stacks role, bucket/prefix and created under the username with a Remove icon button", async ({
+    page,
+    context,
+  }) => {
+    await startAdmin(page, context);
+
+    // alice is a stable seeded user no other spec removes (admin.spec's
+    // removal target is frank; US4 owns a dedicated user).
+    const row = userRow(page, "alice");
+    await expect(row).toBeVisible();
+
+    // US3 sc.3 / FR-006: role below sm; bucket/prefix and created below md
+    // all render as secondary lines in the username cell.
+    const usernameCell = row.locator("td").first();
+    await expect(
+      usernameCell.getByText("Member", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      usernameCell.getByText("jivedrive-prod / users/alice/", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      usernameCell.getByText(/^Created \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/),
+    ).toBeVisible();
+
+    // US3 sc.3 / FR-007: Remove is an icon button with the accessible name
+    // "Remove", icon-only below sm (label hidden, octicon visible).
+    const remove = row.getByRole("button", { name: "Remove" });
+    await expect(remove).toBeVisible();
+    await expect(remove.locator("svg")).toBeVisible();
+    await expect(remove.getByText("Remove", { exact: true })).toBeHidden();
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test("tapping the Remove icon at 375px opens the confirmation dialog and Cancel closes it", async ({
+    page,
+    context,
+  }) => {
+    await startAdmin(page, context);
+
+    const row = userRow(page, "alice");
+    await expect(row).toBeVisible();
+    await row.getByRole("button", { name: "Remove" }).click();
+
+    // US3 sc.4: the confirmation dialog opens and behaves exactly as today
+    // (same alertdialog, wording and controls).
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("alice");
+    await expect(dialog).toContainText("left untouched");
+
+    // Cancel closes it and nobody is removed (removal completes in US4).
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(userRow(page, "alice")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test("re-send and cancel work from the icon-only buttons at 375px", async ({
+    page,
+    context,
+  }, testInfo) => {
+    await startAdmin(page, context);
+
+    const username = testUsername("ursula", testInfo);
+    await createInvite(page, username);
+    const row = inviteRow(page, username);
+    await expect(row).toBeVisible();
+
+    // The generated-link card shows the fresh invite link.
+    const linkInput = page.locator("input[readonly]");
+    await expect(linkInput).toHaveValue(/\/register\?token=/);
+    const original = (await linkInput.inputValue()).trim();
+
+    // US3 sc.1: re-send from the icon button issues a fresh token/link.
+    await row.getByRole("button", { name: "Re-send" }).click();
+    await expect(linkInput).not.toHaveValue(original);
+    const resent = (await linkInput.inputValue()).trim();
+    expect(resent).toMatch(/^http:\/\/localhost:5173\/register\?token=/);
+    expect(resent).not.toBe(original);
+    await expect(inviteRow(page, username)).toContainText("pending");
+
+    // US3 sc.1: cancel from the icon button removes the row with feedback.
+    await row.getByRole("button", { name: "Cancel" }).click();
+    await expect(
+      page.getByText(new RegExp(`Invite for "${username}" cancelled`)),
+    ).toBeVisible();
+    await expect(inviteRow(page, username)).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test("no horizontal overflow on /admin at 375, 768 and 1280", async ({
+    page,
+    context,
+  }) => {
+    await startAdmin(page, context);
+
+    // FR-009 / US3 sc.5: the admin screen must not scroll horizontally at
+    // any supported width (both tables have rows: seeded invites/users).
+    for (const viewport of [
+      { width: 375, height: 667 },
+      { width: 768, height: 1024 },
+      { width: 1280, height: 800 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await expect(
+        page.getByRole("heading", { name: "User management" }),
+      ).toBeVisible();
+      await expectNoHorizontalOverflow(page);
+    }
+  });
+
+  test("admin action icon buttons are at least 44px tall at 375px", async ({
+    page,
+    context,
+  }, testInfo) => {
+    await startAdmin(page, context);
+
+    // Re-send and Cancel on an invite row owned by this spec (claimed
+    // invites have no actions; the seeded invites are mutable by other
+    // specs, so never measure on carol/dave/ina).
+    const username = testUsername("ursula", testInfo);
+    await createInvite(page, username);
+    const inviteRowLocator = inviteRow(page, username);
+    await expect(inviteRowLocator).toBeVisible();
+    for (const action of ["Re-send", "Cancel"]) {
+      const button = inviteRowLocator.getByRole("button", { name: action });
+      await expect(button).toBeVisible();
+      const box = await button.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+    }
+
+    // Remove on a stable user row (alice).
+    const remove = userRow(page, "alice").getByRole("button", {
+      name: "Remove",
+    });
+    await expect(remove).toBeVisible();
+    const removeBox = await remove.boundingBox();
+    expect(removeBox).not.toBeNull();
+    expect(removeBox!.height).toBeGreaterThanOrEqual(44);
+    await expectNoHorizontalOverflow(page);
   });
 });
