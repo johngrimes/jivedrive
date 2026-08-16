@@ -30,7 +30,7 @@ implemented and tested independently.
 
 **Purpose**: Establish the green baseline before any behaviour changes.
 
-- [ ] T002 Run the full existing e2e suite (`bun run --cwd e2e playwright test`) and record it green before any change; any pre-existing failure must be reported, not silently carried.
+- [x] T002 Run the full existing e2e suite (`bun run --cwd e2e playwright test`) and record it green before any change; any pre-existing failure must be reported, not silently carried.
 
 **Checkpoint**: Foundation ready - user story implementation can begin.
 
@@ -44,13 +44,13 @@ implemented and tested independently.
 
 ### Tests for User Story 1 ⚠️ write first, confirm failing before implementing
 
-- [ ] T003 [US1] Drawer + navbar tests in `e2e/responsive.spec.ts`: admin opens drawer at 375px, taps Manage users, lands on `/admin`, drawer closed after navigation (FR-001/002/011); non-admin drawer has no Manage users link (FR-002); 1280px shows the permanent sidebar and no hamburger (FR-001); signed-out visitor sees no hamburger (US1 sc.5); sign-in state visible and no horizontal overflow at 375px (FR-003). Confirm failing: no drawer/hamburger exists today.
+- [x] T003 [US1] Drawer + navbar tests in `e2e/responsive.spec.ts`: admin opens drawer at 375px, taps Manage users, lands on `/admin`, drawer closed after navigation (FR-001/002/011); non-admin drawer has no Manage users link (FR-002); 1280px shows the permanent sidebar and no hamburger (FR-001); signed-out visitor sees no hamburger (US1 sc.5); sign-in state visible and no horizontal overflow at 375px (FR-003). Confirm failing: no drawer/hamburger exists today.
 
 
-- [ ] T004 [US1] Create `frontend/src/components/Sidebar.tsx`: daisyUI `menu` with Files and Manage users (admin-only) items, active-state prop, bucket/space info block; JSDoc on the export (functional TypeScript, constitution III).
-- [ ] T005 [US1] Rework `frontend/src/components/AppShell.tsx`: wrap the routed page in a daisyUI `drawer lg:drawer-open`; hamburger button (`ThreeBarsIcon`, accessible label, below `lg`, signed-in only) toggles a controlled checkbox; `useLocation` effect resets it after navigation (FR-011); render `Sidebar` in the drawer side.
-- [ ] T006 [US1] Remove the page-level `<aside>` blocks and their wrapper classes from `frontend/src/pages/Files.tsx` and `frontend/src/pages/AdminUsers.tsx` (navigation now lives in the shell; pages keep only their content card).
-- [ ] T007 [US1] Truncate the "Signed in as `<username>`" span in `frontend/src/components/AppShell.tsx` (ellipsis + max-width) so long usernames cannot overflow at 375px (FR-003); add `SignOutIcon` to the sign-out button (FR-004).
+- [x] T004 [US1] Create `frontend/src/components/Sidebar.tsx`: daisyUI `menu` with Files and Manage users (admin-only) items, active-state prop, bucket/space info block; JSDoc on the export (functional TypeScript, constitution III).
+- [x] T005 [US1] Rework `frontend/src/components/AppShell.tsx`: wrap the routed page in a daisyUI `drawer lg:drawer-open`; hamburger button (`ThreeBarsIcon`, accessible label, below `lg`, signed-in only) toggles a controlled checkbox; `useLocation` effect resets it after navigation (FR-011); render `Sidebar` in the drawer side.
+- [x] T006 [US1] Remove the page-level `<aside>` blocks and their wrapper classes from `frontend/src/pages/Files.tsx` and `frontend/src/pages/AdminUsers.tsx` (navigation now lives in the shell; pages keep only their content card).
+- [x] T007 [US1] Truncate the "Signed in as `<username>`" span in `frontend/src/components/AppShell.tsx` (ellipsis + max-width) so long usernames cannot overflow at 375px (FR-003); add `SignOutIcon` to the sign-out button (FR-004).
 
 **Checkpoint**: User Story 1 fully functional and independently testable.
 
