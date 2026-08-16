@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { BrowserContext, Locator, Page, TestInfo } from "@playwright/test";
 import {
+  enableVirtualAuthenticator,
   expectNoHorizontalOverflow,
   expectSignedInAs,
   readStream,
@@ -460,9 +461,10 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     // asserted by browse.spec, and docs/ must stay within one page for
     // upload.spec. The name is unique per attempt so a Playwright retry
     // (CI sets retries=2) never hits the overwrite confirmation. The "0-"
-    // prefix sorts the new file onto photos/' first page: the US4 dialog
-    // seeds pushed photos/ past the 5-item page size, and the listing
-    // refresh after an upload only returns the first page.
+    // prefix sorts the new file onto photos/' first page: the seeded
+    // photos/ objects plus uploads from the other tests in this spec can
+    // push photos/ past the 5-item page size, and the listing refresh
+    // after an upload only returns the first page.
     await page.getByRole("button", { name: "Load more" }).click();
     await page.getByRole("link", { name: /photos/ }).click();
     await expect(
@@ -506,6 +508,11 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     // normal single-line row (unique name per attempt, retry-safe). Upload
     // into photos/ for the same page-size reasons as the toolbar test; the
     // comparison row is a seeded photos file that delete.spec never removes.
+    // The upload refresh returns only the first page, and uploads from the
+    // other tests in this spec can push the new row (and delete-me-cancel)
+    // past the 5-item page size, so load the rest of the listing first —
+    // the row count is always > 5 once the upload lands, so Load more is
+    // always present.
     await page.getByRole("link", { name: "Home" }).click();
     await page.getByRole("button", { name: "Load more" }).click();
     await page.getByRole("link", { name: /photos/ }).click();
@@ -519,6 +526,7 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
       buffer: Buffer.from("long name"),
     });
     await expect(page.getByText(`Uploaded ${longName}`)).toBeVisible();
+    await page.getByRole("button", { name: "Load more" }).click();
     const longRow = page.locator("tbody tr", { hasText: longName });
     await expect(longRow).toBeVisible();
     const normalRow = page.locator("tbody tr", {
@@ -1049,17 +1057,25 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
   }) => {
     await openPhotos(page, context);
 
-    // A dedicated object (see e2eServer.ts): this test is the only spec
-    // that deletes it, so the confirm step is safe to actually run.
-    const row = page.locator("tbody tr", {
-      hasText: "0-responsive-delete-me.txt",
+    // Self-seeded target: upload a unique file so every attempt (including
+    // a CI retry after a completed delete) starts from a known state. The
+    // "0-" prefix keeps it on photos/' first page after the upload refresh
+    // (the listing refresh only returns the first page).
+    const fileName = `0-responsive-delete-${Date.now()}.txt`;
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles({
+      name: fileName,
+      mimeType: "text/plain",
+      buffer: Buffer.from("delete me"),
     });
+    await expect(page.getByText(`Uploaded ${fileName}`)).toBeVisible();
+    const row = page.locator("tbody tr", { hasText: fileName });
     await expect(row).toBeVisible();
 
     // US4 sc.2: the dialog opens with usable Cancel/Delete actions.
     await row.getByRole("button", { name: "Delete" }).click();
     const dialog = page.getByRole("alertdialog");
-    await expect(dialog).toContainText("0-responsive-delete-me.txt");
+    await expect(dialog).toContainText(fileName);
     const cancel = dialog.getByRole("button", { name: "Cancel" });
     const confirmDelete = dialog.getByRole("button", { name: "Delete" });
     await expect(cancel).toBeVisible();
@@ -1078,21 +1094,23 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     // Confirming deletes: reopen the dialog, click Delete, the row
     // disappears from the listing.
     await row.getByRole("button", { name: "Delete" }).click();
-    await expect(dialog).toContainText("0-responsive-delete-me.txt");
+    await expect(dialog).toContainText(fileName);
     await confirmDelete.click();
     await expect(dialog).toHaveCount(0);
     await expect(row).toHaveCount(0);
 
     // SC-002: the dialog is also open at 375px in the dark theme with no
-    // overflow. delete-me-cancel.txt is a stable object (delete.spec only
-    // cancels on it), and Cancel leaves it untouched.
+    // overflow. 0-responsive-overwrite.txt is a stable object no spec ever
+    // deletes (the overwrite flow only replaces its content) and its "0-"
+    // prefix keeps it on photos/' first page even as the other tests in
+    // this spec accumulate uploads; Cancel leaves it untouched.
     await page.emulateMedia({ colorScheme: "dark" });
     const stableRow = page.locator("tbody tr", {
-      hasText: "delete-me-cancel.txt",
+      hasText: "0-responsive-overwrite.txt",
     });
     await expect(stableRow).toBeVisible();
     await stableRow.getByRole("button", { name: "Delete" }).click();
-    await expect(dialog).toContainText("delete-me-cancel.txt");
+    await expect(dialog).toContainText("0-responsive-overwrite.txt");
     await expectNoHorizontalOverflow(page);
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog).toHaveCount(0);
@@ -1108,11 +1126,11 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
       hasText: "0-responsive-overwrite.txt",
     });
     await expect(row).toBeVisible();
-    // The seeded object is "v1" (2 bytes); cancel must keep that content.
-    await expect(row).toContainText("2 B");
 
-    // The object exists: uploading the same name is refused until the
-    // user confirms (US4 sc.3).
+    // Self-healing baseline: the object's content is unknown on a retry
+    // (the replace step below mutates it), so first restore the seeded
+    // "v1" state. The name exists in every state, so uploading "v1"
+    // always opens the confirmation; Replace makes the row show "2 B".
     const fileInput = page.locator('input[type="file"]');
     await fileInput.setInputFiles({
       name: "0-responsive-overwrite.txt",
@@ -1120,6 +1138,22 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
       buffer: Buffer.from("v1"),
     });
     const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("0-responsive-overwrite.txt");
+    await expect(dialog).toContainText("already exists");
+    await dialog.getByRole("button", { name: "Replace" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      page.getByText("Uploaded 0-responsive-overwrite.txt"),
+    ).toBeVisible();
+    await expect(row).toContainText("2 B");
+
+    // The object exists: uploading the same name is refused until the
+    // user confirms (US4 sc.3).
+    await fileInput.setInputFiles({
+      name: "0-responsive-overwrite.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("v1"),
+    });
     await expect(dialog).toContainText("0-responsive-overwrite.txt");
     await expect(dialog).toContainText("already exists");
     const cancel = dialog.getByRole("button", { name: "Cancel" });
@@ -1169,21 +1203,45 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
   test("the remove confirmation at 375px cancels without removing, removes on confirm, and stays scroll-free in both themes", async ({
     page,
     context,
+    browser,
   }) => {
     await startAdmin(page, context);
 
-    // rosa is seeded in e2eServer as a dedicated removal target for this
-    // spec (frank belongs to admin.spec, and alice/admin are never
-    // removed).
+    // Self-seeded target: register a dedicated user for this attempt via
+    // the admin invite API + the register page (the same path admin.spec
+    // uses to claim invites). The name is unique per attempt, so a retry
+    // never finds the previous attempt's user already removed, and the
+    // two repetitions of --repeat-each never collide on one target. The
+    // seeded users (alice, admin, rosa, gina, ...) stay untouched.
+    const username = `rosa-${Date.now()}`;
+    const created = await page.request.post("/api/admin/invites", {
+      data: {
+        username,
+        bucket: "jivedrive-prod",
+        prefix: `users/${username}/`,
+      },
+    });
+    expect(created.status()).toBe(201);
+    const inviteLink = ((await created.json()) as { link: string }).link;
+    const invitee = await browser.newContext();
+    const inviteePage = await invitee.newPage();
+    await enableVirtualAuthenticator(invitee, inviteePage);
+    await inviteePage.goto(inviteLink);
+    await inviteePage.getByRole("button", { name: "Create passkey" }).click();
+    await expect(inviteePage).toHaveURL(/\/files/);
+    await invitee.close();
+    // Reload the users table so the freshly registered user appears.
+    await page.reload();
+
     const row = page.getByRole("table", { name: "Users" }).locator("tbody tr", {
-      has: page.getByRole("cell").getByText("rosa", { exact: true }),
+      has: page.getByRole("cell").getByText(username, { exact: true }),
     });
     await expect(row).toBeVisible();
 
     // US4 sc.4: the confirmation dialog opens with usable Cancel/Remove.
     await row.getByRole("button", { name: "Remove" }).click();
     const dialog = page.getByRole("alertdialog");
-    await expect(dialog).toContainText("rosa");
+    await expect(dialog).toContainText(username);
     const cancel = dialog.getByRole("button", { name: "Cancel" });
     const remove = dialog.getByRole("button", { name: "Remove" });
     await expect(cancel).toBeVisible();
@@ -1201,9 +1259,11 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
 
     // Confirming removes: explicit feedback and the row disappears.
     await row.getByRole("button", { name: "Remove" }).click();
-    await expect(dialog).toContainText("rosa");
+    await expect(dialog).toContainText(username);
     await remove.click();
-    await expect(page.getByText(/Removed user "rosa"/)).toBeVisible();
+    await expect(
+      page.getByText(new RegExp(`Removed user "${username}"`)),
+    ).toBeVisible();
     await expect(row).toHaveCount(0);
 
     // SC-002: the confirmation is also open at 375px in the dark theme

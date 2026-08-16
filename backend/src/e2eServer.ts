@@ -354,12 +354,12 @@ seedObject("users/alice/photos/pic.jpg", "jpeg-bytes", 4096);
 seedObject("users/alice/photos/delete-me-cancel.txt", "keep me", 7);
 seedObject("users/alice/photos/delete-me-confirm.txt", "delete me", 9);
 seedObject("users/alice/photos/delete-me-missing.txt", "gone soon", 9);
-// Dedicated objects for the responsive e2e spec's dialog flows (US4): the
-// delete-confirm test actually deletes 0-responsive-delete-me.txt and the
-// overwrite test replaces 0-responsive-overwrite.txt. The "0-" prefix
-// sorts them ahead of delete.spec's objects and pic.jpg so both stay on
-// the first page of photos/ (page size 5, no count assertions on photos).
-seedObject("users/alice/photos/0-responsive-delete-me.txt", "delete me", 9);
+// A dedicated object for the responsive e2e spec's overwrite flow (US4):
+// the overwrite test replaces 0-responsive-overwrite.txt and restores its
+// "v1" baseline itself, so every attempt starts from a known state. The
+// "0-" prefix keeps it on the first page of photos/ (page size 5, no
+// count assertions on photos). The US4 delete test uploads its own unique
+// target instead of using a seed, so it is retry-safe too.
 seedObject("users/alice/photos/0-responsive-overwrite.txt", "v1", 2);
 seedObject("users/alice/empty/", "", 0);
 
