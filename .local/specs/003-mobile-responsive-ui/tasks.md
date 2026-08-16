@@ -103,12 +103,12 @@ implemented and tested independently.
 
 ### Tests for User Story 4 ⚠️ write first, confirm failing before implementing
 
-- [ ] T016 [US4] US4 tests in `e2e/responsive.spec.ts`: open the share dialog at 375px — controls visible, copy/done usable, no overflow; delete dialog at 375px — cancel/delete usable, confirming deletes; overwrite confirmation at 375px — cancel/replace usable; remove confirmation at 375px — cancel/remove usable; sign-in page sweep at 375/768/1280 — card centred, controls reachable, no overflow; register page (with a seeded invite token) sweep at 375/768/1280 — invite details + Create passkey visible, no overflow (FR-009, SC-002). Confirm failing: dialog buttons have no octicons and no dialog-level 375px assertions exist for delete/overwrite/remove; register has no width sweep.
+- [x] T016 [US4] US4 tests in `e2e/responsive.spec.ts`: open the share dialog at 375px — controls visible, copy/done usable, no overflow; delete dialog at 375px — cancel/delete usable, confirming deletes; overwrite confirmation at 375px — cancel/replace usable; remove confirmation at 375px — cancel/remove usable; sign-in page sweep at 375/768/1280 — card centred, controls reachable, no overflow; register page (with a seeded invite token) sweep at 375/768/1280 — invite details + Create passkey visible, no overflow (FR-009, SC-002). Confirm failing: dialog buttons have no octicons and no dialog-level 375px assertions exist for delete/overwrite/remove; register has no width sweep. Confirmed: 3 failed (share/delete/overwrite octicon assertions) / 3 passed (remove icons from T015, sign-in and register sweeps) before T017 landed.
 
 ### Implementation for User Story 4
 
-- [ ] T017 [US4] Add dialog octicons: Copy/`CopyIcon` and Done/`CheckIcon` in `frontend/src/components/ShareModal.tsx`; Cancel/`XIcon` and Delete/`TrashIcon` in `frontend/src/components/DeleteDialog.tsx`; Cancel/`XIcon` and Replace/`SyncIcon` in the overwrite confirmation inside `frontend/src/components/UploadControl.tsx` (FR-004).
-- [ ] T018 [US4] Fix any defect the US4 sweep surfaces in `frontend/src/pages/SignIn.tsx` or `frontend/src/pages/Register.tsx` (expected: none — both are centred cards; the task exists so a failing test has an owning implementation task).
+- [x] T017 [US4] Add dialog octicons: Copy/`CopyIcon` and Done/`CheckIcon` in `frontend/src/components/ShareModal.tsx`; Cancel/`XIcon` and Delete/`TrashIcon` in `frontend/src/components/DeleteDialog.tsx`; Cancel/`XIcon` and Replace/`SyncIcon` in the overwrite confirmation inside `frontend/src/components/UploadControl.tsx` (FR-004).
+- [x] T018 [US4] Fix any defect the US4 sweep surfaces in `frontend/src/pages/SignIn.tsx` or `frontend/src/pages/Register.tsx` (expected: none — both are centred cards; the task exists so a failing test has an owning implementation task). No defect surfaced: both sweeps passed against the unchanged pages.
 
 **Checkpoint**: All four user stories work independently.
 
