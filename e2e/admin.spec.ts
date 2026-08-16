@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import type { BrowserContext, Page } from "@playwright/test";
+import type { BrowserContext, Page, TestInfo } from "@playwright/test";
 import {
   enableVirtualAuthenticator,
   expectNoHorizontalOverflow,
@@ -73,24 +73,45 @@ async function createInvite(page: Page, username: string): Promise<void> {
 }
 
 /**
+ * A username unique to this test attempt. The e2e server keeps one in-memory
+ * database for the whole run, retries included, and invite creation rejects a
+ * duplicate pending/expired invite (409); a retry after a failed attempt that
+ * created the invite must therefore not reuse that username.
+ *
+ * @param base - the readable base username
+ * @param testInfo - test info providing the retry count
+ * @returns the attempt-unique username
+ */
+function inviteUsername(base: string, testInfo: TestInfo): string {
+  return testInfo.retry > 0 ? `${base}-r${testInfo.retry}` : base;
+}
+
+/**
  * Read the generated invite link from the readonly link input.
  *
  * @param page - the page
+ * @param previous - when set, first wait for the link to change away from
+ *   this value. A re-send replaces the link asynchronously; reading before
+ *   the replacement lands would return the stale original link.
  * @returns the full registration URL
  */
-async function generatedLink(page: Page): Promise<string> {
+async function generatedLink(page: Page, previous?: string): Promise<string> {
   const input = page.locator("input[readonly]");
   await expect(input).toHaveValue(/\/register\?token=/);
+  if (previous) {
+    await expect(input).not.toHaveValue(previous);
+  }
   return (await input.inputValue()).trim();
 }
 
 test("an admin creates an invite and sees the 48-hour link and pending row", async ({
   page,
   context,
-}) => {
+}, testInfo) => {
   await openAdmin(page, context);
 
-  await createInvite(page, "erin");
+  const username = inviteUsername("erin", testInfo);
+  await createInvite(page, username);
 
   // The form shows the generated link: a full registration URL carrying a
   // token, with the 48-hour expiry annotation (FR-003, US6 scenario 1).
@@ -101,9 +122,9 @@ test("an admin creates an invite and sees the 48-hour link and pending row", asy
   ).toBeVisible();
 
   // The invite appears in the pending invites table with a pending status.
-  const row = inviteRow(page, "erin");
+  const row = inviteRow(page, username);
   await expect(row).toBeVisible();
-  await expect(row).toContainText("users/erin/");
+  await expect(row).toContainText(`users/${username}/`);
   await expect(row).toContainText("pending");
 
   // The page stays usable at mobile, tablet and desktop widths.
@@ -123,49 +144,57 @@ test("an admin creates an invite and sees the 48-hour link and pending row", asy
 test("re-sending an invite issues a fresh token and a new expiry", async ({
   page,
   context,
-}) => {
+}, testInfo) => {
   await openAdmin(page, context);
 
-  await createInvite(page, "felix");
+  const username = inviteUsername("felix", testInfo);
+  await createInvite(page, username);
   const original = await generatedLink(page);
 
   // Re-send from the pending invites table.
-  await inviteRow(page, "felix")
+  await inviteRow(page, username)
     .getByRole("button", { name: "Re-send" })
     .click();
 
   // The fresh link is shown and differs from the original (new token), and
-  // the invite is still pending.
-  const resent = await generatedLink(page);
+  // the invite is still pending. Wait for the link to change: the card keeps
+  // showing the original until the re-send response lands.
+  const resent = await generatedLink(page, original);
   expect(resent).toMatch(/^http:\/\/localhost:5173\/register\?token=/);
   expect(resent).not.toBe(original);
-  await expect(inviteRow(page, "felix")).toContainText("pending");
+  await expect(inviteRow(page, username)).toContainText("pending");
 });
 
 test("cancelling an invite removes it from the list", async ({
   page,
   context,
-}) => {
+}, testInfo) => {
   await openAdmin(page, context);
 
-  await createInvite(page, "gina");
-  await expect(inviteRow(page, "gina")).toBeVisible();
+  const username = inviteUsername("gina", testInfo);
+  await createInvite(page, username);
+  await expect(inviteRow(page, username)).toBeVisible();
 
-  await inviteRow(page, "gina").getByRole("button", { name: "Cancel" }).click();
+  await inviteRow(page, username)
+    .getByRole("button", { name: "Cancel" })
+    .click();
 
   // Explicit success feedback, then the row is gone.
-  await expect(page.getByText(/Invite for "gina" cancelled/)).toBeVisible();
-  await expect(inviteRow(page, "gina")).toHaveCount(0);
+  await expect(
+    page.getByText(new RegExp(`Invite for "${username}" cancelled`)),
+  ).toBeVisible();
+  await expect(inviteRow(page, username)).toHaveCount(0);
 });
 
 test("an invite created in the admin UI can be claimed by registering", async ({
   page,
   context,
   browser,
-}) => {
+}, testInfo) => {
   await openAdmin(page, context);
 
-  await createInvite(page, "hazel");
+  const username = inviteUsername("hazel", testInfo);
+  await createInvite(page, username);
   const link = await generatedLink(page);
 
   // The invitee opens the link in a private window with a virtual
@@ -175,15 +204,15 @@ test("an invite created in the admin UI can be claimed by registering", async ({
   const inviteePage = await inviteeContext.newPage();
   await enableVirtualAuthenticator(inviteeContext, inviteePage);
   await inviteePage.goto(link);
-  await expect(inviteePage.getByLabel("Your username")).toHaveValue("hazel");
+  await expect(inviteePage.getByLabel("Your username")).toHaveValue(username);
   await inviteePage.getByRole("button", { name: "Create passkey" }).click();
   await expect(inviteePage).toHaveURL(/\/files/);
-  await expectSignedInAs(inviteePage, "hazel");
+  await expectSignedInAs(inviteePage, username);
   await inviteeContext.close();
 
   // The admin reloads and sees the invite as claimed, with no actions.
   await page.reload();
-  const row = inviteRow(page, "hazel");
+  const row = inviteRow(page, username);
   await expect(row).toContainText("claimed");
   await expect(row.getByRole("button", { name: "Re-send" })).toHaveCount(0);
   await expect(row.getByRole("button", { name: "Cancel" })).toHaveCount(0);
@@ -232,18 +261,26 @@ test("an admin removes a user and their session stops working", async ({
 test("an expired invite shows an expired status with a re-send option", async ({
   page,
   context,
-}) => {
+}, testInfo) => {
   await openAdmin(page, context);
 
   // ina's invite is seeded already expired in e2eServer, dedicated to this
   // spec (which re-sends it). dave's expired invite is left alone because
   // auth.spec asserts its refusal, and both specs share one server.
   const row = inviteRow(page, "ina");
-  await expect(row).toContainText("expired");
-  await expect(row.getByRole("button", { name: "Re-send" })).toBeVisible();
-  await expect(row.getByRole("button", { name: "Cancel" })).toBeVisible();
+  if (testInfo.retry > 0) {
+    // A retry re-runs the whole test; the server's in-memory database is not
+    // reset between attempts, so a previous attempt already re-sent ina and
+    // she is pending now. The expired-status assertions hold only on a fresh
+    // run; the re-send transition below still applies to pending invites.
+    await expect(row).toContainText("pending");
+  } else {
+    await expect(row).toContainText("expired");
+    await expect(row.getByRole("button", { name: "Re-send" })).toBeVisible();
+    await expect(row.getByRole("button", { name: "Cancel" })).toBeVisible();
+  }
 
-  // Re-sending an expired invite re-activates it.
+  // Re-sending re-activates the invite with a fresh link.
   await row.getByRole("button", { name: "Re-send" }).click();
   const link = await generatedLink(page);
   expect(link).toMatch(/\/register\?token=/);
