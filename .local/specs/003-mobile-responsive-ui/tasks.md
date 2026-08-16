@@ -85,11 +85,11 @@ implemented and tested independently.
 
 ### Tests for User Story 3 ⚠️ write first, confirm failing before implementing
 
-- [ ] T014 [US3] US3 tests in `e2e/responsive.spec.ts`: at 375px an invite row shows role under the username and Re-send/Cancel icon buttons with accessible names; a user row shows role/bucket/created stacked and a Remove icon button; tapping Re-send and Cancel via icons works (US3 sc.1-3); tapping Remove opens the confirmation dialog (US3 sc.4); no horizontal overflow sweep at 375/768/1280 (FR-006/007/009). Confirm failing: metadata is hidden, actions are text buttons.
+- [x] T014 [US3] US3 tests in `e2e/responsive.spec.ts`: at 375px an invite row shows role under the username and Re-send/Cancel icon buttons with accessible names; a user row shows role/bucket/created stacked and a Remove icon button; tapping Re-send and Cancel via icons works (US3 sc.1-3); tapping Remove opens the confirmation dialog (US3 sc.4); no horizontal overflow sweep at 375/768/1280 (FR-006/007/009). Confirm failing: metadata is hidden, actions are text buttons.
 
 ### Implementation for User Story 3
 
-- [ ] T015 [US3] Rework tables/actions in `frontend/src/pages/AdminUsers.tsx`: stacked metadata lines under the username below `sm` (role) and below `md` (bucket/prefix, expires/created) (FR-006); Re-send (`PaperAirplaneIcon`), Cancel (`XIcon`), Remove (`TrashIcon`) become icon+text buttons, icon-only below `sm`, accessible names unchanged (FR-007); remove-confirmation dialog buttons get `XIcon`/`TrashIcon`.
+- [x] T015 [US3] Rework tables/actions in `frontend/src/pages/AdminUsers.tsx`: stacked metadata lines under the username below `sm` (role) and below `md` (bucket/prefix, expires/created) (FR-006); Re-send (`PaperAirplaneIcon`), Cancel (`XIcon`), Remove (`TrashIcon`) become icon+text buttons, icon-only below `sm`, accessible names unchanged (FR-007); remove-confirmation dialog buttons get `XIcon`/`TrashIcon`.
 
 **Checkpoint**: User Stories 1-3 all work independently.
 
