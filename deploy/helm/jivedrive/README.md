@@ -20,6 +20,11 @@ accessed over the S3 API.
 - Non-sensitive configuration passed via a ConfigMap; S3 credentials passed
   via a Kubernetes Secret (`secretConfig`).
 - Runs as a non-root user (the image's `bun` user, UID 1000).
+- Automated CI: on push to `main`, the workflow in
+  `.github/workflows/quality-and-deploy.yml` runs the quality gates, builds
+  and publishes the image to GHCR, and deploys the chart to the minikube
+  cluster with `values-ci.yaml` (image tag and S3 credentials passed as
+  `--set` from GitHub secrets).
 
 ## Prerequisites
 
@@ -27,8 +32,9 @@ accessed over the S3 API.
   probe fields).
 - Helm 3.x.
 - A container image of the JiveDrive server (see
-  [Installation](#installation)); the default `ghcr.io/johngrimes/jivedrive`
-  image is not published yet.
+  [Installation](#installation)). The CI workflow publishes
+  `ghcr.io/johngrimes/jivedrive` automatically on push to `main`; before
+  that, build and push it manually as shown below.
 - An OVHcloud Object Storage bucket and S3 credentials (access key id and
   secret access key).
 - A bucket CORS policy allowing the app origin: uploads PUT files directly
@@ -46,9 +52,11 @@ accessed over the S3 API.
 
 ### 1. Build and publish the image
 
-The chart defaults to `ghcr.io/johngrimes/jivedrive:0.1.0`, which is not
-published yet. Build the image from the repository root and push it to your
-registry (or a local cluster's registry), then point `jivedrive.image` at it:
+On push to `main`, the CI workflow
+(`.github/workflows/quality-and-deploy.yml`) builds the image from
+`docker/Dockerfile` and pushes `ghcr.io/johngrimes/jivedrive:sha-<commit>`
+plus `:latest`. For a local cluster (or to publish outside CI), build and
+push from the repository root, then point `jivedrive.image` at it:
 
 ```bash
 docker build -f docker/Dockerfile -t ghcr.io/johngrimes/jivedrive:0.1.0 .
@@ -76,6 +84,11 @@ helm install jivedrive deploy/helm/jivedrive \
   --namespace jivedrive --create-namespace \
   --values /path/to/my-values.yaml
 ```
+
+The CI workflow deploys to minikube with
+`deploy/helm/jivedrive/values-ci.yaml` (persistence enabled, image from
+GHCR) plus `--set` overrides for the image tag and S3 credentials; see
+`.github/workflows/quality-and-deploy.yml` for the exact command.
 
 ### 3. First sign-in
 

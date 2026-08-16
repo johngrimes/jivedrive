@@ -145,6 +145,12 @@ server applies an equivalent policy itself.)
 
 ### 1. Build and push the image
 
+On push to `main`, the CI workflow
+([`.github/workflows/quality-and-deploy.yml`](.github/workflows/quality-and-deploy.yml))
+builds the image and publishes `ghcr.io/johngrimes/jivedrive:sha-<commit>`
+plus `:latest`, then deploys the chart to the minikube cluster. To publish
+manually (e.g. before CI is set up):
+
 ```bash
 docker build -f docker/Dockerfile -t ghcr.io/johngrimes/jivedrive:0.1.0 .
 docker push ghcr.io/johngrimes/jivedrive:0.1.0

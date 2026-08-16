@@ -1,0 +1,12 @@
+# CI values for the automated deploy (deploy job in
+# .github/workflows/quality-and-deploy.yml). Applied on top of values.yaml;
+# the image tag and S3 credentials are passed via --set from GitHub secrets.
+jivedrive:
+  image:
+    repository: ghcr.io/johngrimes/jivedrive
+    pullPolicy: Always
+
+  # The minikube cluster has a default storage class; the PVC keeps the
+  # SQLite database across pod restarts and upgrades.
+  persistence:
+    enabled: true
