@@ -63,15 +63,15 @@ implemented and tested independently.
 
 ### Tests for User Story 2 ⚠️ write first, confirm failing before implementing
 
-- [ ] T008 [P] [US2] Update `e2e/browse.spec.ts`: Download/Share/Delete row actions selectors move from `getByRole("link", …)` to `getByRole("button", …)` (R4). Confirm failing: actions are links today.
-- [ ] T009 [P] [US2] Update `e2e/delete.spec.ts`: the Delete row action selector moves to `getByRole("button", { name: "Delete" })` (R4). Confirm failing.
-- [ ] T010 [P] [US2] Update `e2e/share.spec.ts`: the Share row action selector moves to `getByRole("button", { name: "Share" })` (R4). Confirm failing.
-- [ ] T011 [US2] US2 tests in `e2e/responsive.spec.ts`: at 375px a file row shows size · modified as a secondary line under the name (FR-005) and icon-only action buttons with accessible names Download/Share/Delete (FR-007); action buttons measure at least 44px tall at 375px (FR-008); tapping the download icon at 375px triggers the download (US2 sc.4); at 768px size/modified render in columns and actions show icon + text (US2 sc.2); no horizontal overflow sweep at 375/768/1280 (FR-009). Confirm failing: no stacked metadata, emoji present.
+- [x] T008 [P] [US2] Update `e2e/browse.spec.ts`: Download/Share/Delete row actions selectors move from `getByRole("link", …)` to `getByRole("button", …)` (R4). Confirm failing: actions are links today.
+- [x] T009 [P] [US2] Update `e2e/delete.spec.ts`: the Delete row action selector moves to `getByRole("button", { name: "Delete" })` (R4). Confirm failing.
+- [x] T010 [P] [US2] Update `e2e/share.spec.ts`: the Share row action selector moves to `getByRole("button", { name: "Share" })` (R4). Confirm failing.
+- [x] T011 [US2] US2 tests in `e2e/responsive.spec.ts`: at 375px a file row shows size · modified as a secondary line under the name (FR-005) and icon-only action buttons with accessible names Download/Share/Delete (FR-007); action buttons measure at least 44px tall at 375px (FR-008); tapping the download icon at 375px triggers the download (US2 sc.4); at 768px size/modified render in columns and actions show icon + text (US2 sc.2); no horizontal overflow sweep at 375/768/1280 (FR-009). Confirm failing: no stacked metadata, emoji present.
 
 ### Implementation for User Story 2
 
-- [ ] T012 [US2] Rework rows/actions in `frontend/src/components/FileListing.tsx`: replace emoji with `FileDirectoryFillIcon`/`FileIcon`; stacked size/modified line under the name below `sm` (FR-005); Download/Share/Delete become `button` elements with icon + label, text hidden below `sm`, `aria-label` matching the visible text (FR-007, R4); add `HomeIcon` to the breadcrumb Home link.
-- [ ] T013 [US2] Add `UploadIcon` to the picker label in `frontend/src/components/UploadControl.tsx`.
+- [x] T012 [US2] Rework rows/actions in `frontend/src/components/FileListing.tsx`: replace emoji with `FileDirectoryFillIcon`/`FileIcon`; stacked size/modified line under the name below `sm` (FR-005); Download/Share/Delete become `button` elements with icon + label, text hidden below `sm`, `aria-label` matching the visible text (FR-007, R4); add `HomeIcon` to the breadcrumb Home link.
+- [x] T013 [US2] Add `UploadIcon` to the picker label in `frontend/src/components/UploadControl.tsx`.
 
 **Checkpoint**: User Stories 1 and 2 both work independently.
 
