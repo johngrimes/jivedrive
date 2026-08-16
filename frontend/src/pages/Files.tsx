@@ -70,6 +70,11 @@ export function FilesPage() {
           void refresh();
           return;
         }
+        // Mark this folder's fetch as finished so the skeleton clears and
+        // the error state (with Retry) is shown. Without this, fetching
+        // (listingPrefix !== prefix) stays true forever and the listing
+        // hangs on loading placeholders despite the explicit failure.
+        setListingPrefix(prefix);
         setError(messageOf(err));
       });
     return () => {

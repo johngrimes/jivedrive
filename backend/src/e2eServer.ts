@@ -77,6 +77,18 @@ function listObjectsV2(input: {
   const prefix = input.Prefix ?? "";
   const maxKeys = input.MaxKeys ?? 1000;
 
+  // gina's space always fails so the listing-error e2e spec can assert the
+  // error + retry UI replaces the eternal skeleton. Production analogue:
+  // OVHcloud rejected the deployed S3 credentials with a 403
+  // InvalidAccessKeyId for the same listing request.
+  if (prefix === "users/gina/") {
+    const err = new Error(
+      "InvalidAccessKeyId: The AWS Access Key Id you provided does not exist in our records.",
+    ) as Error & { name: string };
+    err.name = "InvalidAccessKeyId";
+    throw err;
+  }
+
   const entries: Array<{ kind: "folder" | "file"; key: string }> = [];
   const seenFolders = new Set<string>();
   for (const key of [...objectStore.keys()]
@@ -234,6 +246,17 @@ const frank = createUser(db, {
   prefix: "users/frank/",
 });
 createSession(db, frank.id, { token: "frank-session" });
+
+// A user whose space listing always fails in the mock S3 (see
+// listObjectsV2): the listing-error e2e spec asserts a failed first-page
+// load surfaces an error with Retry instead of an eternal skeleton. No
+// other spec signs in as gina.
+const gina = createUser(db, {
+  username: "gina",
+  bucket: "jivedrive-prod",
+  prefix: "users/gina/",
+});
+createSession(db, gina.id, { token: "gina-session" });
 
 const future = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
