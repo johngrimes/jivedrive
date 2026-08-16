@@ -270,16 +270,6 @@ const longname = createUser(db, {
 });
 createSession(db, longname.id, { token: "longname-session" });
 
-// A dedicated user the responsive e2e spec removes (US4 remove-confirmation
-// flow). frank is the admin spec's removal target, so rosa is a second
-// user owned by exactly one spec; no other spec depends on her.
-const rosa = createUser(db, {
-  username: "rosa",
-  bucket: "jivedrive-prod",
-  prefix: "users/rosa/",
-});
-createSession(db, rosa.id, { token: "rosa-session" });
-
 const future = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
