@@ -81,10 +81,7 @@ export function AppShell() {
               </span>
             ) : user ? (
               <>
-                <span
-                  className="max-w-36 truncate"
-                  title={user.username}
-                >
+                <span className="max-w-36 truncate" title={user.username}>
                   Signed in as {user.username}
                 </span>
                 <button

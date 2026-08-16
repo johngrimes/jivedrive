@@ -119,7 +119,7 @@ implemented and tested independently.
 **Purpose**: Cross-story verification and cleanup.
 
 - [x] T019 Emoji sweep: run the SC-004 grep for emoji in `frontend/src` and remove any remaining emoji characters found.
-- [ ] T020 Run the full e2e suite green (`bun run --cwd e2e playwright test`) and a production build (`bun run --cwd frontend build`), verifying both themes still ship (SC-003, SC-007).
+- [x] T020 Run the full e2e suite green (`bun run --cwd e2e playwright test`) and a production build (`bun run --cwd frontend build`), verifying both themes still ship (SC-003, SC-007).
 - [ ] T021 Walk through `quickstart.md` scenarios against the running app (dev server at 375px + browser devtools) and tick off each one.
 
 ---

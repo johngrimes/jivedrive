@@ -89,7 +89,9 @@ test.describe("User Story 1 - responsive navigation: drawer + permanent sidebar"
     await expectNoHorizontalOverflow(page);
 
     // Menu items keep the 44px touch target (FR-008).
-    const manageUsers = page.getByRole("link", { name: "Manage users (admin)" });
+    const manageUsers = page.getByRole("link", {
+      name: "Manage users (admin)",
+    });
     const itemHeight = await manageUsers.evaluate(
       (el) => el.getBoundingClientRect().height,
     );
@@ -120,9 +122,9 @@ test.describe("User Story 1 - responsive navigation: drawer + permanent sidebar"
 
     await page.getByRole("button", { name: "Open menu" }).click();
     await expect(page.getByRole("link", { name: "Files" })).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: /Manage users/ }),
-    ).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /Manage users/ })).toHaveCount(
+      0,
+    );
     await expectNoHorizontalOverflow(page);
   });
 
@@ -221,9 +223,9 @@ test.describe("User Story 1 - responsive navigation: drawer + permanent sidebar"
     await expect(hamburger).toBeVisible();
     await page.keyboard.press("Tab");
     await expect(hamburger).toBeFocused();
-    expect(
-      await hamburger.evaluate((el) => el.matches(":focus-visible")),
-    ).toBe(true);
+    expect(await hamburger.evaluate((el) => el.matches(":focus-visible"))).toBe(
+      true,
+    );
 
     // Enter opens the drawer.
     await hamburger.press("Enter");
@@ -234,7 +236,9 @@ test.describe("User Story 1 - responsive navigation: drawer + permanent sidebar"
 
     // The drawer links are focusable: tab forward until Manage users
     // receives focus (the drawer side is last in the DOM/tab order).
-    const manageUsers = page.getByRole("link", { name: "Manage users (admin)" });
+    const manageUsers = page.getByRole("link", {
+      name: "Manage users (admin)",
+    });
     for (let i = 0; i < 30; i += 1) {
       if (await manageUsers.evaluate((el) => el === document.activeElement)) {
         break;
@@ -327,9 +331,7 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
       const button = row.getByRole("button", { name: action });
       await expect(button).toBeVisible();
       await expect(button.locator("svg")).toBeVisible();
-      await expect(
-        button.getByText(action, { exact: true }),
-      ).toBeHidden();
+      await expect(button.getByText(action, { exact: true })).toBeHidden();
     }
 
     // Octicons replaced the emoji (FR-004): no 📁/📄 anywhere in the rows.
@@ -411,9 +413,7 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     const download = row.getByRole("button", { name: "Download" });
     await expect(download).toBeVisible();
     await expect(download.locator("svg")).toBeVisible();
-    await expect(
-      download.getByText("Download", { exact: true }),
-    ).toBeVisible();
+    await expect(download.getByText("Download", { exact: true })).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
 
@@ -427,9 +427,7 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     // US2 sc.3: folders stay links (they navigate), carry the folder
     // octicon, and never expose the file actions.
     const folderRow = page.locator("tbody tr", { hasText: "docs" });
-    await expect(
-      folderRow.getByRole("link", { name: "docs" }),
-    ).toBeVisible();
+    await expect(folderRow.getByRole("link", { name: "docs" })).toBeVisible();
     await expect(folderRow.locator("svg")).toBeVisible();
     await expect(folderRow.getByRole("button")).toHaveCount(0);
     await expect(folderRow).not.toContainText("📁");
@@ -477,9 +475,7 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
       buffer: Buffer.from("mobile upload check"),
     });
     await expect(page.getByText(`Uploaded ${fileName}`)).toBeVisible();
-    await expect(
-      page.locator("tbody tr", { hasText: fileName }),
-    ).toBeVisible();
+    await expect(page.locator("tbody tr", { hasText: fileName })).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
 
@@ -1135,11 +1131,9 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     // rosa is seeded in e2eServer as a dedicated removal target for this
     // spec (frank belongs to admin.spec, and alice/admin are never
     // removed).
-    const row = page
-      .getByRole("table", { name: "Users" })
-      .locator("tbody tr", {
-        has: page.getByRole("cell").getByText("rosa", { exact: true }),
-      });
+    const row = page.getByRole("table", { name: "Users" }).locator("tbody tr", {
+      has: page.getByRole("cell").getByText("rosa", { exact: true }),
+    });
     await expect(row).toBeVisible();
 
     // US4 sc.4: the confirmation dialog opens with usable Cancel/Remove.
