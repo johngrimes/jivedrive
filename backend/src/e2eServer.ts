@@ -258,6 +258,18 @@ const gina = createUser(db, {
 });
 createSession(db, gina.id, { token: "gina-session" });
 
+// A user at the 32-character data-model username maximum (see
+// validateUsername in db/repository.ts): the responsive e2e spec asserts
+// the navbar truncates a long username with an ellipsis at 375px instead
+// of overflowing (FR-003, US1 sc.4). No other spec signs in as him and his
+// space stays empty.
+const longname = createUser(db, {
+  username: "this-username-is-really-long",
+  bucket: "jivedrive-prod",
+  prefix: "users/this-username-is-really-long/",
+});
+createSession(db, longname.id, { token: "longname-session" });
+
 const future = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
