@@ -17,7 +17,7 @@ async function downloadFromRow(page: Page, rowText: string) {
   const downloadPromise = page.waitForEvent("download");
   await page
     .locator("tr", { hasText: rowText })
-    .getByRole("link", { name: "Download" })
+    .getByRole("button", { name: "Download" })
     .click();
   const download = await downloadPromise;
   const content = await readStream(await download.createReadStream());
@@ -45,7 +45,7 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
   await expect(page.getByRole("link", { name: /Manage users/ })).toHaveCount(0);
 
   // Root listing: folders and files with sizes, and the loaded item count.
-  // Folder rows are links (US3 conversion); file rows keep their link
+  // Folder rows are links (they navigate); file rows carry button
   // Download/Share/Delete actions.
   await expect(page.getByRole("link", { name: /docs/ })).toBeVisible();
   await expect(page.getByText("archive.zip")).toBeVisible();
