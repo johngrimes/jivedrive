@@ -170,7 +170,8 @@ jobs:
     #   TS_OAUTH_CLIENT_ID / TS_OAUTH_CLIENT_SECRET - Tailscale OAuth client
     #     (tag:ci) with access to the minikube host
     #   K8S_SERVER / K8S_CA_CERT / K8S_TOKEN         - kubeconfig for the
-    #     minikube cluster (server URL, base64 CA, service-account token)
+    #     minikube cluster (server URL, base64 CA or raw PEM, single-line
+    #     service-account token)
     #   JIVEDRIVE_S3_ACCESS_KEY_ID / JIVEDRIVE_S3_SECRET_ACCESS_KEY - S3
     #     credentials; the app refuses to start without them
     steps:
@@ -190,6 +191,31 @@ jobs:
       - name: Configure kubectl
         run: |
           mkdir -p ~/.kube
+          # K8S_CA_CERT is accepted as single-line base64 (kubeconfig
+          # certificate-authority-data) or as raw PEM: strip whitespace, then
+          # re-encode if the result is not already valid base64. A raw PEM
+          # pasted verbatim would otherwise break the YAML with newlines.
+          CA_RAW=$(printf '%s' "$K8S_CA_CERT" | tr -d '[:space:]')
+          if [ -n "$CA_RAW" ] && printf '%s' "$CA_RAW" | base64 -d >/dev/null 2>&1; then
+            CA_DATA="$CA_RAW"
+          else
+            CA_DATA=$(printf '%s' "$CA_RAW" | base64 -w0)
+          fi
+          # Single-line enforcement: embedded newlines in either value break
+          # the YAML with a confusing parse error, so fail fast instead.
+          case "$K8S_SERVER" in
+            https://*) ;;
+            *)
+              echo "K8S_SERVER must be a single-line https:// URL" >&2
+              exit 1
+              ;;
+          esac
+          case "$K8S_TOKEN" in
+            *$'\n'*)
+              echo "K8S_TOKEN must be a single line (no newlines); re-paste the token" >&2
+              exit 1
+              ;;
+          esac
           cat > ~/.kube/config <<EOF
           apiVersion: v1
           kind: Config
@@ -202,7 +228,7 @@ jobs:
           clusters:
           - cluster:
               server: $K8S_SERVER
-              certificate-authority-data: $K8S_CA_CERT
+              certificate-authority-data: $CA_DATA
             name: jivedrive
           users:
           - name: ci
