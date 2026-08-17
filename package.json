@@ -17,8 +17,7 @@
     "test:frontend": "vitest run --config frontend/vitest.config.ts",
     "test:e2e": "playwright test --config e2e/playwright.config.ts",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "dev": "bun run --cwd backend dev & bun run --cwd frontend dev"
+    "format:check": "prettier --check ."
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

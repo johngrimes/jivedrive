@@ -26,13 +26,16 @@ accounts. Authentication is WebAuthn passkeys only - no passwords.
 
 ```bash
 bun install
-bun run dev
+overmind start
 ```
 
-This starts the backend on `http://localhost:3000` and the Vite dev server on
-`http://localhost:5173`. The Vite server proxies `/api`, `/auth` and
+[overmind](https://github.com/DarthSim/overmind) launches the processes listed
+in the `Procfile`: the backend on `http://localhost:3000` and the Vite dev
+server on `http://localhost:5173`. The Vite server proxies `/api`, `/auth` and
 `/healthcheck` to the backend (see `frontend/vite.config.ts`), so browse to
-`http://localhost:5173`.
+`http://localhost:5173`. Use `overmind start web` or `overmind start api` to
+run a single process, and `overmind open` to open the web process in your
+browser.
 
 The backend requires S3 credentials even in development. Create
 `backend/.env` (gitignored; bun loads it automatically):
