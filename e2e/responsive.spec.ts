@@ -563,10 +563,12 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     await startSignedIn(page, context);
     await page.setViewportSize(MOBILE_VIEWPORT);
 
-    // A deep chain: docs → reports → 2026 → q1 (seeded in e2eServer.ts as
-    // users/alice/docs/reports/2026/q1/summary.txt; the mock derives each
-    // folder level from the key). Each folder link navigates in turn.
-    for (const segment of ["docs", "reports", "2026", "q1"]) {
+    // A deep chain: docs → reports → 2026 → q1 → quarterly (seeded in
+    // e2eServer.ts as users/alice/docs/reports/2026/q1/quarterly/summary.txt;
+    // the mock derives each folder level from the key). Five levels deep so
+    // the trail is wider than 375px on any renderer font — the wrap below
+    // must not depend on font metrics. Each folder link navigates in turn.
+    for (const segment of ["docs", "reports", "2026", "q1", "quarterly"]) {
       await page.getByRole("link", { name: segment }).click();
       await expect(
         page.getByRole("navigation", { name: "Breadcrumbs" }),
@@ -575,7 +577,14 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
 
     // Every segment of the trail is present, from the space root down.
     const crumbs = page.getByRole("navigation", { name: "Breadcrumbs" });
-    for (const segment of ["Home", "docs", "reports", "2026", "q1"]) {
+    for (const segment of [
+      "Home",
+      "docs",
+      "reports",
+      "2026",
+      "q1",
+      "quarterly",
+    ]) {
       await expect(crumbs).toContainText(segment);
     }
 

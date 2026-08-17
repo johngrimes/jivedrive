@@ -329,9 +329,11 @@ seedObject("users/alice/docs/my file #1?.txt", "special file content", 128);
 // A deep folder chain under docs/ for the responsive spec's deep-
 // breadcrumb edge case (US2): the mock derives each folder level from the
 // key, so docs/ gains exactly one new entry (the reports folder) and stays
-// within the 5-item page size that upload.spec relies on.
+// within the 5-item page size that upload.spec relies on. The chain is
+// five levels deep so the trail exceeds the 375px container on any font
+// (the wrap assertion must not depend on renderer font metrics).
 seedObject(
-  "users/alice/docs/reports/2026/q1/summary.txt",
+  "users/alice/docs/reports/2026/q1/quarterly/summary.txt",
   "quarterly numbers",
   18,
 );
