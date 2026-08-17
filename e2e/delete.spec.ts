@@ -41,7 +41,7 @@ async function openPhotos(page: Page, context: BrowserContext): Promise<void> {
 async function openDelete(page: Page, rowText: string) {
   await page
     .locator("tbody tr", { hasText: rowText })
-    .getByRole("link", { name: "Delete" })
+    .getByRole("button", { name: "Delete" })
     .click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toContainText(rowText);

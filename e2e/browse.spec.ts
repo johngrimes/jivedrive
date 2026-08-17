@@ -17,7 +17,7 @@ async function downloadFromRow(page: Page, rowText: string) {
   const downloadPromise = page.waitForEvent("download");
   await page
     .locator("tr", { hasText: rowText })
-    .getByRole("link", { name: "Download" })
+    .getByRole("button", { name: "Download" })
     .click();
   const download = await downloadPromise;
   const content = await readStream(await download.createReadStream());
@@ -45,11 +45,11 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
   await expect(page.getByRole("link", { name: /Manage users/ })).toHaveCount(0);
 
   // Root listing: folders and files with sizes, and the loaded item count.
-  // Folder rows are links (US3 conversion); file rows keep their link
+  // Folder rows are links (they navigate); file rows carry button
   // Download/Share/Delete actions.
   await expect(page.getByRole("link", { name: /docs/ })).toBeVisible();
   await expect(page.getByText("archive.zip")).toBeVisible();
-  await expect(page.getByText("812 KB")).toBeVisible();
+  await expect(page.getByRole("cell", { name: "812 KB" })).toBeVisible();
   await expect(page.getByText("5 items")).toBeVisible();
 
   // The listing is usable at mobile, tablet and desktop widths.
@@ -71,7 +71,7 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
   await loadMore.click();
   await expect(page.locator("tbody tr")).toHaveCount(10);
   await expect(loadMore).toHaveCount(0);
-  await expect(page.getByText("2.4 MB")).toBeVisible();
+  await expect(page.getByRole("cell", { name: "2.4 MB" })).toBeVisible();
   await expect(page.getByText("10 items")).toBeVisible();
   await expect(page.getByRole("link", { name: /photos/ })).toBeVisible();
 

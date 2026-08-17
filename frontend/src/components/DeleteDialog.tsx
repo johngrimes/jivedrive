@@ -11,6 +11,7 @@
  * a `btn-error` Delete action. The dialog keeps `role="alertdialog"`.
  */
 import { useState } from "react";
+import { TrashIcon, XIcon } from "@primer/octicons-react";
 import { deleteFile } from "../api/client";
 import type { ApiClientError, FileEntry } from "../api/client";
 
@@ -86,6 +87,7 @@ export function DeleteDialog({ file, onDeleted, onClose }: DeleteDialogProps) {
             onClick={onClose}
             disabled={deleting}
           >
+            <XIcon aria-hidden="true" />
             Cancel
           </button>
           <button
@@ -94,6 +96,7 @@ export function DeleteDialog({ file, onDeleted, onClose }: DeleteDialogProps) {
             onClick={() => void handleDelete()}
             disabled={deleting}
           >
+            <TrashIcon aria-hidden="true" />
             {deleting ? "Deleting..." : "Delete"}
           </button>
         </div>

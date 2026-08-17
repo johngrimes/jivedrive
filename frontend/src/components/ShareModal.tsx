@@ -11,6 +11,7 @@
  * `role="alertdialog"` and its accessible label.
  */
 import { useEffect, useState } from "react";
+import { CheckIcon, CopyIcon } from "@primer/octicons-react";
 import { postShareUrl } from "../api/client";
 import type { ApiClientError, FileEntry } from "../api/client";
 
@@ -171,9 +172,11 @@ export function ShareModal({ file, onClose }: ShareModalProps) {
             onClick={() => void handleCopy()}
             disabled={!link || loading}
           >
+            <CopyIcon aria-hidden="true" />
             {copied ? "Copied" : "Copy link"}
           </button>
           <button className="btn btn-primary" type="button" onClick={onClose}>
+            <CheckIcon aria-hidden="true" />
             Done
           </button>
         </div>

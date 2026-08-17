@@ -258,6 +258,18 @@ const gina = createUser(db, {
 });
 createSession(db, gina.id, { token: "gina-session" });
 
+// A user at the 32-character data-model username maximum (see
+// validateUsername in db/repository.ts): the responsive e2e spec asserts
+// the navbar truncates a long username with an ellipsis at 375px instead
+// of overflowing (FR-003, US1 sc.4). No other spec signs in as him and his
+// space stays empty.
+const longname = createUser(db, {
+  username: "this-username-is-really-long",
+  bucket: "jivedrive-prod",
+  prefix: "users/this-username-is-really-long/",
+});
+createSession(db, longname.id, { token: "longname-session" });
+
 const future = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
@@ -289,6 +301,19 @@ createInvite(db, {
   issuedByUserId: admin.id,
   expiresAt: past,
 });
+// A valid invite for the register-page width sweep (US4 sc.6): the
+// responsive spec renders /register?token=invite-vera at 375/768/1280 and
+// never claims it, so it must stay pending. auth.spec claims invite-carol,
+// so vera is a separate invite owned by exactly one spec; dave and ina
+// stay expired for their specs.
+createInvite(db, {
+  token: "invite-vera",
+  username: "vera",
+  bucket: "jivedrive-prod",
+  prefix: "users/vera/",
+  issuedByUserId: admin.id,
+  expiresAt: future,
+});
 
 // Alice's space: three subfolders (docs, photos, empty) and seven root
 // files, more than one page of the e2e page size (5).
@@ -301,6 +326,17 @@ seedObject("users/alice/report.pdf", "%PDF-1.4 hello report", 2516582);
 seedObject("users/alice/todo.txt", "buy milk\n", 7);
 seedObject("users/alice/docs/notes.txt", "hello from notes", 64);
 seedObject("users/alice/docs/my file #1?.txt", "special file content", 128);
+// A deep folder chain under docs/ for the responsive spec's deep-
+// breadcrumb edge case (US2): the mock derives each folder level from the
+// key, so docs/ gains exactly one new entry (the reports folder) and stays
+// within the 5-item page size that upload.spec relies on. The chain is
+// five levels deep so the trail exceeds the 375px container on any font
+// (the wrap assertion must not depend on renderer font metrics).
+seedObject(
+  "users/alice/docs/reports/2026/q1/quarterly/summary.txt",
+  "quarterly numbers",
+  18,
+);
 seedObject("users/alice/photos/pic.jpg", "jpeg-bytes", 4096);
 // Dedicated objects for the delete e2e spec: each test targets its own
 // object so the tests can run in parallel without racing each other or
@@ -310,6 +346,13 @@ seedObject("users/alice/photos/pic.jpg", "jpeg-bytes", 4096);
 seedObject("users/alice/photos/delete-me-cancel.txt", "keep me", 7);
 seedObject("users/alice/photos/delete-me-confirm.txt", "delete me", 9);
 seedObject("users/alice/photos/delete-me-missing.txt", "gone soon", 9);
+// A dedicated object for the responsive e2e spec's overwrite flow (US4):
+// the overwrite test replaces 0-responsive-overwrite.txt and restores its
+// "v1" baseline itself, so every attempt starts from a known state. The
+// "0-" prefix keeps it on the first page of photos/ (page size 5, no
+// count assertions on photos). The US4 delete test uploads its own unique
+// target instead of using a seed, so it is retry-safe too.
+seedObject("users/alice/photos/0-responsive-overwrite.txt", "v1", 2);
 seedObject("users/alice/empty/", "", 0);
 
 // Mock S3 HTTP server: serves downloads at path-style presigned URLs and
