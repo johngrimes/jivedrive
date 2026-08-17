@@ -16,6 +16,7 @@ import {
 } from "../api/client";
 import type { ApiClientError } from "../api/client";
 import { useSession } from "../auth/sessionContext";
+import { DriveIcon } from "../components/icons";
 
 /**
  * Sign-in page: enter a username, then complete the passkey prompt.
@@ -104,58 +105,69 @@ export function SignIn() {
   }
 
   return (
-    <section
-      className="card bg-base-100 w-full max-w-md shadow-xl"
-      aria-label="Sign in"
-    >
-      <div className="card-body">
-        <h1 className="card-title justify-center text-2xl">Sign in</h1>
-        <p className="text-sm opacity-70 text-center">
-          Use your passkey to access your files
-        </p>
-
-        <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-          <label className="label" htmlFor="username">
-            <span className="label-text">Username</span>
-          </label>
-          <input
-            id="username"
-            className="input w-full"
-            type="text"
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-            autoComplete="username"
-            autoCapitalize="none"
-            spellCheck={false}
-            placeholder="alice"
-          />
-
-          <button
-            className="btn btn-primary w-full"
-            type="submit"
-            disabled={busy}
-          >
-            {busy ? "Waiting for passkey..." : "Continue with passkey"}
-          </button>
-        </form>
-
-        {status && (
-          <p className="alert alert-info" role="status">
-            {status}
+    <div className="hero w-full">
+      <div className="hero-content w-full max-w-md flex-col items-center gap-6 py-4">
+        <div className="flex flex-col items-center gap-2 text-center">
+          <DriveIcon className="size-12 text-primary" />
+          <h1 className="text-3xl font-bold tracking-tight">JiveDrive</h1>
+          <p className="text-sm opacity-70">
+            Your files, protected by passkeys. No passwords, ever.
           </p>
-        )}
-        {error && (
-          <p className="alert alert-error" role="alert">
-            {error}
-          </p>
-        )}
+        </div>
+        <section
+          className="card bg-base-100 w-full shadow-xl"
+          aria-label="Sign in"
+        >
+          <div className="card-body">
+            <h2 className="card-title justify-center">Sign in</h2>
+            <p className="text-sm opacity-70 text-center">
+              Use your passkey to access your files
+            </p>
 
-        <div className="divider">or</div>
+            <form onSubmit={handleSubmit} className="flex flex-col gap-2">
+              <label className="label" htmlFor="username">
+                <span className="label-text">Username</span>
+              </label>
+              <input
+                id="username"
+                className="input w-full"
+                type="text"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                autoComplete="username"
+                autoCapitalize="none"
+                spellCheck={false}
+                placeholder="alice"
+              />
 
-        <Link className="btn btn-outline w-full" to="/register">
-          Register with an invite link
-        </Link>
+              <button
+                className="btn btn-primary w-full"
+                type="submit"
+                disabled={busy}
+              >
+                {busy ? "Waiting for passkey..." : "Continue with passkey"}
+              </button>
+            </form>
+
+            {status && (
+              <p className="alert alert-info" role="status">
+                {status}
+              </p>
+            )}
+            {error && (
+              <p className="alert alert-error" role="alert">
+                {error}
+              </p>
+            )}
+
+            <div className="divider">or</div>
+
+            <Link className="btn btn-outline w-full" to="/register">
+              Register with an invite link
+            </Link>
+          </div>
+        </section>
       </div>
-    </section>
+    </div>
   );
 }

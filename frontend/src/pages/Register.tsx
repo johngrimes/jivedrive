@@ -4,6 +4,7 @@ import { startRegistration } from "@simplewebauthn/browser";
 import { postRegisterOptions, postRegisterVerify } from "../api/client";
 import type { ApiClientError, RegisterOptionsResponse } from "../api/client";
 import { useSession } from "../auth/sessionContext";
+import { DriveIcon } from "../components/icons";
 
 /**
  * Register page: claims an invite token from the URL and creates the
@@ -80,97 +81,106 @@ export function Register() {
   }
 
   return (
-    <section
-      className="card bg-base-100 w-full max-w-md shadow-xl"
-      aria-label="Register with invite"
-    >
-      <div className="card-body">
-        <h1 className="card-title justify-center text-2xl">
-          Register your passkey
-        </h1>
-        <p className="text-sm opacity-70 text-center">
-          You have been invited to JiveDrive
-        </p>
-
-        {loading && (
-          <p className="alert alert-info" role="status">
-            Checking your invite...
+    <div className="hero w-full">
+      <div className="hero-content w-full max-w-md flex-col items-center gap-6 py-4">
+        <div className="flex flex-col items-center gap-2 text-center">
+          <DriveIcon className="size-12 text-primary" />
+          <h1 className="text-3xl font-bold tracking-tight">JiveDrive</h1>
+          <p className="text-sm opacity-70">
+            You have been invited to a private space.
           </p>
-        )}
-
-        {!token && !loading && !invite && (
-          <>
-            <p className="alert alert-error" role="alert">
-              This link is missing an invite token. Open the full invite link to
-              register.
+        </div>
+        <section
+          className="card bg-base-100 w-full max-w-md shadow-xl"
+          aria-label="Register with invite"
+        >
+          <div className="card-body">
+            <h2 className="card-title justify-center">Register your passkey</h2>
+            <p className="text-sm opacity-70 text-center">
+              You have been invited to JiveDrive
             </p>
-            <Link className="btn btn-outline w-full" to="/">
-              Back to sign in
-            </Link>
-          </>
-        )}
 
-        {!loading && error && !invite && (
-          <>
-            <p className="alert alert-error" role="alert">
-              {error}
-            </p>
-            <Link className="btn btn-outline w-full" to="/">
-              Back to sign in
-            </Link>
-          </>
-        )}
-
-        {!loading && invite && (
-          <>
-            <div className="flex flex-col gap-2">
-              <label className="label" htmlFor="invite-username">
-                <span className="label-text">Your username</span>
-              </label>
-              <input
-                id="invite-username"
-                className="input w-full"
-                type="text"
-                value={invite.username}
-                readOnly
-              />
-              <p className="text-sm opacity-70 italic">
-                Set by the admin who invited you.
+            {loading && (
+              <p className="alert alert-info" role="status">
+                Checking your invite...
               </p>
-            </div>
+            )}
 
-            <div className="flex flex-col gap-2">
-              <span className="label-text font-medium">Storage space</span>
-              <div className="flex flex-wrap gap-2">
-                <span className="badge badge-outline">
-                  Bucket: {invite.bucket}
-                </span>
-                <span className="badge badge-outline">
-                  Prefix: {invite.prefix}
-                </span>
-              </div>
-              <p className="text-sm opacity-70 italic">
-                Pre-set by the admin who invited you.
+            {!token && !loading && !invite && (
+              <>
+                <p className="alert alert-error" role="alert">
+                  This link is missing an invite token. Open the full invite
+                  link to register.
+                </p>
+                <Link className="btn btn-outline w-full" to="/">
+                  Back to sign in
+                </Link>
+              </>
+            )}
+
+            {!loading && error && !invite && (
+              <>
+                <p className="alert alert-error" role="alert">
+                  {error}
+                </p>
+                <Link className="btn btn-outline w-full" to="/">
+                  Back to sign in
+                </Link>
+              </>
+            )}
+
+            {!loading && invite && (
+              <>
+                <div className="flex flex-col gap-2">
+                  <label className="label" htmlFor="invite-username">
+                    <span className="label-text">Your username</span>
+                  </label>
+                  <input
+                    id="invite-username"
+                    className="input w-full"
+                    type="text"
+                    value={invite.username}
+                    readOnly
+                  />
+                  <p className="text-sm opacity-70 italic">
+                    Set by the admin who invited you.
+                  </p>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <span className="label-text font-medium">Storage space</span>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="badge badge-outline">
+                      Bucket: {invite.bucket}
+                    </span>
+                    <span className="badge badge-outline">
+                      Prefix: {invite.prefix}
+                    </span>
+                  </div>
+                  <p className="text-sm opacity-70 italic">
+                    Pre-set by the admin who invited you.
+                  </p>
+                </div>
+
+                <button
+                  className="btn btn-primary w-full"
+                  type="button"
+                  onClick={() => void handleCreatePasskey()}
+                  disabled={busy}
+                >
+                  {busy ? "Creating passkey..." : "Create passkey"}
+                </button>
+              </>
+            )}
+
+            {error && invite && (
+              <p className="alert alert-error" role="alert">
+                {error}
               </p>
-            </div>
-
-            <button
-              className="btn btn-primary w-full"
-              type="button"
-              onClick={() => void handleCreatePasskey()}
-              disabled={busy}
-            >
-              {busy ? "Creating passkey..." : "Create passkey"}
-            </button>
-          </>
-        )}
-
-        {error && invite && (
-          <p className="alert alert-error" role="alert">
-            {error}
-          </p>
-        )}
+            )}
+          </div>
+        </section>
       </div>
-    </section>
+    </div>
   );
 }
