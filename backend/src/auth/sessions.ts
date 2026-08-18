@@ -4,6 +4,7 @@ import {
   createSession as createSessionRecord,
   deleteSessionById,
   getSessionByToken,
+  updateSessionLastUsed,
 } from "../db/repository";
 import type { Session } from "../db/repository";
 
@@ -77,18 +78,23 @@ export function createSession(
 }
 
 /**
- * Validate a session token: it must exist and not be expired.
- * Expired sessions are deleted from the database.
+ * Validate a session token: it must exist, not be absolute-expired and not
+ * be idle-expired (FR-011). A session is idle-expired when its last use is
+ * more than {@link idleDays} days before the reference time, regardless of
+ * the absolute TTL. Invalid sessions are deleted lazily. Valid validation
+ * rolls the idle clock by touching `lastUsedAt` (rolling window).
  *
  * @param db - database connection
  * @param token - session token from the cookie
  * @param now - reference time, defaults to now
+ * @param idleDays - idle timeout in days, defaults to 7
  * @returns the session when valid, otherwise null
  */
 export function validateSession(
   db: Database,
   token: string,
   now?: Date,
+  idleDays = 7,
 ): Session | null {
   const session = getSessionByToken(db, token);
   if (!session) return null;
@@ -97,7 +103,42 @@ export function validateSession(
     deleteSessionById(db, session.id);
     return null;
   }
+  const idleMs = idleDays * 24 * 60 * 60 * 1000;
+  if (Date.parse(session.lastUsedAt) + idleMs <= reference) {
+    deleteSessionById(db, session.id);
+    return null;
+  }
+  // Rolling idle clock: valid validation resets the inactivity window.
+  updateSessionLastUsed(db, session.id, new Date(reference).toISOString());
   return session;
+}
+
+/**
+ * Delete every session that is absolute-expired (past `expiresAt`) or
+ * idle-expired (last used more than {@link idleDays} days before the
+ * reference time). Runs at startup to bound the sessions table (FR-011);
+ * timestamps are ISO 8601 UTC so string comparison is correct.
+ *
+ * @param db - database connection
+ * @param now - reference time, defaults to now
+ * @param idleDays - idle timeout in days, defaults to 7
+ * @returns the number of deleted session rows
+ */
+export function sweepExpiredSessions(
+  db: Database,
+  now?: Date,
+  idleDays = 7,
+): number {
+  const reference = (now ?? new Date()).getTime();
+  const result = db
+    .query(
+      "DELETE FROM sessions WHERE expiresAt <= ? OR lastUsedAt <= ?",
+    )
+    .run(
+      new Date(reference).toISOString(),
+      new Date(reference - idleDays * 24 * 60 * 60 * 1000).toISOString(),
+    );
+  return result.changes;
 }
 
 /**

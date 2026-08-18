@@ -17,6 +17,7 @@ import {
 } from "../src/db/repository";
 import { createApp } from "../src/server";
 import type { ServerEnv } from "../src/server";
+import { createSession } from "../src/auth/sessions";
 import type { AppConfig } from "../src/config";
 import {
   makeAuthenticationResponse,
@@ -1453,6 +1454,88 @@ describe("session persistence across requests", () => {
     const cookie = cookieFrom(loginRes);
     const token = cookie.split("=")[1] ?? "";
     expect(getSessionByToken(db, token)?.userId).toBe(user.id);
+  });
+});
+
+describe("session idle expiry through routes (US5)", () => {
+  /** Backdate a session's idle clock to 8 days ago (past the 7-day window). */
+  function backdateLastUsed(db: Database, token: string): void {
+    const idleCutoff = new Date(
+      Date.now() - 8 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    db.query("UPDATE sessions SET lastUsedAt = ? WHERE token = ?").run(
+      idleCutoff,
+      token,
+    );
+  }
+
+  it("returns user: null and purges an idle-expired session on /auth/me (T050)", async () => {
+    const { app, db } = createAppWithDb();
+    const user = createUser(db, {
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    });
+    const { token } = createSession(db, user.id);
+    backdateLastUsed(db, token);
+    const cookie = `jivedrive_session=${token}`;
+
+    const res = await app.request("/auth/me", { headers: { cookie } });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ user: null });
+    // The lazy purge removed the idle-expired row.
+    expect(getSessionByToken(db, token)).toBeNull();
+  });
+
+  it("returns 401 on a protected route for an idle-expired session (T050)", async () => {
+    const { app, db } = createAppWithDb();
+    const user = createUser(db, {
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    });
+    const { token } = createSession(db, user.id);
+    backdateLastUsed(db, token);
+    const cookie = `jivedrive_session=${token}`;
+
+    // /api/files is guarded by requireUser: the idle-expired session must
+    // be refused before any S3 call.
+    const res = await app.request("/api/files", { headers: { cookie } });
+
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ code: "unauthorized" });
+    expect(getSessionByToken(db, token)).toBeNull();
+  });
+
+  it("keeps a fresh session valid on /auth/me and rolls lastUsedAt forward (T050)", async () => {
+    const { app, db } = createAppWithDb();
+    const user = createUser(db, {
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    });
+    const { token } = createSession(db, user.id);
+    // Simulate a validation one hour ago — inside the window, so the
+    // session is still valid.
+    const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    db.query("UPDATE sessions SET lastUsedAt = ? WHERE token = ?").run(
+      hourAgo,
+      token,
+    );
+    const cookie = `jivedrive_session=${token}`;
+
+    const res = await app.request("/auth/me", { headers: { cookie } });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { user: { username: string } };
+    expect(body.user.username).toBe("alice");
+    // The rolling touch advanced the idle clock past the hour-ago value.
+    const stored = getSessionByToken(db, token);
+    expect(stored?.lastUsedAt).not.toBe(hourAgo);
+    expect(Date.parse(stored?.lastUsedAt ?? "")).toBeGreaterThan(
+      Date.parse(hourAgo),
+    );
   });
 });
 
