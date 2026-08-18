@@ -26,3 +26,20 @@ jivedrive:
     JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: gc-john
     JIVEDRIVE_BOOTSTRAP_ADMIN_PREFIX: drive/
     JIVEDRIVE_BOOTSTRAP_ADMIN_IS_ADMIN: "true"
+
+  # External access at drive.grimes.id.au; TLS terminates at the nginx
+  # ingress via cert-manager (letsencrypt-dns01 ClusterIssuer).
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-dns01
+    hosts:
+      - host: drive.grimes.id.au
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: jivedrive-tls
+        hosts:
+          - drive.grimes.id.au

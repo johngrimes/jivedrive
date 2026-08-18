@@ -88,6 +88,24 @@ jivedrive:
     type: "ClusterIP"
     port: 80
 
+  # Ingress for external access. Disabled by default; enable and set the
+  # host/TLS per environment (see values-ci.yaml).
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    # hosts:
+    #   - host: drive.grimes.id.au
+    #     paths:
+    #       - path: /
+    #         pathType: Prefix
+    # tls:
+    #   - secretName: jivedrive-tls
+    #     hosts:
+    #       - drive.grimes.id.au
+    hosts: []
+    tls: []
+
   # Persistent storage for the SQLite database. Disabled by default: the
   # chart then mounts an emptyDir at mountPath, so the database is
   # ephemeral and lost when the pod is recreated. Enable for production.
