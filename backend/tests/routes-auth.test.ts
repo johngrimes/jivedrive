@@ -74,10 +74,24 @@ const config: AppConfig = {
   webauthn: { rpId, origin },
 };
 
+/** Options for {@link createAppWithDb}. */
+interface CreateAppWithDbOptions {
+  /** Config overrides merged over the defaults (shallow). */
+  config?: Partial<AppConfig>;
+  /** Injected rate-limit clock; defaults to Date.now. */
+  rateLimitNow?: () => number;
+}
+
 /** Create an app over a fresh in-memory database. */
-function createAppWithDb(): { app: Hono<ServerEnv>; db: Database } {
+function createAppWithDb(
+  options: CreateAppWithDbOptions = {},
+): { app: Hono<ServerEnv>; db: Database } {
   const db = createDb();
-  const app = createApp({ config, db });
+  const app = createApp({
+    config: { ...config, ...options.config },
+    db,
+    rateLimitNow: options.rateLimitNow,
+  });
   return { app, db };
 }
 
@@ -1439,5 +1453,98 @@ describe("session persistence across requests", () => {
     const cookie = cookieFrom(loginRes);
     const token = cookie.split("=")[1] ?? "";
     expect(getSessionByToken(db, token)?.userId).toBe(user.id);
+  });
+});
+
+describe("rate limiting on /auth/* (US3)", () => {
+  it("returns 429 with a Retry-After header once the auth bucket is exhausted (T035)", async () => {
+    const { app } = createAppWithDb();
+    let last: Response | null = null;
+    for (let i = 0; i < 11; i++) {
+      last = await app.request("/auth/login/options", { method: "POST" });
+    }
+    // Default limits: auth 20/min, burst 10 → the 11th request is refused.
+    expect(last?.status).toBe(429);
+    expect(await last?.json()).toEqual({
+      error: "Too many requests, try again later",
+      code: "rate_limited",
+    });
+    // Fully exhausted bucket: (1 - 0) / (20/60) = 3s, min 1.
+    expect(last?.headers.get("retry-after")).toBe("3");
+    // A 429 never reaches a route handler, so no cookie is ever set.
+    expect(last?.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("consumes no challenge state when login/verify is rate limited (T037)", async () => {
+    let clock = 0;
+    const { app, db } = createAppWithDb({ rateLimitNow: () => clock });
+    const keyPair = makeKeyPair();
+    const credentialId = new Uint8Array(16).fill(0x77);
+    const credentialIdB64 = Buffer.from(credentialId).toString("base64url");
+    const user = createUser(db, {
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    });
+    createCredential(db, {
+      id: credentialIdB64,
+      userId: user.id,
+      publicKey: Buffer.from(keyPair.cosePublicKey).toString("base64url"),
+      counter: 0,
+      transports: ["internal"],
+    });
+
+    // (1) Obtain a login challenge for the ceremony.
+    const optionsRes = await app.request("/auth/login/options", {
+      method: "POST",
+    });
+    expect(optionsRes.status).toBe(200);
+    const body = (await optionsRes.json()) as {
+      requestId: string;
+      options: { challenge: string };
+    };
+    const { requestId, options } = body;
+
+    // (2) Exhaust the auth bucket (burst 10) with rapid requests.
+    let saw429 = false;
+    for (let i = 0; i < 20 && !saw429; i++) {
+      const res = await app.request("/auth/login/options", { method: "POST" });
+      saw429 = res.status === 429;
+    }
+    expect(saw429).toBe(true);
+
+    // (3) A rate-limited verify consumes no challenge and sets no cookie:
+    // the middleware denies before the route handler runs.
+    const makeAssertion = () =>
+      makeAuthenticationResponse({
+        challenge: options.challenge,
+        origin,
+        rpId,
+        keyPair,
+        credentialId,
+        counter: 3,
+        userHandle: Buffer.from(user.id).toString("base64url"),
+      });
+    const blocked = await app.request("/auth/login/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requestId, credential: makeAssertion() }),
+    });
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get("set-cookie")).toBeNull();
+
+    // (4) After the refill window (20/min → full 10-token burst in 30s) the
+    // challenge is still live: the same ceremony completes and lands a
+    // session, proving the 429 corrupted nothing.
+    clock += 30_000;
+    const retry = await app.request("/auth/login/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requestId, credential: makeAssertion() }),
+    });
+    expect(retry.status).toBe(200);
+    const retryBody = (await retry.json()) as { user: { username: string } };
+    expect(retryBody.user.username).toBe("alice");
+    expect(retry.headers.get("set-cookie")).not.toBeNull();
   });
 });
