@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { SignOutIcon, ThreeBarsIcon } from "@primer/octicons-react";
+import { PersonIcon, ThreeBarsIcon } from "@primer/octicons-react";
 import { useSession } from "../auth/sessionContext";
 import { Sidebar } from "./Sidebar";
 
@@ -61,47 +61,32 @@ export function AppShell() {
         />
       )}
       <div className="drawer-content flex min-h-screen flex-col">
-        <header className="navbar bg-base-200 border-b border-base-300">
-          <div className="navbar-start gap-1">
-            {user && (
+        <header className="navbar bg-base-200 border-b border-base-300 gap-2">
+          <Link to="/" className="btn btn-ghost text-xl font-bold">
+            JiveDrive
+          </Link>
+          <div className="grow"></div>
+          {loading ? (
+            <span className="text-sm opacity-70" role="status">
+              Checking session...
+            </span>
+          ) : user ? (
+            <>
               <button
-                className="btn btn-ghost lg:hidden"
+                className="btn shrink-0"
                 type="button"
-                aria-label="Open menu"
-                onClick={() => setDrawerOpen(true)}
+                title="Click to sign out"
+                onClick={() => void handleSignOut()}
               >
-                <ThreeBarsIcon size={24} />
+                <PersonIcon size={16} />
+                {user.username}
               </button>
-            )}
-            <Link to="/" className="btn btn-ghost text-xl font-bold">
-              JiveDrive
+            </>
+          ) : (
+            <Link className="btn" to="/">
+              Sign in
             </Link>
-          </div>
-          <div className="navbar-end gap-2">
-            {loading ? (
-              <span className="text-sm opacity-70" role="status">
-                Checking session...
-              </span>
-            ) : user ? (
-              <>
-                <span className="max-w-36 truncate" title={user.username}>
-                  Signed in as {user.username}
-                </span>
-                <button
-                  className="btn shrink-0"
-                  type="button"
-                  onClick={() => void handleSignOut()}
-                >
-                  <SignOutIcon size={16} />
-                  Sign out
-                </button>
-              </>
-            ) : (
-              <Link className="btn" to="/">
-                Sign in
-              </Link>
-            )}
-          </div>
+          )}
         </header>
         <main className="flex-1 p-4 sm:p-8 flex items-start justify-center">
           <Outlet />
