@@ -12,7 +12,11 @@ import { migrateFromDir, openDatabase } from "./db/migrate";
 import { bootstrapAdmin } from "./db/bootstrap";
 import { getUserById } from "./db/repository";
 import type { User } from "./db/repository";
-import { SESSION_COOKIE_NAME, validateSession } from "./auth/sessions";
+import {
+  SESSION_COOKIE_NAME,
+  sweepExpiredSessions,
+  validateSession,
+} from "./auth/sessions";
 import { createChallengeStore } from "./auth/webauthn";
 import { authRoutes } from "./routes/auth";
 import { filesRoutes } from "./routes/files";
@@ -114,7 +118,7 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
     "/api/files",
     filesRoutes({
       s3Client: deps.s3Client ?? createS3Client(deps.config.s3),
-      requireUser: requireUser(deps.db),
+      requireUser: requireUser(deps.db, deps.config.sessionIdleDays),
       listPageSize: deps.listPageSize,
     }),
   );
@@ -127,7 +131,7 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
     adminRoutes({
       config: deps.config,
       db: deps.db,
-      requireUser: requireUser(deps.db),
+      requireUser: requireUser(deps.db, deps.config.sessionIdleDays),
     }),
   );
 
@@ -172,18 +176,24 @@ export function errorHandler(): ErrorHandler<ServerEnv> {
 
 /**
  * Middleware that requires a valid session cookie and stores the
- * signed-in user on the context.
+ * signed-in user on the context. Sessions are validated with the idle
+ * timeout (FR-011): an absolute- or idle-expired session is rejected and
+ * lazily purged.
  *
  * @param db - database connection
+ * @param idleDays - session idle timeout in days, defaults to 7
  * @returns a Hono middleware handler
  */
-export function requireUser(db: Database): MiddlewareHandler<ServerEnv> {
+export function requireUser(
+  db: Database,
+  idleDays = 7,
+): MiddlewareHandler<ServerEnv> {
   return async (c, next) => {
     const token = getCookie(c, SESSION_COOKIE_NAME);
     if (!token) {
       return c.json({ error: "Not signed in", code: "unauthorized" }, 401);
     }
-    const session = validateSession(db, token);
+    const session = validateSession(db, token, undefined, idleDays);
     if (!session) {
       return c.json(
         { error: "Session expired or invalid", code: "unauthorized" },
@@ -218,6 +228,9 @@ export function main(): void {
   const db = openDatabase(config.dbPath);
   migrateFromDir(db, config.migrationsDir);
   bootstrapAdmin(db, config.bootstrapAdmin);
+  // FR-011: purge absolute- and idle-expired sessions in a sweep at
+  // startup so dead rows do not accumulate between lazy purges.
+  sweepExpiredSessions(db, undefined, config.sessionIdleDays);
   const app = createApp({ config, db });
   Bun.serve({ port: config.port, fetch: app.fetch });
   console.log(`JiveDrive listening on http://localhost:${config.port}`);

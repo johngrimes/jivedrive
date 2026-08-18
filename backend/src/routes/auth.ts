@@ -655,7 +655,7 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
   app.get("/me", (c) => {
     const token = getCookie(c, SESSION_COOKIE_NAME);
     if (!token) return c.json({ user: null }, 200);
-    const session = validateSession(db, token);
+    const session = validateSession(db, token, undefined, config.sessionIdleDays);
     if (!session) return c.json({ user: null }, 200);
     const user = getUserById(db, session.userId);
     return c.json({ user: user ? toApiUser(user) : null }, 200);
