@@ -174,7 +174,7 @@ export function UploadControl({
 
   return (
     <div className="flex min-w-0 max-w-full flex-col items-start gap-2">
-      <label className="btn cursor-pointer border-2 border-dashed rounded-lg">
+      <label className="btn btn-primary cursor-pointer border-2 border-dashed rounded-lg">
         <UploadIcon aria-hidden="true" />
         Upload file
         <input
