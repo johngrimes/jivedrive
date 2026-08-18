@@ -1097,28 +1097,21 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
         `card not centred at ${viewport.width}px`,
       ).toBeLessThan(2);
 
-      // Every control is reachable: the primary username-less button and
-      // the "First time?" hint are visible, the Username field stays
-      // hidden until the hint is clicked, and the fallback form opens
-      // with the Create passkey button — no horizontal scroll. The
-      // ceremony is not triggered here: this context has no credential,
-      // so the empty-passkey escape hatch is asserted via the hint's
-      // presence (FR-011, edge case "Username-less prompt with no
-      // passkeys").
+      // Every control is reachable: the token-gated sign-in page (US1,
+      // FR-001/FR-002) offers exactly two paths — the primary username-less
+      // passkey button and the invite-link registration path. There is no
+      // username input and no "First time?" fallback form anymore. The
+      // ceremony is not triggered here: this context has no credential.
       await expect(
         page.getByRole("button", { name: "Sign in with passkey" }),
       ).toBeVisible();
       await expect(
-        page.getByRole("link", { name: "First time? Use your username" }),
+        page.getByRole("link", { name: "Register with an invite link" }),
       ).toBeVisible();
-      await expect(page.getByLabel("Username")).toBeHidden();
-      await page
-        .getByRole("link", { name: "First time? Use your username" })
-        .click();
-      await expect(page.getByLabel("Username")).toBeVisible();
+      await expect(page.getByLabel("Username")).toHaveCount(0);
       await expect(
-        page.getByRole("button", { name: "Create passkey" }),
-      ).toBeVisible();
+        page.getByRole("link", { name: "First time? Use your username" }),
+      ).toHaveCount(0);
       await expectNoHorizontalOverflow(page);
     }
   });

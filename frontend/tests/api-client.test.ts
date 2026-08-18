@@ -174,7 +174,7 @@ describe("postLoginVerify", () => {
 });
 
 describe("postRegisterOptions", () => {
-  it("posts the invite token and returns invite details", async () => {
+  it("posts the token and returns registration details (T015)", async () => {
     const body = {
       options: { challenge: "abc" },
       username: "alice",
@@ -184,7 +184,7 @@ describe("postRegisterOptions", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
     vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
 
-    const result = await postRegisterOptions({ token: "token-1" });
+    const result = await postRegisterOptions("token-1");
 
     expect(result).toEqual(body);
     expect(fetchMock).toHaveBeenCalledWith(
@@ -195,30 +195,10 @@ describe("postRegisterOptions", () => {
       }),
     );
   });
-
-  it("posts only the username for the fallback flow (T013)", async () => {
-    const body = {
-      options: { challenge: "abc" },
-      username: "alice",
-    };
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
-    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
-
-    const result = await postRegisterOptions({ username: "alice" });
-
-    expect(result).toEqual(body);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/auth/register/options",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ username: "alice" }),
-      }),
-    );
-  });
 });
 
 describe("postRegisterVerify", () => {
-  it("posts token and credential for invite registration", async () => {
+  it("posts token and credential (T015)", async () => {
     const credential = { id: "cred" };
     const fetchMock = vi
       .fn()
@@ -240,27 +220,6 @@ describe("postRegisterVerify", () => {
     );
   });
 
-  it("posts username and credential for first-passkey registration", async () => {
-    const credential = { id: "cred" };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(jsonResponse({ user: { username: "admin" } }));
-    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
-
-    const result = await postRegisterVerify({
-      username: "admin",
-      credential: credential as never,
-    });
-
-    expect(result.user.username).toBe("admin");
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/auth/register/verify",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ username: "admin", credential }),
-      }),
-    );
-  });
 });
 
 describe("postLogout", () => {

@@ -214,8 +214,9 @@ const config = loadConfig(env);
 const db = openDatabase(config.dbPath);
 migrateFromDir(db, config.migrationsDir);
 
-// Seed a user with no passkey: the first sign-in uses the username
-// fallback form to register the first (discoverable) passkey.
+// Seed a user with no passkey: the first enrollment goes through a seeded
+// invite (invite-alice below) that attaches the first (discoverable)
+// passkey to this existing account (US1 attach semantics).
 const alice = createUser(db, {
   username: "alice",
   bucket: "jivedrive-prod",
@@ -249,11 +250,11 @@ const frank = createUser(db, {
 createSession(db, frank.id, { token: "frank-session" });
 
 // A dedicated user for the admin passkey-reset e2e flow (US4): the spec
-// bootstraps her first passkey via the fallback form, the admin resets her
-// passkeys from the Admin users page, and she re-enrolls via the fallback
-// form. No session is seeded: every sign-in in that spec goes through the
-// fallback form. No other spec depends on her, so the reset never affects
-// another flow.
+// enrolls her first passkey via a seeded invite (invite-kate), the admin
+// resets her passkeys from the Admin users page, and she re-enrolls via a
+// second seeded invite (invite-kate-2). No session is seeded: every
+// sign-in in that spec goes through the invite-link enrollment. No other
+// spec depends on her, so the reset never affects another flow.
 createUser(db, {
   username: "kate",
   bucket: "jivedrive-prod",
@@ -327,6 +328,40 @@ createInvite(db, {
   issuedByUserId: admin.id,
   expiresAt: future,
 });
+// Invites for the US1 enrollment flows: the sign-in page has no username
+// fallback form, so first-passkey enrollment goes through an invite link.
+// invite-alice attaches alice's first passkey to her existing account
+// (auth.spec); invite-kate and invite-kate-2 cover kate's first enrollment
+// and her re-enrollment after the admin passkey reset (admin.spec). The
+// -r1/-r2 copies exist so CI retries (Playwright retries: 2) still find
+// fresh pending invites after a failed attempt claimed the originals: the
+// e2e server keeps one in-memory database for the whole run.
+for (const suffix of ["", "-r1", "-r2"]) {
+  createInvite(db, {
+    token: `invite-alice${suffix}`,
+    username: "alice",
+    bucket: "jivedrive-prod",
+    prefix: "users/alice/",
+    issuedByUserId: admin.id,
+    expiresAt: future,
+  });
+  createInvite(db, {
+    token: `invite-kate${suffix}`,
+    username: "kate",
+    bucket: "jivedrive-prod",
+    prefix: "users/kate/",
+    issuedByUserId: admin.id,
+    expiresAt: future,
+  });
+  createInvite(db, {
+    token: `invite-kate-2${suffix}`,
+    username: "kate",
+    bucket: "jivedrive-prod",
+    prefix: "users/kate/",
+    issuedByUserId: admin.id,
+    expiresAt: future,
+  });
+}
 
 // Alice's space: three subfolders (docs, photos, empty) and seven root
 // files, more than one page of the e2e page size (5).

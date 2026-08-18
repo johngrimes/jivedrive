@@ -28,17 +28,21 @@ export async function enableVirtualAuthenticator(
 }
 
 /**
- * Reveal the username fallback form and register the first passkey for an
- * account with no usable passkey (seeded users, bootstrap admin).
+ * Enroll the first passkey via an invite link: open the register page with
+ * the invite token and complete the registration ceremony. The passkey is
+ * created on the account the invite targets (a new user, or an existing
+ * account with matching scope when the invite attaches); the ceremony
+ * signs the user in (US1, FR-001/FR-002). The username fallback form no
+ * longer exists, so this is the only first-passkey enrollment path.
  *
  * @param page - the page
- * @param username - the username to bootstrap a passkey for
+ * @param token - the invite token from the invite link
  */
-export async function signIn(page: Page, username: string): Promise<void> {
-  await page
-    .getByRole("link", { name: "First time? Use your username" })
-    .click();
-  await page.getByLabel("Username").fill(username);
+export async function enrollViaInvite(
+  page: Page,
+  token: string,
+): Promise<void> {
+  await page.goto(`/register?token=${token}`);
   await page.getByRole("button", { name: "Create passkey" }).click();
 }
 
