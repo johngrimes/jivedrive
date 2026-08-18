@@ -33,6 +33,17 @@ spec:
         - name: jivedrive
           image: "{{ .Values.jivedrive.image.repository }}:{{ .Values.jivedrive.image.tag }}"
           imagePullPolicy: {{ .Values.jivedrive.image.pullPolicy | quote }}
+          securityContext:
+            # Hardened container: the app writes only to the SQLite database
+            # on /data, so the rootfs can be read-only. /tmp stays writable
+            # via an emptyDir (see volumes below) for runtime scratch files.
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
           ports:
             # Must match jivedrive.config.JIVEDRIVE_PORT (default 3000).
             - name: http
@@ -50,6 +61,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: {{ .Values.jivedrive.persistence.mountPath | quote }}
+            - name: tmp
+              mountPath: /tmp
           startupProbe:
             httpGet:
               path: /healthcheck
@@ -80,6 +93,10 @@ spec:
         - name: data
           emptyDir: {}
         {{- end }}
+        # Writable scratch space for the read-only rootfs (e.g. Bun temp
+        # files); the app's only persistent write target stays /data.
+        - name: tmp
+          emptyDir: {}
       nodeSelector: {{ toJson .Values.jivedrive.nodeSelector }}
       tolerations: {{ toJson .Values.jivedrive.tolerations }}
       affinity: {{ toJson .Values.jivedrive.affinity }}
