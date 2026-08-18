@@ -206,7 +206,7 @@ export function FileListing({
         {folders.map((folder) => (
           <li className="list-row" key={`folder:${folder}`}>
             <a
-              className="link min-h-11 inline-flex items-center gap-3 font-semibold no-underline"
+              className="link inline-flex items-center gap-3 font-semibold no-underline"
               href="#"
               onClick={(event) => {
                 event.preventDefault();
@@ -220,7 +220,7 @@ export function FileListing({
         ))}
         {files.map((file) => (
           <li className="list-row" key={file.key}>
-            <div className="min-h-11 flex items-center gap-3">
+            <div className="flex items-center gap-3">
               <FileIcon aria-hidden="true" className="shrink-0" />
               <span className="min-w-0">{file.name}</span>
             </div>
