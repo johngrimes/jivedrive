@@ -105,7 +105,7 @@ export function AdminUsersPage() {
 
   // Action state.
   const [generatedLink, setGeneratedLink] = useState<GeneratedLink | null>(
-    null,
+    null
   );
   const [copied, setCopied] = useState(false);
   const [removal, setRemoval] = useState<PendingRemoval | null>(null);
@@ -316,10 +316,8 @@ export function AdminUsersPage() {
                 onSubmit={(e) => void handleCreate(e)}
               >
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
-                  <div className="flex-1">
-                    <label className="label" htmlFor="invite-username">
-                      <span className="label-text">Username</span>
-                    </label>
+                  <label className="label flex-col items-start" htmlFor="invite-username">
+                    <span className="label-text">Username</span>
                     <input
                       id="invite-username"
                       className="input w-full"
@@ -328,28 +326,9 @@ export function AdminUsersPage() {
                       onChange={(event) => setUsername(event.target.value)}
                       autoComplete="off"
                     />
-                  </div>
-                  <div className="flex-1">
-                    <label
-                      className="label min-h-11 cursor-pointer gap-2"
-                      htmlFor="invite-admin"
-                    >
-                      <input
-                        id="invite-admin"
-                        className="checkbox checkbox-primary"
-                        type="checkbox"
-                        checked={isAdmin}
-                        onChange={(event) => setIsAdmin(event.target.checked)}
-                      />
-                      <span className="label-text">Admin?</span>
-                    </label>
-                  </div>
-                </div>
-                <div className="flex flex-col gap-4 sm:flex-row">
-                  <div className="flex-1">
-                    <label className="label" htmlFor="invite-bucket">
-                      <span className="label-text">Bucket</span>
-                    </label>
+                  </label>
+                  <label className="label flex-col items-start" htmlFor="invite-bucket">
+                    <span className="label-text">Bucket</span>
                     <input
                       id="invite-bucket"
                       className="input w-full"
@@ -358,11 +337,9 @@ export function AdminUsersPage() {
                       onChange={(event) => setBucket(event.target.value)}
                       autoComplete="off"
                     />
-                  </div>
-                  <div className="flex-1">
-                    <label className="label" htmlFor="invite-prefix">
-                      <span className="label-text">Prefix</span>
-                    </label>
+                  </label>
+                  <label className="label flex-col items-start" htmlFor="invite-prefix">
+                    <span className="label-text">Prefix</span>
                     <input
                       id="invite-prefix"
                       className="input w-full"
@@ -372,10 +349,23 @@ export function AdminUsersPage() {
                       placeholder="users/alice/"
                       autoComplete="off"
                     />
-                  </div>
+                  </label>
+                  <label
+                    className="label min-h-11 cursor-pointer gap-2"
+                    htmlFor="invite-admin"
+                  >
+                    <input
+                      id="invite-admin"
+                      className="checkbox checkbox-primary"
+                      type="checkbox"
+                      checked={isAdmin}
+                      onChange={(event) => setIsAdmin(event.target.checked)}
+                    />
+                    <span className="label-text">Admin?</span>
+                  </label>
                 </div>
                 <button
-                  className="btn btn-primary"
+                  className="btn btn-primary max-w-3xs"
                   type="submit"
                   disabled={creating}
                 >
@@ -425,7 +415,7 @@ export function AdminUsersPage() {
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider opacity-60">
             Invites
           </h2>
-          <div className="card bg-base-100 shadow-xl">
+          <div className="card bg-base-100 shadow-xl p-3">
             {loading ? (
               <div className="card-body">
                 <p
@@ -538,7 +528,7 @@ export function AdminUsersPage() {
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider opacity-60">
             Users
           </h2>
-          <div className="card bg-base-100 shadow-xl">
+          <div className="card bg-base-100 shadow-xl p-3">
             {loading ? (
               <div className="card-body">
                 <p
