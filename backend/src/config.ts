@@ -74,7 +74,8 @@ export interface AppConfig {
   webauthn: WebAuthnConfig;
 }
 
-/** Normalise a storage prefix: no leading slash, exactly one trailing slash. */
+/** Normalise a storage prefix: no leading slash, no ".." segment, exactly
+ * one trailing slash. */
 function normalizePrefix(
   prefix: string | undefined,
   errors: string[],
@@ -84,6 +85,10 @@ function normalizePrefix(
   if (value === "") return "";
   if (value.startsWith("/")) {
     errors.push(`${label} must not have a leading "/"`);
+    return "";
+  }
+  if (value.split("/").includes("..")) {
+    errors.push(`${label} must not contain ".." segments`);
     return "";
   }
   return value.replace(/\/+$/, "") + "/";

@@ -313,6 +313,29 @@ describe("loadConfig", () => {
     ).toThrow(/JIVEDRIVE_BOOTSTRAP_ADMIN_PREFIX/);
   });
 
+  it("rejects a bootstrap prefix containing a .. segment (T053)", () => {
+    expect(() =>
+      loadConfig({
+        ...minimalEnv,
+        JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin",
+        JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: "jivedrive-prod",
+        JIVEDRIVE_BOOTSTRAP_ADMIN_PREFIX: "users/../bob/",
+        JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN: "0123456789abcdef",
+      }),
+    ).toThrow(/JIVEDRIVE_BOOTSTRAP_ADMIN_PREFIX/);
+  });
+
+  it("accepts a bootstrap prefix with two dots inside a segment (T053)", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin",
+      JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: "jivedrive-prod",
+      JIVEDRIVE_BOOTSTRAP_ADMIN_PREFIX: "users/a..b",
+      JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN: "0123456789abcdef",
+    });
+    expect(config.bootstrapAdmin.prefix).toBe("users/a..b/");
+  });
+
   it("requires WebAuthn RP ID and origin in production", () => {
     expect(() => loadConfig({ ...minimalEnv, NODE_ENV: "production" })).toThrow(
       /JIVEDRIVE_WEBAUTHN_RP_ID/,

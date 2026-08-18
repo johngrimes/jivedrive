@@ -212,18 +212,23 @@ export function validateBucket(bucket: string): void {
 }
 
 /**
- * Normalise a storage prefix: no leading slash, exactly one trailing slash,
- * empty string for the bucket root.
+ * Normalise a storage prefix: no leading slash, no ".." segment, exactly
+ * one trailing slash, empty string for the bucket root.
  *
  * @param prefix - raw prefix
  * @returns the normalised prefix
- * @throws {Error} when the prefix starts with "/"
+ * @throws {Error} when the prefix starts with "/" or contains a ".." segment
  */
 export function normalizePrefix(prefix: string | null | undefined): string {
   const value = prefix ?? "";
   if (value === "") return "";
   if (value.startsWith("/")) {
     throw new Error(`Invalid prefix "${value}": must not have a leading "/"`);
+  }
+  if (value.split("/").includes("..")) {
+    throw new Error(
+      `Invalid prefix "${value}": must not contain ".." segments`,
+    );
   }
   return value.replace(/\/+$/, "") + "/";
 }
