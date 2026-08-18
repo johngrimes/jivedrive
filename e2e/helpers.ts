@@ -39,7 +39,9 @@ export async function signIn(page: Page, username: string): Promise<void> {
 }
 
 /**
- * Assert that the persistent header shows the signed-in user.
+ * Assert that the header shows the signed-in user. The username is the
+ * sign-out button's label (the header redesign made the button itself the
+ * sign-in state indicator).
  *
  * @param page - the page
  * @param username - the expected username
@@ -49,21 +51,25 @@ export async function expectSignedInAs(
   username: string,
 ): Promise<void> {
   await expect(
-    page.getByText(`Signed in as ${username}`, { exact: true }),
+    page.getByRole("button", { name: username, exact: true }),
   ).toBeVisible();
 }
 
 /**
- * Sign out via the header button and wait for the sign-in state.
+ * Sign out via the header button (labelled with the username) and wait for
+ * the sign-in state.
  *
  * @param page - the page
+ * @param username - the signed-in username shown on the sign-out button
  */
-export async function signOut(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Sign out" }).click();
+export async function signOut(page: Page, username: string): Promise<void> {
+  await page.getByRole("button", { name: username, exact: true }).click();
   // The header flips back to the signed-out state: the "Sign in" link is
-  // visible and the "Sign out" button is gone.
+  // visible and the username button is gone.
   await expect(page.getByRole("link", { name: "Sign in" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: username, exact: true }),
+  ).toHaveCount(0);
 }
 
 /**

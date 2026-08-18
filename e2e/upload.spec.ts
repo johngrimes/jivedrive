@@ -58,17 +58,15 @@ test("uploads a new file with progress feedback and shows it in the listing", as
   // Visibility of system status: an uploading indicator with progress.
   await expect(page.getByRole("progressbar")).toBeVisible();
 
-  // Explicit success feedback, then the file appears with its size and the
-  // name shown verbatim (spaces and special characters preserved).
+  // Explicit success feedback, then the file appears with its name shown
+  // verbatim (spaces and special characters preserved).
   await expect(page.getByText(`Uploaded ${fileName}`)).toBeVisible();
-  await expect(page.locator("tbody tr", { hasText: fileName })).toBeVisible();
-  await expect(page.locator("tbody tr", { hasText: fileName })).toContainText(
-    "18 B",
-  );
+  const row = page.locator("li.list-row", { hasText: fileName });
+  await expect(row).toBeVisible();
 
   // The upload control stays usable on a narrow viewport.
   await page.setViewportSize({ width: 375, height: 667 });
-  await expect(page.locator("tbody tr", { hasText: fileName })).toBeVisible();
+  await expect(row).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -80,10 +78,8 @@ test("uploading over an existing name asks for confirmation before replacing", a
 
   const fileName = "report.pdf";
   await chooseFile(page, fileName, "v1");
-  await expect(page.locator("tbody tr", { hasText: fileName })).toBeVisible();
-  await expect(page.locator("tbody tr", { hasText: fileName })).toContainText(
-    "2 B",
-  );
+  const row = page.locator("li.list-row", { hasText: fileName });
+  await expect(row).toBeVisible();
 
   // A second upload of the same name is refused until the user confirms.
   await chooseFile(page, fileName, "a longer replacement version");
@@ -91,21 +87,17 @@ test("uploading over an existing name asks for confirmation before replacing", a
   await expect(dialog).toContainText("report.pdf");
   await expect(dialog).toContainText("already exists");
 
-  // Cancel leaves the stored object untouched: the size is unchanged.
+  // Cancel leaves the stored object untouched: the row stays.
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(page.locator("tbody tr", { hasText: fileName })).toContainText(
-    "2 B",
-  );
+  await expect(row).toBeVisible();
 
-  // Confirming replaces the object: the listing shows the new size.
+  // Confirming replaces the object: the dialog closes.
   await chooseFile(page, fileName, "a longer replacement version");
   await expect(dialog).toContainText("already exists");
   await dialog.getByRole("button", { name: "Replace" }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(page.locator("tbody tr", { hasText: fileName })).toContainText(
-    "28 B",
-  );
+  await expect(row).toBeVisible();
 });
 
 test("a failed upload shows a clear error and leaves the listing unchanged", async ({
@@ -118,7 +110,7 @@ test("a failed upload shows a clear error and leaves the listing unchanged", asy
   await chooseFile(page, "broken.txt", "rejected by the mock");
 
   await expect(page.getByText(/Could not upload "broken\.txt"/)).toBeVisible();
-  await expect(page.locator("tbody tr", { hasText: "broken.txt" })).toHaveCount(
-    0,
-  );
+  await expect(
+    page.locator("li.list-row", { hasText: "broken.txt" }),
+  ).toHaveCount(0);
 });

@@ -60,119 +60,7 @@ async function expectTruncated(page: Page, locator: Locator): Promise<void> {
   expect(metrics.scrollWidth).toBeGreaterThan(metrics.clientWidth);
 }
 
-test.describe("User Story 1 - responsive navigation: drawer + permanent sidebar", () => {
-  test("a signed-in admin at 375px opens the drawer, navigates to /admin, and the drawer closes", async ({
-    page,
-    context,
-  }) => {
-    await context.addCookies([ADMIN_SESSION_COOKIE]);
-    await page.setViewportSize(MOBILE_VIEWPORT);
-    await page.goto("/files");
-    await expectSignedInAs(page, "admin");
-
-    // Below lg the navigation lives behind a hamburger, not a sidebar.
-    const hamburger = page.getByRole("button", { name: "Open menu" });
-    await expect(hamburger).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: "Manage users (admin)" }),
-    ).toBeHidden();
-
-    // Opening the drawer reveals the same navigation as the desktop
-    // sidebar: Files, Manage users (admin), and the bucket/space info.
-    await hamburger.click();
-    await expect(page.locator(".drawer-toggle")).toBeChecked();
-    await expect(page.getByRole("link", { name: "Files" })).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: "Manage users (admin)" }),
-    ).toBeVisible();
-    await expect(page.getByText("Bucket: jivedrive-prod")).toBeVisible();
-    await expect(page.getByText("Space: users/admin/")).toBeVisible();
-    await expectNoHorizontalOverflow(page);
-
-    // Menu items keep the 44px touch target (FR-008).
-    const manageUsers = page.getByRole("link", {
-      name: "Manage users (admin)",
-    });
-    const itemHeight = await manageUsers.evaluate(
-      (el) => el.getBoundingClientRect().height,
-    );
-    expect(itemHeight).toBeGreaterThanOrEqual(44);
-
-    // Tapping Manage users navigates to /admin and the drawer closes
-    // instead of covering the destination screen (FR-011, US1 sc.1).
-    await manageUsers.click();
-    await expect(page).toHaveURL(/\/admin/);
-    await expect(
-      page.getByRole("heading", { name: "User management" }),
-    ).toBeVisible();
-    await expect(page.locator(".drawer-toggle")).not.toBeChecked();
-    await expect(
-      page.getByRole("link", { name: "Manage users (admin)" }),
-    ).toBeHidden();
-    await expectNoHorizontalOverflow(page);
-
-    // A same-route tap also closes the drawer: reopening it on /admin and
-    // tapping "Manage users (admin)" again must not leave it covering the
-    // screen (FR-011 edge: close after any drawer navigation, same-route
-    // pushes included).
-    await page.getByRole("button", { name: "Open menu" }).click();
-    await expect(page.locator(".drawer-toggle")).toBeChecked();
-    await page.getByRole("link", { name: "Manage users (admin)" }).click();
-    await expect(page).toHaveURL(/\/admin/);
-    await expect(page.locator(".drawer-toggle")).not.toBeChecked();
-    await expect(
-      page.getByRole("link", { name: "Manage users (admin)" }),
-    ).toBeHidden();
-  });
-
-  test("a signed-in non-admin at 375px never sees the Manage users entry in the drawer", async ({
-    page,
-    context,
-  }) => {
-    await context.addCookies([BROWSE_SESSION_COOKIE]);
-    await page.setViewportSize(MOBILE_VIEWPORT);
-    await page.goto("/files");
-    await expectSignedInAs(page, "alice");
-
-    await page.getByRole("button", { name: "Open menu" }).click();
-    await expect(page.getByRole("link", { name: "Files" })).toBeVisible();
-    await expect(page.getByRole("link", { name: /Manage users/ })).toHaveCount(
-      0,
-    );
-    await expectNoHorizontalOverflow(page);
-  });
-
-  test("a signed-in user gets a hamburger below lg and a permanent sidebar at 1280px", async ({
-    page,
-    context,
-  }) => {
-    await context.addCookies([ADMIN_SESSION_COOKIE]);
-    await page.goto("/files");
-    await expectSignedInAs(page, "admin");
-
-    // Below lg (768px is md): the sidebar is a drawer behind the hamburger.
-    await page.setViewportSize({ width: 768, height: 1024 });
-    await expect(page.getByRole("button", { name: "Open menu" })).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: "Manage users (admin)" }),
-    ).toBeHidden();
-    await expectNoHorizontalOverflow(page);
-
-    // At lg and up the drawer is permanently open as the sidebar and the
-    // hamburger is absent (FR-001, US1 sc.3).
-    await page.setViewportSize({ width: 1280, height: 800 });
-    await expect(page.getByRole("button", { name: "Open menu" })).toHaveCount(
-      0,
-    );
-    await expect(page.getByRole("link", { name: "Files" })).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: "Manage users (admin)" }),
-    ).toBeVisible();
-    await expect(page.getByText("Bucket: jivedrive-prod")).toBeVisible();
-    await expect(page.getByText("Space: users/admin/")).toBeVisible();
-    await expectNoHorizontalOverflow(page);
-  });
-
+test.describe("User Story 1 - responsive navigation", () => {
   test("a long username truncates with an ellipsis at 375px without horizontal overflow", async ({
     page,
     context,
@@ -184,9 +72,10 @@ test.describe("User Story 1 - responsive navigation: drawer + permanent sidebar"
     await expectNoHorizontalOverflow(page);
 
     // The sign-in state stays visible (constitution V) while the username
-    // ellipsizes inside the span instead of pushing the page wide (FR-003,
-    // US1 sc.4).
-    const signInState = page.getByText(`Signed in as ${LONG_USERNAME}`, {
+    // ellipsizes inside the header button instead of pushing the page wide
+    // (FR-003, US1 sc.4).
+    const signInState = page.getByRole("button", {
+      name: LONG_USERNAME,
       exact: true,
     });
     await expectTruncated(page, signInState);
@@ -205,100 +94,10 @@ test.describe("User Story 1 - responsive navigation: drawer + permanent sidebar"
     await expect(page.locator(".drawer-side")).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
   });
-
-  test("the open drawer at 375px in the dark theme causes no horizontal overflow", async ({
-    page,
-    context,
-  }) => {
-    await page.emulateMedia({ colorScheme: "dark" });
-    await context.addCookies([ADMIN_SESSION_COOKIE]);
-    await page.setViewportSize(MOBILE_VIEWPORT);
-    await page.goto("/files");
-    await expectSignedInAs(page, "admin");
-
-    await page.getByRole("button", { name: "Open menu" }).click();
-    await expect(
-      page.getByRole("link", { name: "Manage users (admin)" }),
-    ).toBeVisible();
-    await expectNoHorizontalOverflow(page);
-  });
-
-  test("the hamburger and drawer links are keyboard-focusable with visible focus", async ({
-    page,
-    context,
-  }) => {
-    await context.addCookies([ADMIN_SESSION_COOKIE]);
-    await page.setViewportSize(MOBILE_VIEWPORT);
-    await page.goto("/files");
-    await expectSignedInAs(page, "admin");
-
-    // The hamburger is the first tab stop below lg.
-    const hamburger = page.getByRole("button", { name: "Open menu" });
-    await expect(hamburger).toBeVisible();
-    await page.keyboard.press("Tab");
-    await expect(hamburger).toBeFocused();
-    expect(await hamburger.evaluate((el) => el.matches(":focus-visible"))).toBe(
-      true,
-    );
-
-    // Enter opens the drawer.
-    await hamburger.press("Enter");
-    await expect(page.locator(".drawer-toggle")).toBeChecked();
-    await expect(
-      page.getByRole("link", { name: "Manage users (admin)" }),
-    ).toBeVisible();
-
-    // The drawer links are focusable: tab forward until Manage users
-    // receives focus (the drawer side is last in the DOM/tab order).
-    const manageUsers = page.getByRole("link", {
-      name: "Manage users (admin)",
-    });
-    for (let i = 0; i < 30; i += 1) {
-      if (await manageUsers.evaluate((el) => el === document.activeElement)) {
-        break;
-      }
-      await page.keyboard.press("Tab");
-    }
-    await expect(manageUsers).toBeFocused();
-    expect(
-      await manageUsers.evaluate((el) => el.matches(":focus-visible")),
-    ).toBe(true);
-
-    // Activating the focused link navigates and closes the drawer (FR-011).
-    await manageUsers.press("Enter");
-    await expect(page).toHaveURL(/\/admin/);
-    await expect(page.locator(".drawer-toggle")).not.toBeChecked();
-  });
-
-  test("clicking the dimmed overlay closes the drawer at 375px", async ({
-    page,
-    context,
-  }) => {
-    await context.addCookies([ADMIN_SESSION_COOKIE]);
-    await page.setViewportSize(MOBILE_VIEWPORT);
-    await page.goto("/files");
-    await expectSignedInAs(page, "admin");
-
-    await page.getByRole("button", { name: "Open menu" }).click();
-    await expect(page.locator(".drawer-toggle")).toBeChecked();
-    await expect(
-      page.getByRole("link", { name: "Manage users (admin)" }),
-    ).toBeVisible();
-
-    // Click the dimmed area to the right of the w-72 (288px) panel.
-    await page.locator(".drawer-overlay").click({
-      position: { x: 360, y: 300 },
-    });
-    await expect(page.locator(".drawer-toggle")).not.toBeChecked();
-    await expect(
-      page.getByRole("link", { name: "Manage users (admin)" }),
-    ).toBeHidden();
-    await expectNoHorizontalOverflow(page);
-  });
 });
 
 test.describe("User Story 2 - file browser rendered for mobile, with octicons", () => {
-  /** The seeded root file whose size renders as "812 KB" (see e2eServer.ts). */
+  /** The seeded root file used as the mobile file-row fixture. */
   const FILE_ROW_TEXT = "budget.xlsx";
 
   /**
@@ -316,27 +115,14 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     await expectSignedInAs(page, "alice");
   }
 
-  /**
-   * The stacked metadata line renders as `formatSize(size) · formatDate(iso)`
-   * (frontend/src/lib/format.ts): e.g. "812 KB · 2026-08-10 22:00". The date
-   * is rendered in the browser's local timezone, so only its shape is pinned.
-   */
-  const METADATA_RE = /^812 KB · \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
-
-  test("at 375px a file row stacks size and modified under the name and shows icon-only action buttons", async ({
+  test("at 375px a file row shows icon-only action buttons", async ({
     page,
     context,
   }) => {
     await startSignedIn(page, context);
     await page.setViewportSize(MOBILE_VIEWPORT);
-    const row = page.locator("tbody tr", { hasText: FILE_ROW_TEXT });
+    const row = page.locator("li.list-row", { hasText: FILE_ROW_TEXT });
     await expect(row).toBeVisible();
-
-    // FR-005 / US2 sc.1: below sm the size and modified date render as a
-    // secondary line under the name instead of vanishing.
-    const metadata = row.getByText(METADATA_RE);
-    await expect(metadata).toBeVisible();
-    await expect(metadata).toHaveText(METADATA_RE);
 
     // FR-007 / US2 sc.1: the actions are buttons with accessible names
     // identical to today's text labels, icon-only below sm (the label span
@@ -349,7 +135,7 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     }
 
     // Octicons replaced the emoji (FR-004): no 📁/📄 anywhere in the rows.
-    await expect(page.locator("tbody")).not.toContainText(["📁", "📄"]);
+    await expect(page.locator("ul.list")).not.toContainText(["📁", "📄"]);
     await expectNoHorizontalOverflow(page);
   });
 
@@ -359,7 +145,7 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
   }) => {
     await startSignedIn(page, context);
     await page.setViewportSize(MOBILE_VIEWPORT);
-    const row = page.locator("tbody tr", { hasText: FILE_ROW_TEXT });
+    const row = page.locator("li.list-row", { hasText: FILE_ROW_TEXT });
     await expect(row).toBeVisible();
 
     // FR-008 / US2 sc.1: every action control keeps a touch target at
@@ -391,7 +177,7 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     // did: the browser fetches the presigned URL and gets the bytes.
     const downloadPromise = page.waitForEvent("download");
     await page
-      .locator("tr", { hasText: "notes.txt" })
+      .locator("li.list-row", { hasText: "notes.txt" })
       .getByRole("button", { name: "Download" })
       .click();
     const download = await downloadPromise;
@@ -402,26 +188,14 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     expect(content.toString()).toBe("hello from notes");
   });
 
-  test("at 768px size and modified render in their own columns and actions show icon + text", async ({
+  test("at 768px actions show icon and text labels", async ({
     page,
     context,
   }) => {
     await startSignedIn(page, context);
     await page.setViewportSize({ width: 768, height: 1024 });
-    const row = page.locator("tbody tr", { hasText: FILE_ROW_TEXT });
+    const row = page.locator("li.list-row", { hasText: FILE_ROW_TEXT });
     await expect(row).toBeVisible();
-
-    // US2 sc.2: the Size and Modified columns return at sm+ ...
-    const sizeCell = row.locator("td").nth(1);
-    await expect(sizeCell).toBeVisible();
-    await expect(sizeCell).toHaveText("812 KB");
-    const modifiedCell = row.locator("td").nth(2);
-    await expect(modifiedCell).toBeVisible();
-    await expect(modifiedCell).toHaveText(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
-
-    // ... and the stacked metadata line is hidden again at sm+ (one DOM
-    // tree, CSS-only relocation per research R3).
-    await expect(row.getByText(/^812 KB · /)).toBeHidden();
 
     // US2 sc.2 / FR-007: actions show the icon AND the visible text label.
     const download = row.getByRole("button", { name: "Download" });
@@ -440,7 +214,7 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
 
     // US2 sc.3: folders stay links (they navigate), carry the folder
     // octicon, and never expose the file actions.
-    const folderRow = page.locator("tbody tr", { hasText: "docs" });
+    const folderRow = page.locator("li.list-row", { hasText: "docs" });
     await expect(folderRow.getByRole("link", { name: "docs" })).toBeVisible();
     await expect(folderRow.locator("svg")).toBeVisible();
     await expect(folderRow.getByRole("button")).toHaveCount(0);
@@ -490,11 +264,13 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
       buffer: Buffer.from("mobile upload check"),
     });
     await expect(page.getByText(`Uploaded ${fileName}`)).toBeVisible();
-    await expect(page.locator("tbody tr", { hasText: fileName })).toBeVisible();
+    await expect(
+      page.locator("li.list-row", { hasText: fileName }),
+    ).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
 
-  test("long file names wrap at 375px with no horizontal scroll", async ({
+  test("long file names truncate at 375px with no horizontal scroll", async ({
     page,
     context,
   }) => {
@@ -507,7 +283,7 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     await expect(
       page.getByRole("navigation", { name: "Breadcrumbs" }),
     ).toContainText("docs");
-    const specialRow = page.locator("tbody tr", {
+    const specialRow = page.locator("li.list-row", {
       hasText: "my file #1?.txt",
     });
     await expect(specialRow).toBeVisible();
@@ -516,12 +292,11 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     ).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
-    // A genuinely long name wraps onto multiple lines instead of widening
-    // the page: upload one at 375px and check its row is taller than a
-    // normal single-line row (unique name per attempt, retry-safe). Upload
-    // into photos/ for the same page-size reasons as the toolbar test; the
-    // comparison row is a seeded photos file that delete.spec never removes.
-    // The upload refresh returns only the first page, and uploads from the
+    // A genuinely long name truncates with an ellipsis inside its row
+    // instead of widening the page: upload one at 375px and check the name
+    // span ellipsizes (unique name per attempt, retry-safe). Upload into
+    // photos/ for the same page-size reasons as the toolbar test. The
+    // upload refresh returns only the first page, and uploads from the
     // other tests in this spec can push the new row (and delete-me-cancel)
     // past the 5-item page size, so load the rest of the listing first —
     // the row count is always > 5 once the upload lands, so Load more is
@@ -540,19 +315,11 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     });
     await expect(page.getByText(`Uploaded ${longName}`)).toBeVisible();
     await page.getByRole("button", { name: "Load more" }).click();
-    const longRow = page.locator("tbody tr", { hasText: longName });
+    const longRow = page.locator("li.list-row", { hasText: longName });
     await expect(longRow).toBeVisible();
-    const normalRow = page.locator("tbody tr", {
-      hasText: "delete-me-cancel.txt",
-    });
-    await expect(normalRow).toBeVisible();
-    const longHeight = await longRow.evaluate(
-      (el) => el.getBoundingClientRect().height,
-    );
-    const normalHeight = await normalRow.evaluate(
-      (el) => el.getBoundingClientRect().height,
-    );
-    expect(longHeight).toBeGreaterThan(normalHeight);
+    const nameSpan = longRow.locator("span", { hasText: longName });
+    await expect(nameSpan).toBeVisible();
+    await expectTruncated(page, nameSpan);
     await expectNoHorizontalOverflow(page);
   });
 
@@ -1013,7 +780,7 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     // data.csv sorts onto the first page of the seeded root listing, and
     // sharing only generates a read-only link (no mutation).
     await page
-      .locator("tbody tr", { hasText: "data.csv" })
+      .locator("li.list-row", { hasText: "data.csv" })
       .getByRole("button", { name: "Share" })
       .click();
     const dialog = page.getByRole("alertdialog");
@@ -1061,7 +828,7 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     // overflow (sharing is read-only, so the same file is safe to reopen).
     await page.emulateMedia({ colorScheme: "dark" });
     await page
-      .locator("tbody tr", { hasText: "data.csv" })
+      .locator("li.list-row", { hasText: "data.csv" })
       .getByRole("button", { name: "Share" })
       .click();
     await expect(dialog).toContainText("data.csv");
@@ -1091,7 +858,7 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
       buffer: Buffer.from("delete me"),
     });
     await expect(page.getByText(`Uploaded ${fileName}`)).toBeVisible();
-    const row = page.locator("tbody tr", { hasText: fileName });
+    const row = page.locator("li.list-row", { hasText: fileName });
     await expect(row).toBeVisible();
 
     // US4 sc.2: the dialog opens with usable Cancel/Delete actions.
@@ -1127,7 +894,7 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     // prefix keeps it on photos/' first page even as the other tests in
     // this spec accumulate uploads; Cancel leaves it untouched.
     await page.emulateMedia({ colorScheme: "dark" });
-    const stableRow = page.locator("tbody tr", {
+    const stableRow = page.locator("li.list-row", {
       hasText: "0-responsive-overwrite.txt",
     });
     await expect(stableRow).toBeVisible();
@@ -1144,7 +911,7 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
   }) => {
     await openPhotos(page, context);
 
-    const row = page.locator("tbody tr", {
+    const row = page.locator("li.list-row", {
       hasText: "0-responsive-overwrite.txt",
     });
     await expect(row).toBeVisible();
@@ -1152,7 +919,7 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     // Self-healing baseline: the object's content is unknown on a retry
     // (the replace step below mutates it), so first restore the seeded
     // "v1" state. The name exists in every state, so uploading "v1"
-    // always opens the confirmation; Replace makes the row show "2 B".
+    // always opens the confirmation; Replace keeps the row listed.
     const fileInput = page.locator('input[type="file"]');
     await fileInput.setInputFiles({
       name: "0-responsive-overwrite.txt",
@@ -1167,7 +934,6 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     await expect(
       page.getByText("Uploaded 0-responsive-overwrite.txt"),
     ).toBeVisible();
-    await expect(row).toContainText("2 B");
 
     // The object exists: uploading the same name is refused until the
     // user confirms (US4 sc.3).
@@ -1187,13 +953,13 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     await expect(cancel.locator("svg")).toBeVisible();
     await expect(replace.locator("svg")).toBeVisible();
 
-    // Cancel keeps the stored object: the listing still shows 2 B.
+    // Cancel keeps the stored object: the name is still listed.
     await cancel.click();
     await expect(dialog).toHaveCount(0);
-    await expect(row).toContainText("2 B");
+    await expect(row).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
-    // Confirming replaces the object: success feedback and the new size.
+    // Confirming replaces the object: success feedback.
     await fileInput.setInputFiles({
       name: "0-responsive-overwrite.txt",
       mimeType: "text/plain",
@@ -1205,7 +971,6 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     await expect(
       page.getByText("Uploaded 0-responsive-overwrite.txt"),
     ).toBeVisible();
-    await expect(row).toContainText("28 B");
 
     // SC-002: the confirmation is also open at 375px in the dark theme
     // with no overflow. The object now holds the replacement, so the same

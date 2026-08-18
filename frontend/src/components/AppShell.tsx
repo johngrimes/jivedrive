@@ -51,7 +51,7 @@ export function AppShell() {
                 </Link>
               )}
               <button
-                className="btn"
+                className="btn shrink-0 max-w-36 truncate"
                 type="button"
                 title="Click to sign out"
                 onClick={() => void handleSignOut()}

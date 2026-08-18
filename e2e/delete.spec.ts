@@ -40,7 +40,7 @@ async function openPhotos(page: Page, context: BrowserContext): Promise<void> {
  */
 async function openDelete(page: Page, rowText: string) {
   await page
-    .locator("tbody tr", { hasText: rowText })
+    .locator("li.list-row", { hasText: rowText })
     .getByRole("button", { name: "Delete" })
     .click();
   const dialog = page.getByRole("alertdialog");
@@ -53,7 +53,7 @@ test("cancelling the delete dialog leaves the file untouched", async ({
   context,
 }) => {
   await openPhotos(page, context);
-  const row = page.locator("tbody tr", { hasText: "delete-me-cancel.txt" });
+  const row = page.locator("li.list-row", { hasText: "delete-me-cancel.txt" });
   await expect(row).toBeVisible();
 
   // The dialog names the file and warns that deletion is permanent.
@@ -76,7 +76,7 @@ test("confirming the delete removes the file from the listing", async ({
   context,
 }) => {
   await openPhotos(page, context);
-  const row = page.locator("tbody tr", { hasText: "delete-me-confirm.txt" });
+  const row = page.locator("li.list-row", { hasText: "delete-me-confirm.txt" });
   await expect(row).toBeVisible();
 
   const dialog = await openDelete(page, "delete-me-confirm.txt");
@@ -91,7 +91,7 @@ test("confirming the delete removes the file from the listing", async ({
   // On success the dialog closes and the file disappears from the listing.
   await expect(dialog).toHaveCount(0);
   await expect(
-    page.locator("tbody tr", { hasText: "delete-me-confirm.txt" }),
+    page.locator("li.list-row", { hasText: "delete-me-confirm.txt" }),
   ).toHaveCount(0);
 });
 
@@ -100,7 +100,7 @@ test("a failed delete shows a clear error and leaves the listing unchanged", asy
   context,
 }) => {
   await openPhotos(page, context);
-  const row = page.locator("tbody tr", { hasText: "delete-me-missing.txt" });
+  const row = page.locator("li.list-row", { hasText: "delete-me-missing.txt" });
   await expect(row).toBeVisible();
 
   // Simulate the object vanishing between listing and delete: the server

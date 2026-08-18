@@ -81,7 +81,7 @@ export function FilesPage() {
     return () => {
       cancelled = true;
     };
-  }, [user, prefix, retryKey]);
+  }, [user, prefix, retryKey, refresh]);
 
   /** Relative path segments for the breadcrumbs ("" root => empty). */
   const segments =

@@ -224,7 +224,9 @@ export function FileListing({
           >
             <div className="flex grow gap-3 items-center">
               <FileIcon aria-hidden="true" />
-              <span className="truncate w-2xs md:w-auto md:max-w-md">{file.name}</span>
+              <span className="truncate w-2xs md:w-auto md:max-w-md">
+                {file.name}
+              </span>
             </div>
             <div className="flex gap-3">
               <button

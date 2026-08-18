@@ -105,7 +105,7 @@ export function AdminUsersPage() {
 
   // Action state.
   const [generatedLink, setGeneratedLink] = useState<GeneratedLink | null>(
-    null
+    null,
   );
   const [copied, setCopied] = useState(false);
   const [removal, setRemoval] = useState<PendingRemoval | null>(null);
@@ -316,7 +316,10 @@ export function AdminUsersPage() {
                 onSubmit={(e) => void handleCreate(e)}
               >
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
-                  <label className="label flex-col items-start" htmlFor="invite-username">
+                  <label
+                    className="label flex-col items-start"
+                    htmlFor="invite-username"
+                  >
                     <span className="label-text">Username</span>
                     <input
                       id="invite-username"
@@ -327,7 +330,10 @@ export function AdminUsersPage() {
                       autoComplete="off"
                     />
                   </label>
-                  <label className="label flex-col items-start" htmlFor="invite-bucket">
+                  <label
+                    className="label flex-col items-start"
+                    htmlFor="invite-bucket"
+                  >
                     <span className="label-text">Bucket</span>
                     <input
                       id="invite-bucket"
@@ -338,7 +344,10 @@ export function AdminUsersPage() {
                       autoComplete="off"
                     />
                   </label>
-                  <label className="label flex-col items-start" htmlFor="invite-prefix">
+                  <label
+                    className="label flex-col items-start"
+                    htmlFor="invite-prefix"
+                  >
                     <span className="label-text">Prefix</span>
                     <input
                       id="invite-prefix"

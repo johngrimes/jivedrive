@@ -34,7 +34,7 @@ async function startSignedIn(
  */
 async function openShare(page: Page, rowText: string) {
   await page
-    .locator("tr", { hasText: rowText })
+    .locator("li.list-row", { hasText: rowText })
     .getByRole("button", { name: "Share" })
     .click();
   const dialog = page.getByRole("alertdialog");

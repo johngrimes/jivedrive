@@ -20,7 +20,7 @@ test("a seeded user signs in with a passkey and signs out", async ({
   await expectSignedInAs(page, "alice");
 
   // Sign out returns to the sign-in form.
-  await signOut(page);
+  await signOut(page, "alice");
   await expect(page.getByLabel("Username")).toBeVisible();
 
   // Second sign-in uses the registered passkey (assertion ceremony).
@@ -28,7 +28,7 @@ test("a seeded user signs in with a passkey and signs out", async ({
   await expect(page).toHaveURL(/\/files/);
   await expectSignedInAs(page, "alice");
 
-  await signOut(page);
+  await signOut(page, "alice");
 });
 
 test("an invitee registers a passkey from an invite link and signs in", async ({
@@ -48,7 +48,7 @@ test("an invitee registers a passkey from an invite link and signs in", async ({
   await expectSignedInAs(page, "carol");
 
   // Sign out, then sign in again with the newly registered passkey.
-  await signOut(page);
+  await signOut(page, "carol");
   await signIn(page, "carol");
   await expect(page).toHaveURL(/\/files/);
   await expectSignedInAs(page, "carol");

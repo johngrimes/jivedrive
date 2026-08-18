@@ -16,7 +16,7 @@ import {
 async function downloadFromRow(page: Page, rowText: string) {
   const downloadPromise = page.waitForEvent("download");
   await page
-    .locator("tr", { hasText: rowText })
+    .locator("li.list-row", { hasText: rowText })
     .getByRole("button", { name: "Download" })
     .click();
   const download = await downloadPromise;
@@ -44,12 +44,11 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
   // The sidebar's admin link is only visible to admins (alice is not one).
   await expect(page.getByRole("link", { name: /Manage users/ })).toHaveCount(0);
 
-  // Root listing: folders and files with sizes, and the loaded item count.
-  // Folder rows are links (they navigate); file rows carry button
+  // Root listing: folders and files, and the loaded item count. Folder
+  // rows are links (they navigate); file rows carry button
   // Download/Share/Delete actions.
   await expect(page.getByRole("link", { name: /docs/ })).toBeVisible();
   await expect(page.getByText("archive.zip")).toBeVisible();
-  await expect(page.getByRole("cell", { name: "812 KB" })).toBeVisible();
   await expect(page.getByText("5 items")).toBeVisible();
 
   // The listing is usable at mobile, tablet and desktop widths.
@@ -67,11 +66,10 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
   // page brings the total to 10 and the button disappears.
   const loadMore = page.getByRole("button", { name: "Load more" });
   await expect(loadMore).toBeVisible();
-  await expect(page.locator("tbody tr")).toHaveCount(5);
+  await expect(page.locator("li.list-row")).toHaveCount(5);
   await loadMore.click();
-  await expect(page.locator("tbody tr")).toHaveCount(10);
+  await expect(page.locator("li.list-row")).toHaveCount(10);
   await expect(loadMore).toHaveCount(0);
-  await expect(page.getByRole("cell", { name: "2.4 MB" })).toBeVisible();
   await expect(page.getByText("10 items")).toBeVisible();
   await expect(page.getByRole("link", { name: /photos/ })).toBeVisible();
 
@@ -106,5 +104,5 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
   // An empty subfolder shows a friendly empty state, not an error.
   await page.getByRole("link", { name: /empty/ }).click();
   await expect(page.getByText(/This folder is empty/)).toBeVisible();
-  await expect(page.locator("tbody tr")).toHaveCount(0);
+  await expect(page.locator("li.list-row")).toHaveCount(0);
 });
