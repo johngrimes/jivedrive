@@ -18,6 +18,7 @@ import { authRoutes } from "./routes/auth";
 import { filesRoutes } from "./routes/files";
 import { adminRoutes } from "./routes/admin";
 import { createS3Client } from "./s3/client";
+import { createRateLimitMiddleware, createRateLimitStore } from "./security/rateLimit";
 
 /** Variables stored on the Hono context for the current request. */
 export type ServerEnv = {
@@ -36,6 +37,11 @@ export interface ServerDeps {
   s3Client?: S3Client;
   /** Folder listing page size; defaults to 1000 (S3's page size). */
   listPageSize?: number;
+  /**
+   * Injectable clock for the rate limiter (tests); defaults to Date.now.
+   * Mirrors the s3Client/listPageSize injection pattern.
+   */
+  rateLimitNow?: () => number;
 }
 
 /**
@@ -53,6 +59,27 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
   app.onError(errorHandler());
 
   app.get("/healthcheck", (c) => c.json({ status: "ok" }));
+
+  // Rate limiting (FR-007/FR-008): per-client-identity token buckets for
+  // the auth and file API families. Registered before the route groups so a
+  // 429 never reaches a route handler (no challenge or state consumed).
+  // One store is shared by both families so the size cap bounds total
+  // memory; the healthcheck and static/SPA paths are never limited.
+  const rateLimitStore = createRateLimitStore();
+  app.use(
+    "/auth/*",
+    createRateLimitMiddleware(deps.config, "auth", {
+      now: deps.rateLimitNow,
+      store: rateLimitStore,
+    }),
+  );
+  app.use(
+    "/api/files/*",
+    createRateLimitMiddleware(deps.config, "files", {
+      now: deps.rateLimitNow,
+      store: rateLimitStore,
+    }),
+  );
 
   // Auth routes (passkey registration, sign-in, logout, current user),
   // mounted under /auth per the API contract.

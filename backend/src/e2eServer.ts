@@ -208,6 +208,20 @@ const env: Record<string, string | undefined> = {
     process.env.JIVEDRIVE_S3_SECRET_ACCESS_KEY ?? "test",
   JIVEDRIVE_WEBAUTHN_RP_ID: "localhost",
   JIVEDRIVE_WEBAUTHN_ORIGIN: "http://localhost:5173",
+  // This test-only server serves every Playwright spec from one client
+  // identity (127.0.0.1) in seconds, so the production defaults (auth
+  // 20/min) would 429 mid-run. Override with generous values, keeping
+  // process.env first so the Polish phase can run the 429 scenario
+  // against this server with explicit env overrides (same pattern as
+  // JIVEDRIVE_PORT above).
+  JIVEDRIVE_RATE_LIMIT_AUTH_PER_MINUTE:
+    process.env.JIVEDRIVE_RATE_LIMIT_AUTH_PER_MINUTE ?? "100000",
+  JIVEDRIVE_RATE_LIMIT_AUTH_BURST:
+    process.env.JIVEDRIVE_RATE_LIMIT_AUTH_BURST ?? "10000",
+  JIVEDRIVE_RATE_LIMIT_FILES_PER_MINUTE:
+    process.env.JIVEDRIVE_RATE_LIMIT_FILES_PER_MINUTE ?? "100000",
+  JIVEDRIVE_RATE_LIMIT_FILES_BURST:
+    process.env.JIVEDRIVE_RATE_LIMIT_FILES_BURST ?? "10000",
 };
 
 const config = loadConfig(env);
