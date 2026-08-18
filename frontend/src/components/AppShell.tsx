@@ -49,17 +49,6 @@ export function AppShell() {
 
   return (
     <div className="drawer lg:drawer-open">
-      {user && (
-        <input
-          id="app-drawer-toggle"
-          type="checkbox"
-          className="drawer-toggle"
-          tabIndex={-1}
-          aria-label="Navigation drawer"
-          checked={drawerOpen}
-          onChange={(event) => setDrawerOpen(event.target.checked)}
-        />
-      )}
       <div className="drawer-content flex min-h-screen flex-col">
         <header className="navbar bg-base-200 border-b border-base-300 gap-2">
           <Link to="/" className="btn btn-ghost text-xl font-bold">
@@ -100,16 +89,6 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
-      {user && (
-        <div className="drawer-side">
-          <label
-            htmlFor="app-drawer-toggle"
-            aria-label="Close menu"
-            className="drawer-overlay"
-          />
-          <Sidebar user={user} activePath={location.pathname} />
-        </div>
-      )}
     </div>
   );
 }
