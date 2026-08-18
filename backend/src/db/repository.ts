@@ -60,7 +60,10 @@ export interface Session {
   token: string;
   userId: string;
   createdAt: string;
+  /** Absolute TTL. */
   expiresAt: string;
+  /** ISO 8601 timestamp of last activity (rolling idle clock). */
+  lastUsedAt: string;
 }
 
 /** Input for {@link createUser}. */
@@ -108,6 +111,8 @@ export interface CreateSessionInput {
   token: string;
   userId: string;
   createdAt?: string;
+  /** ISO 8601 timestamp; defaults to createdAt (full idle allowance). */
+  lastUsedAt?: string;
   expiresAt: string;
 }
 
@@ -151,6 +156,8 @@ interface SessionRow {
   userId: string;
   createdAt: string;
   expiresAt: string;
+  /** Null only for rows written before migration 003 backfilled them. */
+  lastUsedAt: string | null;
 }
 
 function mapUserRow(row: UserRow): User {
@@ -170,7 +177,12 @@ function mapInviteRow(row: InviteRow): Invite {
 }
 
 function mapSessionRow(row: SessionRow): Session {
-  return { ...row };
+  return {
+    ...row,
+    // A SQL NULL (row written before migration 003) starts with a full idle
+    // allowance: treat it as createdAt.
+    lastUsedAt: row.lastUsedAt ?? row.createdAt,
+  };
 }
 
 /**
@@ -593,15 +605,17 @@ export function createSession(
 ): Session {
   const id = input.id ?? randomUUID();
   const createdAt = input.createdAt ?? new Date().toISOString();
+  const lastUsedAt = input.lastUsedAt ?? createdAt;
   db.query(
-    "INSERT INTO sessions (id, token, userId, createdAt, expiresAt) VALUES (?, ?, ?, ?, ?)",
-  ).run(id, input.token, input.userId, createdAt, input.expiresAt);
+    "INSERT INTO sessions (id, token, userId, createdAt, expiresAt, lastUsedAt) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run(id, input.token, input.userId, createdAt, input.expiresAt, lastUsedAt);
   return {
     id,
     token: input.token,
     userId: input.userId,
     createdAt,
     expiresAt: input.expiresAt,
+    lastUsedAt,
   };
 }
 
@@ -622,4 +636,33 @@ export function getSessionByToken(db: Database, token: string): Session | null {
  */
 export function deleteSessionById(db: Database, id: string): void {
   db.query("DELETE FROM sessions WHERE id = ?").run(id);
+}
+
+/**
+ * Update the last-used time of one session (rolling idle clock).
+ *
+ * @param db - database connection
+ * @param id - session id
+ * @param lastUsedAt - ISO 8601 timestamp
+ */
+export function updateSessionLastUsed(
+  db: Database,
+  id: string,
+  lastUsedAt: string,
+): void {
+  db.query("UPDATE sessions SET lastUsedAt = ? WHERE id = ?").run(
+    lastUsedAt,
+    id,
+  );
+}
+
+/**
+ * Delete every session row for one user (passkey reset revocation).
+ * Sessions of other users are untouched.
+ *
+ * @param db - database connection
+ * @param userId - user id
+ */
+export function deleteSessionsByUser(db: Database, userId: string): void {
+  db.query("DELETE FROM sessions WHERE userId = ?").run(userId);
 }

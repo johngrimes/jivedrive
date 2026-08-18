@@ -49,13 +49,27 @@ const config: AppConfig = {
   dbPath: ":memory:",
   migrationsDir,
   sessionTtlDays: 30,
+  sessionIdleDays: 7,
+  rateLimit: {
+    authPerMinute: 20,
+    authBurst: 10,
+    filesPerMinute: 300,
+    filesBurst: 100,
+    trustProxy: false,
+  },
   s3: {
     endpoint: "https://s3.gra.io.cloud.ovh.net",
     region: "gra",
     accessKeyId: "AKIAEXAMPLE123",
     secretAccessKey: "s3cr3t",
   },
-  bootstrapAdmin: { username: null, bucket: null, prefix: "", isAdmin: true },
+  bootstrapAdmin: {
+    username: null,
+    bucket: null,
+    prefix: "",
+    isAdmin: true,
+    enrollmentToken: null,
+  },
   webauthn: { rpId, origin },
 };
 

@@ -14,6 +14,7 @@ import {
   deleteLegacyCredentialsByUser,
   deleteInvite,
   deleteSessionById,
+  deleteSessionsByUser,
   deleteUser,
   getCredentialById,
   getInviteByToken,
@@ -29,6 +30,7 @@ import {
   markInviteClaimed,
   normalizePrefix,
   updateCredentialCounter,
+  updateSessionLastUsed,
 } from "../src/db/repository";
 
 const migrationsDir = fileURLToPath(new URL("../migrations", import.meta.url));
@@ -596,5 +598,91 @@ describe("sessions", () => {
 
     deleteSessionById(db, session.id);
     expect(getSessionByToken(db, "opaque-token")).toBeNull();
+  });
+
+  it("sets lastUsedAt to createdAt by default and reads it back (T003)", () => {
+    const db = createDb();
+    const user = seedUser(db);
+    const session = createSession(db, {
+      token: "opaque-token",
+      userId: user.id,
+      createdAt: "2026-08-05T10:00:00.000Z",
+      expiresAt: "2026-09-04T10:00:00.000Z",
+    });
+
+    expect(session.lastUsedAt).toBe("2026-08-05T10:00:00.000Z");
+    expect(getSessionByToken(db, "opaque-token")?.lastUsedAt).toBe(
+      "2026-08-05T10:00:00.000Z",
+    );
+  });
+
+  it("honours an explicit lastUsedAt on create (T003)", () => {
+    const db = createDb();
+    const user = seedUser(db);
+    const session = createSession(db, {
+      token: "opaque-token",
+      userId: user.id,
+      createdAt: "2026-08-05T10:00:00.000Z",
+      lastUsedAt: "2026-08-06T10:00:00.000Z",
+      expiresAt: "2026-09-04T10:00:00.000Z",
+    });
+
+    expect(session.lastUsedAt).toBe("2026-08-06T10:00:00.000Z");
+    expect(getSessionByToken(db, "opaque-token")?.lastUsedAt).toBe(
+      "2026-08-06T10:00:00.000Z",
+    );
+  });
+
+  it("updates lastUsedAt for only the given session (T003)", () => {
+    const db = createDb();
+    const user = seedUser(db);
+    const first = createSession(db, {
+      token: "tok-first",
+      userId: user.id,
+      createdAt: "2026-08-05T10:00:00.000Z",
+      expiresAt: "2026-09-04T10:00:00.000Z",
+    });
+    const second = createSession(db, {
+      token: "tok-second",
+      userId: user.id,
+      createdAt: "2026-08-05T11:00:00.000Z",
+      expiresAt: "2026-09-04T11:00:00.000Z",
+    });
+
+    updateSessionLastUsed(db, first.id, "2026-08-10T12:00:00.000Z");
+
+    expect(getSessionByToken(db, "tok-first")?.lastUsedAt).toBe(
+      "2026-08-10T12:00:00.000Z",
+    );
+    expect(getSessionByToken(db, "tok-second")?.lastUsedAt).toBe(
+      "2026-08-05T11:00:00.000Z",
+    );
+  });
+
+  it("deletes every session for one user only, leaving others untouched (T003)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    createSession(db, {
+      token: "tok-alice-1",
+      userId: alice.id,
+      expiresAt: "2026-09-04T10:00:00.000Z",
+    });
+    createSession(db, {
+      token: "tok-alice-2",
+      userId: alice.id,
+      expiresAt: "2026-09-04T11:00:00.000Z",
+    });
+    createSession(db, {
+      token: "tok-bob-1",
+      userId: bob.id,
+      expiresAt: "2026-09-04T12:00:00.000Z",
+    });
+
+    deleteSessionsByUser(db, alice.id);
+
+    expect(getSessionByToken(db, "tok-alice-1")).toBeNull();
+    expect(getSessionByToken(db, "tok-alice-2")).toBeNull();
+    expect(getSessionByToken(db, "tok-bob-1")).not.toBeNull();
   });
 });
