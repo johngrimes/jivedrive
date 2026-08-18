@@ -87,9 +87,6 @@ export function SignIn() {
         <div className="flex flex-col items-center gap-2 text-center">
           <DriveIcon className="size-12 text-primary" />
           <h1 className="text-3xl font-bold tracking-tight">JiveDrive</h1>
-          <p className="text-sm opacity-70">
-            Your files, protected by passkeys. No passwords, ever.
-          </p>
         </div>
         <section
           className="card bg-base-100 w-full shadow-xl"
