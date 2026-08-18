@@ -112,8 +112,8 @@ export function Register() {
             {!token && !loading && !invite && (
               <>
                 <p className="alert alert-error" role="alert">
-                  This link is missing a registration token. Open the full
-                  link to register.
+                  This link is missing a registration token. Open the full link
+                  to register.
                 </p>
                 <Link className="btn btn-outline w-full" to="/">
                   Back to sign in

@@ -219,7 +219,6 @@ describe("postRegisterVerify", () => {
       }),
     );
   });
-
 });
 
 describe("postLogout", () => {

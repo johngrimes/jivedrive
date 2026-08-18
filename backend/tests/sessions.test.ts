@@ -183,11 +183,7 @@ describe("validateSession", () => {
     // 10 days after creation, 3 days after the first touch: without the
     // roll this would be idle-expired (creation + 7 days = 08-08); the
     // rolled clock (08-05 + 7 days = 08-12) keeps it valid.
-    const second = validateSession(
-      db,
-      token,
-      new Date("2026-08-11T00:00:00Z"),
-    );
+    const second = validateSession(db, token, new Date("2026-08-11T00:00:00Z"));
     expect(second?.userId).toBe(user.id);
     expect(getSessionByToken(db, token)?.lastUsedAt).toBe(
       "2026-08-11T00:00:00.000Z",

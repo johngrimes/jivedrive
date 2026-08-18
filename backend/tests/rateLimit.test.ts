@@ -117,7 +117,7 @@ describe("token bucket (T032)", () => {
 
 describe("family separation (T033)", () => {
   it("limits /auth/* and /api/files/* independently for the same identity", async () => {
-    let clock = 0;
+    const clock = 0;
     const store = createRateLimitStore();
     const app = new Hono<ServerEnv>();
     // One shared store, keyed by family + identity, exactly as server.ts
@@ -202,7 +202,7 @@ describe("client identity (T034)", () => {
   });
 
   it("gives spoofed X-Forwarded-For headers no power when trustProxy is off", async () => {
-    let clock = 0;
+    const clock = 0;
     const app = new Hono<ServerEnv>();
     app.use(
       "/auth/*",

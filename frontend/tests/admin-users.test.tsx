@@ -91,16 +91,20 @@ function stubAdminApi(): Mock {
     },
   };
 
-  const fetchMock = vi.fn().mockImplementation(
-    (url: string, init?: RequestInit): Promise<Response> => {
-      const method = init?.method ?? "GET";
-      const route = routes[`${method} ${url}`];
-      if (!route) {
-        return Promise.reject(new Error(`Unhandled request: ${method} ${url}`));
-      }
-      return Promise.resolve(jsonResponse(route.body, route.status));
-    },
-  );
+  const fetchMock = vi
+    .fn()
+    .mockImplementation(
+      (url: string, init?: RequestInit): Promise<Response> => {
+        const method = init?.method ?? "GET";
+        const route = routes[`${method} ${url}`];
+        if (!route) {
+          return Promise.reject(
+            new Error(`Unhandled request: ${method} ${url}`),
+          );
+        }
+        return Promise.resolve(jsonResponse(route.body, route.status));
+      },
+    );
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
   return fetchMock;
 }

@@ -22,7 +22,10 @@ import { authRoutes } from "./routes/auth";
 import { filesRoutes } from "./routes/files";
 import { adminRoutes } from "./routes/admin";
 import { createS3Client } from "./s3/client";
-import { createRateLimitMiddleware, createRateLimitStore } from "./security/rateLimit";
+import {
+  createRateLimitMiddleware,
+  createRateLimitStore,
+} from "./security/rateLimit";
 import { createSecurityHeadersMiddleware } from "./security/headers";
 
 /** Variables stored on the Hono context for the current request. */

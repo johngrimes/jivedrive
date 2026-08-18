@@ -396,9 +396,11 @@ describe("strict transport security (US4)", () => {
   });
 
   it("sends Strict-Transport-Security in production", async () => {
-    const app = createApp(
-      { config: { ...config, nodeEnv: "production" }, db: createDb(), staticDir },
-    );
+    const app = createApp({
+      config: { ...config, nodeEnv: "production" },
+      db: createDb(),
+      staticDir,
+    });
     const res = await app.request("/healthcheck");
     expect(res.status).toBe(200);
     expect(res.headers.get("strict-transport-security")).toBe(

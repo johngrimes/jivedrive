@@ -131,9 +131,7 @@ export function sweepExpiredSessions(
 ): number {
   const reference = (now ?? new Date()).getTime();
   const result = db
-    .query(
-      "DELETE FROM sessions WHERE expiresAt <= ? OR lastUsedAt <= ?",
-    )
+    .query("DELETE FROM sessions WHERE expiresAt <= ? OR lastUsedAt <= ?")
     .run(
       new Date(reference).toISOString(),
       new Date(reference - idleDays * 24 * 60 * 60 * 1000).toISOString(),

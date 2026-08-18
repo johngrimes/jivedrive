@@ -84,9 +84,10 @@ interface CreateAppWithDbOptions {
 }
 
 /** Create an app over a fresh in-memory database. */
-function createAppWithDb(
-  options: CreateAppWithDbOptions = {},
-): { app: Hono<ServerEnv>; db: Database } {
+function createAppWithDb(options: CreateAppWithDbOptions = {}): {
+  app: Hono<ServerEnv>;
+  db: Database;
+} {
   const db = createDb();
   const app = createApp({
     config: { ...config, ...options.config },
@@ -486,11 +487,7 @@ describe("POST /auth/register/options", () => {
     });
     markInviteClaimed(db, claimedInvite.id, other.id);
 
-    for (const token of [
-      "no-such-token",
-      "invite-expired",
-      "invite-claimed",
-    ]) {
+    for (const token of ["no-such-token", "invite-expired", "invite-claimed"]) {
       const res = await app.request("/auth/register/options", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -839,9 +836,9 @@ describe("POST /auth/register/verify", () => {
     const stored = getCredentialById(db, response.id);
     expect(stored?.userId).toBe(admin.id);
     expect(stored?.discoverable).toBe(true);
-    expect(listCredentialsByUser(db, admin.id).map((cred) => cred.id)).toEqual(
-      [response.id],
-    );
+    expect(listCredentialsByUser(db, admin.id).map((cred) => cred.id)).toEqual([
+      response.id,
+    ]);
 
     // The session cookie is live: /auth/me round-trips.
     const cookie = cookieFrom(res);
@@ -911,9 +908,9 @@ describe("POST /auth/register/verify", () => {
     expect(stored?.userId).toBe(alice.id);
     expect(stored?.discoverable).toBe(true);
     // The legacy credential was cleaned up on re-enrollment.
-    expect(listCredentialsByUser(db, alice.id).map((cred) => cred.id)).toEqual(
-      [response.id],
-    );
+    expect(listCredentialsByUser(db, alice.id).map((cred) => cred.id)).toEqual([
+      response.id,
+    ]);
 
     // The invite is claimed by the account it attached to.
     const claimed = getInviteByToken(db, invite.token);
@@ -1029,9 +1026,9 @@ describe("POST /auth/register/verify", () => {
     expect(await res.json()).toMatchObject({ code: "user_has_passkey" });
     // The original ceremony's credential was never created.
     expect(getCredentialById(db, response.id)).toBeNull();
-    expect(listCredentialsByUser(db, admin.id).map((cred) => cred.id)).toEqual(
-      ["cred-elsewhere"],
-    );
+    expect(listCredentialsByUser(db, admin.id).map((cred) => cred.id)).toEqual([
+      "cred-elsewhere",
+    ]);
   });
 
   it("refuses an attach challenge obtained before the account gained a passkey (T013)", async () => {

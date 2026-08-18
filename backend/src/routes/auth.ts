@@ -306,7 +306,10 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
     // (b) Bootstrap semantics: the configured enrollment token gates the
     // provisioned admin's first passkey (FR-003, R2).
     const enrollmentToken = config.bootstrapAdmin.enrollmentToken;
-    if (enrollmentToken !== null && constantTimeEquals(token, enrollmentToken)) {
+    if (
+      enrollmentToken !== null &&
+      constantTimeEquals(token, enrollmentToken)
+    ) {
       const username = config.bootstrapAdmin.username;
       if (username === null) {
         return jsonError(c, 400, "Invite not found", "invite_not_found");
@@ -469,7 +472,10 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
     // challenge obtained before the admin enrolled elsewhere is refused
     // (T013).
     const enrollmentToken = config.bootstrapAdmin.enrollmentToken;
-    if (enrollmentToken !== null && constantTimeEquals(token, enrollmentToken)) {
+    if (
+      enrollmentToken !== null &&
+      constantTimeEquals(token, enrollmentToken)
+    ) {
       const username = config.bootstrapAdmin.username;
       if (username === null) {
         return jsonError(c, 400, "Invite not found", "invite_not_found");
@@ -655,7 +661,12 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
   app.get("/me", (c) => {
     const token = getCookie(c, SESSION_COOKIE_NAME);
     if (!token) return c.json({ user: null }, 200);
-    const session = validateSession(db, token, undefined, config.sessionIdleDays);
+    const session = validateSession(
+      db,
+      token,
+      undefined,
+      config.sessionIdleDays,
+    );
     if (!session) return c.json({ user: null }, 200);
     const user = getUserById(db, session.userId);
     return c.json({ user: user ? toApiUser(user) : null }, 200);
