@@ -10,6 +10,7 @@ import { createUser } from "../src/db/repository";
 import { createSession, sessionCookie } from "../src/auth/sessions";
 import { createApp, errorHandler, getUser, requireUser } from "../src/server";
 import type { ServerEnv } from "../src/server";
+import { createSecurityHeadersMiddleware } from "../src/security/headers";
 import type { AppConfig } from "../src/config";
 import type { User } from "../src/db/repository";
 
@@ -267,5 +268,141 @@ describe("session auth middleware", () => {
     const res = await app.request("/protected", { headers: { cookie } });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ user: "alice" });
+  });
+});
+
+// US4 (FR-009/FR-010): every response carries the hardened header set. The
+// CSP includes the storage endpoint origin in connect-src (derived from
+// config.s3.endpoint) because uploads PUT the file body via XHR directly to
+// the storage origin. The fixed headers use exact expected values.
+describe("security headers (US4)", () => {
+  /** CSP for the shared test config (s3 endpoint origin derived). */
+  const cspWithStorage =
+    "default-src 'self'; script-src 'self'; style-src 'self' " +
+    "'unsafe-inline'; img-src 'self' data:; connect-src 'self' " +
+    "https://s3.gra.io.cloud.ovh.net; frame-ancestors 'none'";
+
+  /** CSP when no storage origin is configured (bare middleware). */
+  const cspSelfOnly =
+    "default-src 'self'; script-src 'self'; style-src 'self' " +
+    "'unsafe-inline'; img-src 'self' data:; connect-src 'self'; " +
+    "frame-ancestors 'none'";
+
+  /** Assert the exact US4 header set on a response. */
+  function expectSecurityHeaders(res: Response, csp: string): void {
+    expect(res.headers.get("content-security-policy")).toBe(csp);
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("referrer-policy")).toBe("same-origin");
+    expect(res.headers.get("permissions-policy")).toBe(
+      "camera=(), microphone=(), geolocation=()",
+    );
+  }
+
+  it("sends the full header set on the SPA page", async () => {
+    const app = createApp({ config, db: createDb(), staticDir });
+    const res = await app.request("/");
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("JiveDrive SPA");
+    expectSecurityHeaders(res, cspWithStorage);
+  });
+
+  it("sends the full header set on a JSON 200 response", async () => {
+    const app = createApp({ config, db: createDb(), staticDir });
+    const res = await app.request("/healthcheck");
+
+    expect(res.status).toBe(200);
+    expectSecurityHeaders(res, cspWithStorage);
+  });
+
+  it("sends the full header set on a 401 response", async () => {
+    const app = createApp({ config, db: createDb(), staticDir });
+    // /api/files/* is guarded by requireUser; without a session cookie the
+    // response is a 401 JSON error that must still carry the header set.
+    const res = await app.request("/api/files/");
+
+    expect(res.status).toBe(401);
+    expectSecurityHeaders(res, cspWithStorage);
+  });
+
+  it("sends the full header set on a 404 response", async () => {
+    const app = createApp({ config, db: createDb(), staticDir });
+    const res = await app.request("/api/unknown");
+
+    expect(res.status).toBe(404);
+    expectSecurityHeaders(res, cspWithStorage);
+  });
+
+  it("sends the full header set on the error handler's 500", async () => {
+    // Mirrors the existing error-handler test: a throwing route composed
+    // with the real error handler. The headers middleware is registered
+    // app-wide first, exactly as in createApp, so even a 500 body carries
+    // the set.
+    const app = new Hono<ServerEnv>();
+    app.use("/*", createSecurityHeadersMiddleware({ nodeEnv: "test" }));
+    app.get("/boom", () => {
+      throw new Error("kaboom");
+    });
+    app.onError(errorHandler());
+
+    const res = await app.request("/boom");
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: "Internal server error",
+      code: "internal_error",
+    });
+    expectSecurityHeaders(res, cspSelfOnly);
+  });
+});
+
+describe("cache-control on API and auth responses (US4)", () => {
+  it("sends Cache-Control: no-store on /api/* responses", async () => {
+    const app = createApp({ config, db: createDb(), staticDir });
+    for (const path of ["/api/files/", "/api/unknown"]) {
+      const res = await app.request(path);
+      expect(res.headers.get("cache-control")).toBe("no-store");
+    }
+  });
+
+  it("sends Cache-Control: no-store on /auth/* responses", async () => {
+    const app = createApp({ config, db: createDb(), staticDir });
+    for (const path of ["/auth/me", "/auth/nope"]) {
+      const res = await app.request(path);
+      expect(res.headers.get("cache-control")).toBe("no-store");
+    }
+  });
+
+  it("sends Cache-Control: no-store on the healthcheck", async () => {
+    const app = createApp({ config, db: createDb(), staticDir });
+    const res = await app.request("/healthcheck");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("does not send Cache-Control: no-store on SPA or static responses", async () => {
+    const app = createApp({ config, db: createDb(), staticDir });
+    for (const path of ["/", "/files", "/assets/app.js"]) {
+      const res = await app.request(path);
+      expect(res.headers.get("cache-control")).toBeNull();
+    }
+  });
+});
+
+describe("strict transport security (US4)", () => {
+  it("does not send Strict-Transport-Security outside production", async () => {
+    const app = createApp({ config, db: createDb(), staticDir });
+    const res = await app.request("/healthcheck");
+    expect(res.headers.get("strict-transport-security")).toBeNull();
+  });
+
+  it("sends Strict-Transport-Security in production", async () => {
+    const app = createApp(
+      { config: { ...config, nodeEnv: "production" }, db: createDb(), staticDir },
+    );
+    const res = await app.request("/healthcheck");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("strict-transport-security")).toBe(
+      "max-age=31536000; includeSubDomains",
+    );
   });
 });

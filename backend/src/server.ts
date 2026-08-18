@@ -19,6 +19,7 @@ import { filesRoutes } from "./routes/files";
 import { adminRoutes } from "./routes/admin";
 import { createS3Client } from "./s3/client";
 import { createRateLimitMiddleware, createRateLimitStore } from "./security/rateLimit";
+import { createSecurityHeadersMiddleware } from "./security/headers";
 
 /** Variables stored on the Hono context for the current request. */
 export type ServerEnv = {
@@ -57,6 +58,21 @@ export interface ServerDeps {
 export function createApp(deps: ServerDeps): Hono<ServerEnv> {
   const app = new Hono<ServerEnv>();
   app.onError(errorHandler());
+
+  // Security headers (FR-009/FR-010): app-wide, registered before every
+  // other middleware and route so every response — SPA page, JSON 200/4xx,
+  // 401/404/429, error-handler 500 — carries the hardened set. connect-src
+  // extends 'self' with the storage endpoint origin because uploads PUT
+  // the file body via XHR directly to the presigned URL on that origin;
+  // without it the CSP would block uploads (the e2e upload spec would
+  // break under `default-src 'self'`).
+  app.use(
+    "/*",
+    createSecurityHeadersMiddleware({
+      nodeEnv: deps.config.nodeEnv,
+      connectSrc: new URL(deps.config.s3.endpoint).origin,
+    }),
+  );
 
   app.get("/healthcheck", (c) => c.json({ status: "ok" }));
 

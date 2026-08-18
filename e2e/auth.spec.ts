@@ -12,6 +12,22 @@ test("a seeded user enrolls via an invite link, signs in with a passkey and sign
 }, testInfo) => {
   await enableVirtualAuthenticator(context, page);
 
+  // US4: every response carries the hardened header set. The real page
+  // load response is asserted here (CSP, frame/clickjacking, MIME-sniffing,
+  // referrer and permission headers); the ceremony below then proves the
+  // SPA still works under the CSP.
+  const response = await page.goto("/");
+  expect(response?.status()).toBe(200);
+  const csp = response?.headers()["content-security-policy"] ?? "";
+  expect(csp).toContain("default-src 'self'");
+  expect(csp).toContain("frame-ancestors 'none'");
+  expect(response?.headers()["x-frame-options"]).toBe("DENY");
+  expect(response?.headers()["x-content-type-options"]).toBe("nosniff");
+  expect(response?.headers()["referrer-policy"]).toBe("same-origin");
+  expect(response?.headers()["permissions-policy"]).toBe(
+    "camera=(), microphone=(), geolocation=()",
+  );
+
   // First enrollment: the seeded user has no passkey, so the first
   // (discoverable) passkey attaches to the existing account via a seeded
   // invite (US1 attach semantics) and the user lands on the files page
