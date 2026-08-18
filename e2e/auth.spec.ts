@@ -1,22 +1,27 @@
 import { expect, test } from "@playwright/test";
 import {
   enableVirtualAuthenticator,
+  enrollViaInvite,
   expectSignedInAs,
-  signIn,
   signOut,
 } from "./helpers";
 
-test("a seeded user signs in with a passkey and signs out", async ({
+test("a seeded user enrolls via an invite link, signs in with a passkey and signs out", async ({
   page,
   context,
-}) => {
+}, testInfo) => {
   await enableVirtualAuthenticator(context, page);
 
-  // First sign-in: the seeded user has no passkey, so the fallback form
-  // bootstraps their first (discoverable) passkey and the user lands on
-  // the files page signed in.
-  await page.goto("/");
-  await signIn(page, "alice");
+  // First enrollment: the seeded user has no passkey, so the first
+  // (discoverable) passkey attaches to the existing account via a seeded
+  // invite (US1 attach semantics) and the user lands on the files page
+  // signed in. The -rN suffix keeps CI retries working: the e2e server
+  // keeps one in-memory database for the whole run, so a failed attempt
+  // that already claimed invite-alice would leave the retry without a
+  // fresh pending invite.
+  const token =
+    testInfo.retry > 0 ? `invite-alice-r${testInfo.retry}` : "invite-alice";
+  await enrollViaInvite(page, token);
   await expect(page).toHaveURL(/\/files/);
   await expectSignedInAs(page, "alice");
 
@@ -82,25 +87,21 @@ test("sign-in page is usable at mobile, tablet and desktop widths", async ({
   ]) {
     await page.setViewportSize(viewport);
     await page.goto("/");
-    // The primary username-less action and the "First time?" hint are
-    // visible; the Username field stays hidden until the hint is clicked
-    // (US1, FR-011). The ceremony is not triggered here: this context has
-    // no credential and the empty sheet is asserted via the hint's
-    // presence on the page.
+    // The token-gated sign-in page (US1, FR-001/FR-002) offers exactly two
+    // paths: the primary username-less passkey button and the invite-link
+    // registration path. There is no username input and no "First time?"
+    // fallback form anymore. The ceremony is not triggered here: this
+    // context has no credential.
     await expect(
       page.getByRole("button", { name: "Sign in with passkey" }),
     ).toBeVisible();
     await expect(
-      page.getByRole("link", { name: "First time? Use your username" }),
+      page.getByRole("link", { name: "Register with an invite link" }),
     ).toBeVisible();
-    await expect(page.getByLabel("Username")).toBeHidden();
-    await page
-      .getByRole("link", { name: "First time? Use your username" })
-      .click();
-    await expect(page.getByLabel("Username")).toBeVisible();
+    await expect(page.getByLabel("Username")).toHaveCount(0);
     await expect(
-      page.getByRole("button", { name: "Create passkey" }),
-    ).toBeVisible();
+      page.getByRole("link", { name: "First time? Use your username" }),
+    ).toHaveCount(0);
     // No horizontal scrolling at any supported width.
     const hasHorizontalOverflow = await page.evaluate(
       () =>

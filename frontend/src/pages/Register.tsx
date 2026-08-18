@@ -7,9 +7,12 @@ import { useSession } from "../auth/sessionContext";
 import { DriveIcon } from "../components/icons";
 
 /**
- * Register page: claims an invite token from the URL and creates the
- * passkey. The username, bucket and prefix come from the invite and are
- * shown read-only. Completing the ceremony signs the user in.
+ * Register page: claims a registration token from the URL and creates the
+ * passkey. The token is an invite token (new user, or re-enrollment after
+ * an admin passkey reset) or the bootstrap enrollment token (provisioned
+ * admin) — both paths land here. The username, bucket and prefix come from
+ * the token's target account and are shown read-only. Completing the
+ * ceremony signs the user in.
  */
 export function Register() {
   const [searchParams] = useSearchParams();
@@ -24,7 +27,7 @@ export function Register() {
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
-    postRegisterOptions({ token })
+    postRegisterOptions(token)
       .then((body) => {
         if (!cancelled) setInvite(body);
       })
@@ -87,29 +90,29 @@ export function Register() {
           <DriveIcon className="size-12 text-primary" />
           <h1 className="text-3xl font-bold tracking-tight">JiveDrive</h1>
           <p className="text-sm opacity-70">
-            You have been invited to a private space.
+            Register your passkey to access your private space.
           </p>
         </div>
         <section
           className="card bg-base-100 w-full max-w-md shadow-xl"
-          aria-label="Register with invite"
+          aria-label="Register your passkey"
         >
           <div className="card-body">
             <h2 className="card-title justify-center">Register your passkey</h2>
             <p className="text-sm opacity-70 text-center">
-              You have been invited to JiveDrive
+              Set up your passkey for JiveDrive
             </p>
 
             {loading && (
               <p className="alert alert-info" role="status">
-                Checking your invite...
+                Checking your registration...
               </p>
             )}
 
             {!token && !loading && !invite && (
               <>
                 <p className="alert alert-error" role="alert">
-                  This link is missing an invite token. Open the full invite
+                  This link is missing a registration token. Open the full
                   link to register.
                 </p>
                 <Link className="btn btn-outline w-full" to="/">
@@ -143,7 +146,7 @@ export function Register() {
                     readOnly
                   />
                   <p className="text-sm opacity-70 italic">
-                    Set by the admin who invited you.
+                    Assigned to your account.
                   </p>
                 </div>
 
@@ -158,7 +161,7 @@ export function Register() {
                     </span>
                   </div>
                   <p className="text-sm opacity-70 italic">
-                    Pre-set by the admin who invited you.
+                    Your files are stored in this space.
                   </p>
                 </div>
 

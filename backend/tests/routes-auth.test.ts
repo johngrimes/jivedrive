@@ -4,6 +4,7 @@ import type { Hono } from "hono";
 import { fileURLToPath } from "node:url";
 import { migrateFromDir, openDatabase } from "../src/db/migrate";
 import {
+  countUsers,
   createCredential,
   createInvite,
   createUser,
@@ -64,11 +65,11 @@ const config: AppConfig = {
     secretAccessKey: "s3cr3t",
   },
   bootstrapAdmin: {
-    username: null,
-    bucket: null,
-    prefix: "",
+    username: "admin",
+    bucket: "jivedrive-prod",
+    prefix: "users/admin/",
     isAdmin: true,
-    enrollmentToken: null,
+    enrollmentToken: "bootstrap-enrollment-token",
   },
   webauthn: { rpId, origin },
 };
@@ -227,9 +228,110 @@ describe("POST /auth/register/options", () => {
     expect(await res.json()).toMatchObject({ code: "invite_claimed" });
   });
 
-  it("rejects an invite whose username is already taken", async () => {
+  it("returns options carrying the existing user's id for an invite whose username exists (T010)", async () => {
     const { app, db } = createAppWithDb();
-    seedInvite(db);
+    const alice = createUser(db, {
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    });
+    const { invite } = seedInvite(db, { username: "alice" });
+
+    const res = await app.request("/auth/register/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: invite.token }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      options: { challenge: string; user: { id: string } };
+      username: string;
+      bucket: string;
+      prefix: string;
+    };
+    expect(body.options.challenge).toMatch(/^[A-Za-z0-9_-]+$/);
+    // The passkey will ATTACH to the existing account: the options carry
+    // the existing user's id as the userHandle (FR-004).
+    expect(
+      Buffer.from(body.options.user.id, "base64url").toString("utf8"),
+    ).toBe(alice.id);
+    expect(body.username).toBe("alice");
+    expect(body.bucket).toBe("jivedrive-prod");
+    expect(body.prefix).toBe("users/alice/");
+  });
+
+  it("allows an invite attach when the account's only credentials are legacy (T011)", async () => {
+    const { app, db } = createAppWithDb();
+    const alice = createUser(db, {
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    });
+    createCredential(db, {
+      id: "cred-legacy",
+      userId: alice.id,
+      publicKey: "cG9rZXk",
+      transports: ["internal"],
+    });
+    const { invite } = seedInvite(db, { username: "alice" });
+
+    const res = await app.request("/auth/register/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: invite.token }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { options: { user: { id: string } } };
+    // Legacy-only accounts are still attachable (zero discoverable gate).
+    expect(
+      Buffer.from(body.options.user.id, "base64url").toString("utf8"),
+    ).toBe(alice.id);
+  });
+
+  it("refuses an attach when the account already has a discoverable passkey (T012)", async () => {
+    const { app, db } = createAppWithDb();
+    const alice = createUser(db, {
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    });
+    createCredential(db, {
+      id: "cred-discoverable",
+      userId: alice.id,
+      publicKey: "cG9rZXk",
+      discoverable: true,
+    });
+    const { invite } = seedInvite(db, { username: "alice" });
+
+    const res = await app.request("/auth/register/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: invite.token }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: "user_has_passkey" });
+  });
+
+  it("rejects a request without a token with a generic error (T007)", async () => {
+    const { app } = createAppWithDb();
+    const res = await app.request("/auth/register/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; code: string };
+    expect(body.code).toBe("bad_request");
+    expect(body.error).toMatch(/token/i);
+    expect(body).not.toHaveProperty("options");
+  });
+
+  it("refuses a username-only request for an existing username (T007)", async () => {
+    const { app, db } = createAppWithDb();
     createUser(db, {
       username: "alice",
       bucket: "jivedrive-prod",
@@ -239,27 +341,34 @@ describe("POST /auth/register/options", () => {
     const res = await app.request("/auth/register/options", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: "invite-token-1" }),
+      body: JSON.stringify({ username: "alice" }),
     });
 
     expect(res.status).toBe(400);
-    expect(await res.json()).toMatchObject({ code: "username_taken" });
+    const body = (await res.json()) as { error: string; code: string };
+    expect(body.code).toBe("bad_request");
+    expect(body.error).toMatch(/token/i);
+    expect(body).not.toHaveProperty("options");
   });
 
-  it("rejects a missing token", async () => {
+  it("refuses a username-only request for an unknown username with the same generic error (T007)", async () => {
     const { app } = createAppWithDb();
     const res = await app.request("/auth/register/options", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ username: "nobody" }),
     });
 
     expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; code: string };
+    expect(body.code).toBe("bad_request");
+    expect(body.error).toMatch(/token/i);
+    expect(body).not.toHaveProperty("options");
   });
 
-  it("returns registration options and the username for an existing user (T010)", async () => {
+  it("returns options for the bootstrap admin with the correct token (T009)", async () => {
     const { app, db } = createAppWithDb();
-    const user = createUser(db, {
+    const admin = createUser(db, {
       username: "admin",
       bucket: "jivedrive-prod",
       prefix: "users/admin/",
@@ -269,53 +378,54 @@ describe("POST /auth/register/options", () => {
     const res = await app.request("/auth/register/options", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "admin" }),
+      body: JSON.stringify({ token: "bootstrap-enrollment-token" }),
     });
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      options: {
-        rp: { id: string };
-        challenge: string;
-        user: { id: string; name: string };
-      };
+      options: { challenge: string; user: { id: string } };
       username: string;
+      bucket: string;
+      prefix: string;
     };
-    expect(body.options.rp.id).toBe(rpId);
     expect(body.options.challenge).toMatch(/^[A-Za-z0-9_-]+$/);
-    // The options carry the user's id as the userHandle (userID) bytes.
+    // The challenge is bound to the admin's OWN user id (userHandle).
     expect(
       Buffer.from(body.options.user.id, "base64url").toString("utf8"),
-    ).toBe(user.id);
-    expect(body.options.user.name).toBe("admin");
+    ).toBe(admin.id);
     expect(body.username).toBe("admin");
-    // bucket/prefix are invite-flow only (contract): omitted here.
-    expect(body).not.toHaveProperty("bucket");
-    expect(body).not.toHaveProperty("prefix");
+    expect(body.bucket).toBe("jivedrive-prod");
+    expect(body.prefix).toBe("users/admin/");
   });
 
-  it("returns 400 unknown_user for an unknown username (T010)", async () => {
+  it("refuses the bootstrap token with a generic error when the admin is not provisioned (T009)", async () => {
     const { app } = createAppWithDb();
+
     const res = await app.request("/auth/register/options", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "nobody" }),
+      body: JSON.stringify({ token: "bootstrap-enrollment-token" }),
     });
 
+    // No admin user: the response must not reveal a bootstrap token exists.
     expect(res.status).toBe(400);
-    expect(await res.json()).toMatchObject({ code: "unknown_user" });
+    expect(await res.json()).toMatchObject({
+      error: "Invite not found",
+      code: "invite_not_found",
+    });
   });
 
-  it("refuses a username that already has a discoverable passkey (T011)", async () => {
+  it("refuses the bootstrap token after the admin has a passkey (T009)", async () => {
     const { app, db } = createAppWithDb();
-    const user = createUser(db, {
-      username: "alice",
+    const admin = createUser(db, {
+      username: "admin",
       bucket: "jivedrive-prod",
-      prefix: "users/alice/",
+      prefix: "users/admin/",
+      isAdmin: true,
     });
     createCredential(db, {
-      id: "cred-discoverable",
-      userId: user.id,
+      id: "cred-admin",
+      userId: admin.id,
       publicKey: "cG9rZXk",
       discoverable: true,
     });
@@ -323,40 +433,95 @@ describe("POST /auth/register/options", () => {
     const res = await app.request("/auth/register/options", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "alice" }),
+      body: JSON.stringify({ token: "bootstrap-enrollment-token" }),
     });
 
     expect(res.status).toBe(400);
     expect(await res.json()).toMatchObject({ code: "user_has_passkey" });
   });
 
-  it("allows a username whose only credentials are legacy (T011)", async () => {
+  it("returns the same response shape for unknown, expired and claimed tokens (T014)", async () => {
     const { app, db } = createAppWithDb();
-    createUser(db, {
+    const admin = createUser(db, {
+      username: "admin",
+      bucket: "jivedrive-prod",
+      prefix: "users/admin/",
+      isAdmin: true,
+    });
+    createInvite(db, {
+      token: "invite-expired",
       username: "alice",
       bucket: "jivedrive-prod",
       prefix: "users/alice/",
+      issuedByUserId: admin.id,
+      expiresAt: "2000-01-01T00:00:00.000Z",
+    });
+    const claimedInvite = createInvite(db, {
+      token: "invite-claimed",
+      username: "bob",
+      bucket: "jivedrive-prod",
+      prefix: "users/bob/",
+      issuedByUserId: admin.id,
+      expiresAt: "2999-01-01T00:00:00.000Z",
+    });
+    const other = createUser(db, {
+      username: "bob",
+      bucket: "jivedrive-prod",
+      prefix: "users/bob/",
+    });
+    markInviteClaimed(db, claimedInvite.id, other.id);
+
+    for (const token of [
+      "no-such-token",
+      "invite-expired",
+      "invite-claimed",
+    ]) {
+      const res = await app.request("/auth/register/options", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string; code: string };
+      // Always the {error, code} shape: no options, no account-existence
+      // or passkey-state disclosure (SC-002, FR-005).
+      expect(Object.keys(body).sort()).toEqual(["code", "error"]);
+      expect(typeof body.error).toBe("string");
+      expect(typeof body.code).toBe("string");
+    }
+  });
+
+  it("returns a body identical to an unknown invite for a wrong bootstrap token (T014)", async () => {
+    const { app, db } = createAppWithDb();
+    // The bootstrap admin exists AND is enrolled: a wrong token must still
+    // produce the identical generic response (SC-002).
+    const admin = createUser(db, {
+      username: "admin",
+      bucket: "jivedrive-prod",
+      prefix: "users/admin/",
+      isAdmin: true,
     });
     createCredential(db, {
-      id: "cred-legacy",
-      userId: getUserByUsername(db, "alice")!.id,
+      id: "cred-admin",
+      userId: admin.id,
       publicKey: "cG9rZXk",
-      transports: ["internal"],
+      discoverable: true,
     });
 
-    const res = await app.request("/auth/register/options", {
+    const unknownRes = await app.request("/auth/register/options", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "alice" }),
+      body: JSON.stringify({ token: "no-such-token" }),
+    });
+    const wrongBootstrapRes = await app.request("/auth/register/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: "wrong-bootstrap-token" }),
     });
 
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      options: { challenge: string };
-      username: string;
-    };
-    expect(body.options.challenge).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(body.username).toBe("alice");
+    expect(unknownRes.status).toBe(400);
+    expect(wrongBootstrapRes.status).toBe(400);
+    expect(await wrongBootstrapRes.json()).toEqual(await unknownRes.json());
   });
 });
 
@@ -567,18 +732,12 @@ describe("POST /auth/register/verify", () => {
     expect(await res.json()).toMatchObject({ code: "registration_failed" });
   });
 
-  it("refuses a first passkey for a user that already has a discoverable one", async () => {
+  it("refuses a username-only verify request with no credential or session (T008)", async () => {
     const { app, db } = createAppWithDb();
-    const user = createUser(db, {
+    const alice = createUser(db, {
       username: "alice",
       bucket: "jivedrive-prod",
       prefix: "users/alice/",
-    });
-    createCredential(db, {
-      id: "cred-existing",
-      userId: user.id,
-      publicKey: "cG9rZXk",
-      discoverable: true,
     });
 
     const res = await app.request("/auth/register/verify", {
@@ -596,33 +755,34 @@ describe("POST /auth/register/verify", () => {
     });
 
     expect(res.status).toBe(400);
-    expect(await res.json()).toMatchObject({ code: "user_has_passkey" });
+    const body = (await res.json()) as { error: string; code: string };
+    expect(body.code).toBe("bad_request");
+    expect(body.error).toMatch(/token/i);
+    // No credential was created and no session cookie was set.
+    expect(listCredentialsByUser(db, alice.id)).toHaveLength(0);
+    expect(res.headers.get("set-cookie")).toBeNull();
   });
 
-  it("stores a discoverable credential, deletes legacy credentials and signs the user in (T012)", async () => {
+  it("completes the ceremony for the bootstrap admin and signs them in (T009)", async () => {
     const { app, db } = createAppWithDb();
-    const user = createUser(db, {
-      username: "alice",
+    const admin = createUser(db, {
+      username: "admin",
       bucket: "jivedrive-prod",
-      prefix: "users/alice/",
+      prefix: "users/admin/",
+      isAdmin: true,
     });
+    // A legacy non-discoverable credential: re-enrollment must delete it.
     createCredential(db, {
-      id: "cred-legacy-1",
-      userId: user.id,
-      publicKey: "cG9rZXktMQ",
+      id: "cred-legacy",
+      userId: admin.id,
+      publicKey: "cG9rZXk",
       transports: ["internal"],
-    });
-    createCredential(db, {
-      id: "cred-legacy-2",
-      userId: user.id,
-      publicKey: "cG9rZXktMg",
-      transports: ["usb"],
     });
 
     const optionsRes = await app.request("/auth/register/options", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "alice" }),
+      body: JSON.stringify({ token: "bootstrap-enrollment-token" }),
     });
     expect(optionsRes.status).toBe(200);
     const options = (await optionsRes.json()) as {
@@ -639,24 +799,113 @@ describe("POST /auth/register/verify", () => {
     const res = await app.request("/auth/register/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "alice", credential: response }),
+      body: JSON.stringify({
+        token: "bootstrap-enrollment-token",
+        credential: response,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      user: {
+        username: string;
+        bucket: string;
+        prefix: string;
+        isAdmin: boolean;
+      };
+    };
+    expect(body.user.username).toBe("admin");
+    expect(body.user.bucket).toBe("jivedrive-prod");
+    expect(body.user.prefix).toBe("users/admin/");
+    expect(body.user.isAdmin).toBe(true);
+
+    // The credential is stored discoverable for the admin's own account
+    // and the legacy credential is cleaned up (re-enrollment semantics).
+    const stored = getCredentialById(db, response.id);
+    expect(stored?.userId).toBe(admin.id);
+    expect(stored?.discoverable).toBe(true);
+    expect(listCredentialsByUser(db, admin.id).map((cred) => cred.id)).toEqual(
+      [response.id],
+    );
+
+    // The session cookie is live: /auth/me round-trips.
+    const cookie = cookieFrom(res);
+    expect(cookie).toMatch(/^jivedrive_session=/);
+    const me = await app.request("/auth/me", { headers: { cookie } });
+    expect(
+      ((await me.json()) as { user: { username: string } }).user.username,
+    ).toBe("admin");
+  });
+
+  it("attaches a passkey to an existing user with matching scope and claims the invite (T010)", async () => {
+    const { app, db } = createAppWithDb();
+    const alice = createUser(db, {
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    });
+    createCredential(db, {
+      id: "cred-legacy",
+      userId: alice.id,
+      publicKey: "cG9rZXk",
+      transports: ["internal"],
+    });
+    const { invite } = seedInvite(db, {
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    });
+    const usersBefore = countUsers(db);
+
+    const optionsRes = await app.request("/auth/register/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: invite.token }),
+    });
+    expect(optionsRes.status).toBe(200);
+    const options = (await optionsRes.json()) as {
+      options: { challenge: string; user: { id: string } };
+    };
+    // The ceremony was started against the EXISTING user's id.
+    expect(
+      Buffer.from(options.options.user.id, "base64url").toString("utf8"),
+    ).toBe(alice.id);
+
+    const keyPair = makeKeyPair();
+    const response = makeRegistrationResponse({
+      challenge: options.options.challenge,
+      origin,
+      rpId,
+      keyPair,
+    });
+
+    const res = await app.request("/auth/register/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: invite.token, credential: response }),
     });
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as { user: { username: string } };
     expect(body.user.username).toBe("alice");
 
-    // The new credential is stored as discoverable for the same user.
+    // No new user row: the count is unchanged and the credential is owned
+    // by the existing account (never a duplicate, FR-004).
+    expect(countUsers(db)).toBe(usersBefore);
     const stored = getCredentialById(db, response.id);
-    expect(stored?.userId).toBe(user.id);
+    expect(stored?.userId).toBe(alice.id);
     expect(stored?.discoverable).toBe(true);
+    // The legacy credential was cleaned up on re-enrollment.
+    expect(listCredentialsByUser(db, alice.id).map((cred) => cred.id)).toEqual(
+      [response.id],
+    );
 
-    // The legacy credentials are gone; only the new passkey remains.
-    expect(listCredentialsByUser(db, user.id).map((c) => c.id)).toEqual([
-      response.id,
-    ]);
+    // The invite is claimed by the account it attached to.
+    const claimed = getInviteByToken(db, invite.token);
+    expect(claimed?.claimedByUserId).toBe(alice.id);
+    expect(claimed?.claimedAt).not.toBeNull();
 
-    // Session cookie must be a live session.
+    // The session cookie is live.
     const cookie = cookieFrom(res);
     expect(cookie).toMatch(/^jivedrive_session=/);
     const me = await app.request("/auth/me", { headers: { cookie } });
@@ -665,27 +914,160 @@ describe("POST /auth/register/verify", () => {
     ).toBe("alice");
   });
 
-  it("refuses first-passkey registration for an unknown username", async () => {
-    const { app } = createAppWithDb();
+  it("refuses an attach when bucket, prefix or isAdmin differs (T011)", async () => {
+    for (const overrides of [
+      { bucket: "other-bucket" },
+      { prefix: "users/other/" },
+      { isAdmin: true },
+    ]) {
+      const { app, db } = createAppWithDb();
+      const alice = createUser(db, {
+        username: "alice",
+        bucket: "jivedrive-prod",
+        prefix: "users/alice/",
+      });
+      const { invite } = seedInvite(db, { username: "alice", ...overrides });
+
+      const optionsRes = await app.request("/auth/register/options", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: invite.token }),
+      });
+      expect(optionsRes.status).toBe(200);
+      const options = (await optionsRes.json()) as {
+        options: { challenge: string };
+      };
+
+      const res = await app.request("/auth/register/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token: invite.token,
+          credential: makeRegistrationResponse({
+            challenge: options.options.challenge,
+            origin,
+            rpId,
+            keyPair: makeKeyPair(),
+          }),
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "attach_refused" });
+      // No credential was created and the account was never re-scoped or
+      // re-privileged (FR-004).
+      expect(listCredentialsByUser(db, alice.id)).toHaveLength(0);
+      const after = getUserByUsername(db, "alice");
+      expect(after?.bucket).toBe("jivedrive-prod");
+      expect(after?.prefix).toBe("users/alice/");
+      expect(after?.isAdmin).toBe(false);
+    }
+  });
+
+  it("refuses a bootstrap challenge obtained before the admin gained a passkey (T013)", async () => {
+    const { app, db } = createAppWithDb();
+    const admin = createUser(db, {
+      username: "admin",
+      bucket: "jivedrive-prod",
+      prefix: "users/admin/",
+      isAdmin: true,
+    });
+
+    const optionsRes = await app.request("/auth/register/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: "bootstrap-enrollment-token" }),
+    });
+    expect(optionsRes.status).toBe(200);
+    const options = (await optionsRes.json()) as {
+      options: { challenge: string };
+    };
+
+    // The account gains a passkey by another means before the ceremony
+    // completes: the verify-time gate must refuse the stale challenge.
+    createCredential(db, {
+      id: "cred-elsewhere",
+      userId: admin.id,
+      publicKey: "cG9rZXk",
+      discoverable: true,
+    });
+
+    const keyPair = makeKeyPair();
+    const response = makeRegistrationResponse({
+      challenge: options.options.challenge,
+      origin,
+      rpId,
+      keyPair,
+      credentialId: new Uint8Array(16).fill(0x51),
+    });
+
     const res = await app.request("/auth/register/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        username: "nobody",
-        credential: makeRegistrationResponse({
-          challenge: "c",
-          origin,
-          rpId,
-          keyPair: makeKeyPair(),
-        }),
+        token: "bootstrap-enrollment-token",
+        credential: response,
       }),
     });
 
     expect(res.status).toBe(400);
-    expect(await res.json()).toMatchObject({ code: "unknown_user" });
+    expect(await res.json()).toMatchObject({ code: "user_has_passkey" });
+    // The original ceremony's credential was never created.
+    expect(getCredentialById(db, response.id)).toBeNull();
+    expect(listCredentialsByUser(db, admin.id).map((cred) => cred.id)).toEqual(
+      ["cred-elsewhere"],
+    );
   });
 
-  it("rejects a body with neither token nor username", async () => {
+  it("refuses an attach challenge obtained before the account gained a passkey (T013)", async () => {
+    const { app, db } = createAppWithDb();
+    const alice = createUser(db, {
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    });
+    const { invite } = seedInvite(db, { username: "alice" });
+
+    const optionsRes = await app.request("/auth/register/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: invite.token }),
+    });
+    expect(optionsRes.status).toBe(200);
+    const options = (await optionsRes.json()) as {
+      options: { challenge: string };
+    };
+
+    // The account gains a passkey by another means before the ceremony
+    // completes: the verify-time attach gate must refuse (FR-004).
+    createCredential(db, {
+      id: "cred-elsewhere",
+      userId: alice.id,
+      publicKey: "cG9rZXk",
+      discoverable: true,
+    });
+
+    const keyPair = makeKeyPair();
+    const response = makeRegistrationResponse({
+      challenge: options.options.challenge,
+      origin,
+      rpId,
+      keyPair,
+      credentialId: new Uint8Array(16).fill(0x52),
+    });
+
+    const res = await app.request("/auth/register/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: invite.token, credential: response }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: "attach_refused" });
+    expect(getCredentialById(db, response.id)).toBeNull();
+  });
+
+  it("rejects a body without a token", async () => {
     const { app } = createAppWithDb();
     const res = await app.request("/auth/register/verify", {
       method: "POST",
@@ -694,6 +1076,7 @@ describe("POST /auth/register/verify", () => {
     });
 
     expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: "bad_request" });
   });
 });
 

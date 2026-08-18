@@ -2,9 +2,9 @@ import { expect, test } from "@playwright/test";
 import type { BrowserContext, Page, TestInfo } from "@playwright/test";
 import {
   enableVirtualAuthenticator,
+  enrollViaInvite,
   expectNoHorizontalOverflow,
   expectSignedInAs,
-  signIn,
   signOut,
 } from "./helpers";
 
@@ -263,17 +263,24 @@ test("an admin removes a user and their session stops working", async ({
   expect(body.user).toBeNull();
 });
 
-test("an admin resets a user's passkeys and the user re-enrolls via the fallback form", async ({
+test("an admin resets a user's passkeys and the user re-enrolls via an invite link", async ({
   page,
   context,
   browser,
-}) => {
+}, testInfo) => {
   await openAdmin(page, context);
 
   // Re-arm first: the e2e server keeps one in-memory DB for the whole run,
   // so a previous (failed) attempt may have left kate with a passkey. An
   // unconditional reset deletes any leftover (the route is idempotent: 204
-  // even when zero rows exist) and makes the bootstrap below deterministic.
+  // even when zero rows exist) and makes the enrollment below
+  // deterministic. The -rN invite tokens mirror the re-arm: a failed
+  // attempt may already have claimed invite-kate/-kate-2, so a retry uses
+  // fresh seeded copies (same pattern as inviteUsername).
+  const firstInvite =
+    testInfo.retry > 0 ? `invite-kate-r${testInfo.retry}` : "invite-kate";
+  const reenrollInvite =
+    testInfo.retry > 0 ? `invite-kate-2-r${testInfo.retry}` : "invite-kate-2";
   const row = userRow(page, "kate");
   await expect(row).toBeVisible();
   await row.getByRole("button", { name: "Reset passkeys" }).click();
@@ -285,13 +292,13 @@ test("an admin resets a user's passkeys and the user re-enrolls via the fallback
   await page.reload();
   await expect(userRow(page, "kate")).toBeVisible();
 
-  // kate's own context: she bootstraps her first passkey via the fallback
-  // form (the fallback gate allows accounts with no discoverable passkey).
+  // kate's own context: she enrolls her first passkey via a seeded invite
+  // (invite-kate) that attaches to her existing account (US1 attach
+  // semantics; the fallback form no longer exists).
   const kateContext = await browser.newContext();
   const katePage = await kateContext.newPage();
   await enableVirtualAuthenticator(kateContext, katePage);
-  await katePage.goto("/");
-  await signIn(katePage, "kate");
+  await enrollViaInvite(katePage, firstInvite);
   await expect(katePage).toHaveURL(/\/files/);
   await expectSignedInAs(katePage, "kate");
   await signOut(katePage, "kate");
@@ -310,10 +317,11 @@ test("an admin resets a user's passkeys and the user re-enrolls via the fallback
   // Explicit success feedback (FR-011): the reset is confirmed visibly.
   await expect(page.getByText(/Passkeys reset for "kate"/)).toBeVisible();
 
-  // US4 scenario 3: the fallback form works again for kate. She re-enrolls
-  // in the same context and lands signed in (FR-009).
-  await katePage.goto("/");
-  await signIn(katePage, "kate");
+  // US4 scenario 3: kate re-enrolls via a seeded invite (invite-kate-2) in
+  // the same context and lands signed in (FR-009). In this phase the reset
+  // still returns 204; US2 changes it to return the reset-created
+  // re-enrollment link, and this step will use that link instead.
+  await enrollViaInvite(katePage, reenrollInvite);
   await expect(katePage).toHaveURL(/\/files/);
   await expectSignedInAs(katePage, "kate");
 
