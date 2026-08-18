@@ -19,7 +19,6 @@ import {
   ShareAndroidIcon,
   TrashIcon,
 } from "@primer/octicons-react";
-import { formatDate, formatSize } from "../lib/format";
 
 /** Props for {@link Breadcrumbs}. */
 export interface BreadcrumbsProps {
@@ -44,10 +43,10 @@ export function Breadcrumbs({ segments, onNavigate }: BreadcrumbsProps) {
           wrap utility makes the crumbs flow onto multiple lines instead
           (it only engages when the trail does not fit, so a shallow trail
           still renders on one line). */}
-      <ul className="flex-wrap">
+      <ul className="flex-wrap min-h-11">
         <li>
           <a
-            className="min-h-11 inline-flex items-center gap-1"
+            className="inline-flex items-center gap-1"
             href="#"
             onClick={(event) => {
               event.preventDefault();
@@ -68,7 +67,7 @@ export function Breadcrumbs({ segments, onNavigate }: BreadcrumbsProps) {
           ) : (
             <li key={`${segment}-${index}`}>
               <a
-                className="min-h-11 inline-flex items-center"
+                className="inline-flex items-center"
                 href="#"
                 onClick={(event) => {
                   event.preventDefault();
@@ -219,15 +218,15 @@ export function FileListing({
           </li>
         ))}
         {files.map((file) => (
-          <li className="list-row" key={file.key}>
-            <div className="flex items-center gap-3">
-              <FileIcon aria-hidden="true" className="shrink-0" />
-              <span className="min-w-0">{file.name}</span>
+          <li
+            className="list-row flex flex-wrap justify-end md:justify-start md:flex-nowrap gap-3 items-center overflow-hidden"
+            key={file.key}
+          >
+            <div className="flex grow gap-3 items-center">
+              <FileIcon aria-hidden="true" />
+              <span className="truncate w-2xs md:w-auto md:max-w-md">{file.name}</span>
             </div>
-            <span className="block text-xs opacity-60 sm:hidden">
-              {formatSize(file.size)} · {formatDate(file.lastModified)}
-            </span>
-            <div className="flex items-center justify-end gap-3">
+            <div className="flex gap-3">
               <button
                 type="button"
                 className="btn btn-accent btn-sm btn-soft min-h-11"
