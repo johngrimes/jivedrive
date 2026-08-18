@@ -26,8 +26,12 @@ spec:
     spec:
       # The runtime image runs as the non-root "bun" user (UID 1000);
       # fsGroup 1000 gives that user write access to mounted volumes.
+      # runAsUser is pinned to the numeric UID because the image declares
+      # the user by name and Kubernetes cannot verify a named user is
+      # non-root when runAsNonRoot is set.
       securityContext:
         runAsNonRoot: true
+        runAsUser: 1000
         fsGroup: 1000
       {{- with .Values.jivedrive.image.pullSecret }}
       imagePullSecrets:
