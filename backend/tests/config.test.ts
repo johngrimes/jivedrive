@@ -19,6 +19,14 @@ describe("loadConfig", () => {
     expect(config.port).toBe(3000);
     expect(config.dbPath).toBe("jivedrive.db");
     expect(config.sessionTtlDays).toBe(30);
+    expect(config.sessionIdleDays).toBe(7);
+    expect(config.rateLimit).toEqual({
+      authPerMinute: 20,
+      authBurst: 10,
+      filesPerMinute: 300,
+      filesBurst: 100,
+      trustProxy: false,
+    });
     expect(config.s3.endpoint).toBe("https://s3.gra.io.cloud.ovh.net");
     expect(config.s3.region).toBe("gra");
     expect(config.s3.accessKeyId).toBe("AKIAEXAMPLE123");
@@ -28,6 +36,7 @@ describe("loadConfig", () => {
       bucket: null,
       prefix: "",
       isAdmin: true,
+      enrollmentToken: null,
     });
     expect(config.webauthn.rpId).toBe("localhost");
     expect(config.webauthn.origin).toBe("http://localhost:5173");
@@ -58,6 +67,7 @@ describe("loadConfig", () => {
       JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin",
       JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: "jivedrive-prod",
       JIVEDRIVE_BOOTSTRAP_ADMIN_PREFIX: "users/admin",
+      JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN: "0123456789abcdef",
     });
 
     expect(config.bootstrapAdmin).toEqual({
@@ -65,6 +75,7 @@ describe("loadConfig", () => {
       bucket: "jivedrive-prod",
       prefix: "users/admin/",
       isAdmin: true,
+      enrollmentToken: "0123456789abcdef",
     });
   });
 
@@ -73,6 +84,7 @@ describe("loadConfig", () => {
       ...minimalEnv,
       JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin",
       JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: "jivedrive-prod",
+      JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN: "0123456789abcdef",
     });
 
     expect(config.bootstrapAdmin.isAdmin).toBe(true);
@@ -84,6 +96,7 @@ describe("loadConfig", () => {
       JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin",
       JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: "jivedrive-prod",
       JIVEDRIVE_BOOTSTRAP_ADMIN_IS_ADMIN: "false",
+      JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN: "0123456789abcdef",
     });
 
     expect(config.bootstrapAdmin.isAdmin).toBe(false);
@@ -105,6 +118,7 @@ describe("loadConfig", () => {
       ...minimalEnv,
       JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin",
       JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: "jivedrive-prod",
+      JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN: "0123456789abcdef",
     });
 
     expect(config.bootstrapAdmin.prefix).toBe("");
@@ -170,6 +184,64 @@ describe("loadConfig", () => {
     }
   });
 
+  it("parses the session idle days with a default of 7 (T002)", () => {
+    expect(loadConfig(minimalEnv).sessionIdleDays).toBe(7);
+    expect(
+      loadConfig({ ...minimalEnv, JIVEDRIVE_SESSION_IDLE_DAYS: "14" })
+        .sessionIdleDays,
+    ).toBe(14);
+  });
+
+  it("rejects an invalid session idle days value (T002)", () => {
+    for (const value of ["abc", "0", "-7", "1.5"]) {
+      expect(() =>
+        loadConfig({ ...minimalEnv, JIVEDRIVE_SESSION_IDLE_DAYS: value }),
+      ).toThrow(/JIVEDRIVE_SESSION_IDLE_DAYS/);
+    }
+  });
+
+  it("parses rate-limit overrides and the trust proxy flag (T002)", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      JIVEDRIVE_RATE_LIMIT_AUTH_PER_MINUTE: "40",
+      JIVEDRIVE_RATE_LIMIT_AUTH_BURST: "25",
+      JIVEDRIVE_RATE_LIMIT_FILES_PER_MINUTE: "600",
+      JIVEDRIVE_RATE_LIMIT_FILES_BURST: "200",
+      JIVEDRIVE_TRUST_PROXY: "true",
+    });
+
+    expect(config.rateLimit).toEqual({
+      authPerMinute: 40,
+      authBurst: 25,
+      filesPerMinute: 600,
+      filesBurst: 200,
+      trustProxy: true,
+    });
+  });
+
+  it("rejects invalid rate-limit values (T002)", () => {
+    for (const key of [
+      "JIVEDRIVE_RATE_LIMIT_AUTH_PER_MINUTE",
+      "JIVEDRIVE_RATE_LIMIT_AUTH_BURST",
+      "JIVEDRIVE_RATE_LIMIT_FILES_PER_MINUTE",
+      "JIVEDRIVE_RATE_LIMIT_FILES_BURST",
+    ]) {
+      for (const value of ["abc", "0", "-5", "2.5"]) {
+        expect(() => loadConfig({ ...minimalEnv, [key]: value })).toThrow(
+          new RegExp(key),
+        );
+      }
+    }
+  });
+
+  it("rejects an invalid trust proxy value (T002)", () => {
+    for (const value of ["yes", "1", "TRUE", ""]) {
+      expect(() =>
+        loadConfig({ ...minimalEnv, JIVEDRIVE_TRUST_PROXY: value }),
+      ).toThrow(/JIVEDRIVE_TRUST_PROXY/);
+    }
+  });
+
   it("rejects a bootstrap admin without a bucket", () => {
     expect(() =>
       loadConfig({
@@ -177,6 +249,57 @@ describe("loadConfig", () => {
         JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin",
       }),
     ).toThrow(/JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET/);
+  });
+
+  it("requires an enrollment token when a bootstrap admin is configured (T002)", () => {
+    expect(() =>
+      loadConfig({
+        ...minimalEnv,
+        JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin",
+        JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: "jivedrive-prod",
+      }),
+    ).toThrow(/JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN/);
+  });
+
+  it("rejects an enrollment token shorter than 16 characters (T002)", () => {
+    for (const value of ["", "short", "123456789012345"]) {
+      expect(() =>
+        loadConfig({
+          ...minimalEnv,
+          JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin",
+          JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: "jivedrive-prod",
+          JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN: value,
+        }),
+      ).toThrow(/JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN/);
+    }
+  });
+
+  it("accepts an enrollment token of at least 16 characters (T002)", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin",
+      JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: "jivedrive-prod",
+      JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN: "0123456789abcdef",
+    });
+    expect(config.bootstrapAdmin.enrollmentToken).toBe("0123456789abcdef");
+  });
+
+  it("still validates an enrollment token length without a bootstrap username (T002)", () => {
+    // Chosen contract: the length rule applies whenever the token is
+    // provided, even when no bootstrap admin is configured.
+    expect(() =>
+      loadConfig({
+        ...minimalEnv,
+        JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN: "short",
+      }),
+    ).toThrow(/JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN/);
+
+    const config = loadConfig({
+      ...minimalEnv,
+      JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN: "0123456789abcdef",
+    });
+    expect(config.bootstrapAdmin.enrollmentToken).toBe("0123456789abcdef");
+    expect(config.bootstrapAdmin.username).toBeNull();
   });
 
   it("rejects a bootstrap prefix with a leading slash", () => {

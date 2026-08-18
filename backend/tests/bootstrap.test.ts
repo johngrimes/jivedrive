@@ -31,6 +31,7 @@ function adminConfig(
     bucket: "jivedrive-prod",
     prefix: "users/admin/",
     isAdmin: true,
+    enrollmentToken: null,
     ...overrides,
   };
 }
@@ -43,6 +44,7 @@ describe("bootstrapAdmin", () => {
       bucket: null,
       prefix: "",
       isAdmin: true,
+      enrollmentToken: null,
     });
 
     expect(result).toBeNull();

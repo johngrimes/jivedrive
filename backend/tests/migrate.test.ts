@@ -178,7 +178,11 @@ describe("migrateFromDir", () => {
     const db = createDb();
     const applied = migrateFromDir(db, dir);
 
-    expect(applied).toEqual(["001_init.sql", "002_passkey_discoverable.sql"]);
+    expect(applied).toEqual([
+      "001_init.sql",
+      "002_passkey_discoverable.sql",
+      "003_session_last_used.sql",
+    ]);
 
     // Every table from data-model.md exists.
     for (const table of [
@@ -248,6 +252,54 @@ describe("migrateFromDir", () => {
       .query("SELECT discoverable FROM passkey_credentials WHERE id = 'c2'")
       .get() as { discoverable: number };
     expect(fresh.discoverable).toBe(0);
+  });
+
+  it("003 adds lastUsedAt to sessions and backfills it from createdAt (T001)", () => {
+    const db = createDb();
+    const initialSql = readFileSync(
+      join(migrationsDir, "001_init.sql"),
+      "utf8",
+    );
+    const secondSql = readFileSync(
+      join(migrationsDir, "002_passkey_discoverable.sql"),
+      "utf8",
+    );
+    const thirdSql = readFileSync(
+      join(migrationsDir, "003_session_last_used.sql"),
+      "utf8",
+    );
+
+    // Apply only the first two migrations, then seed a pre-existing session
+    // row as it would have been written before lastUsedAt existed.
+    expect(
+      migrate(db, [
+        { name: "001_init.sql", sql: initialSql },
+        { name: "002_passkey_discoverable.sql", sql: secondSql },
+      ]),
+    ).toEqual(["001_init.sql", "002_passkey_discoverable.sql"]);
+    db.run(
+      "INSERT INTO users (id, username, bucket, prefix, isAdmin, createdAt) VALUES ('u1', 'alice', 'jivedrive-prod', 'users/alice/', 0, '2026-08-01T00:00:00.000Z')",
+    );
+    db.run(
+      "INSERT INTO sessions (id, token, userId, createdAt, expiresAt) VALUES ('s1', 'tok-1', 'u1', '2026-08-05T10:00:00.000Z', '2026-09-04T10:00:00.000Z')",
+    );
+
+    // Applying 003 must add the lastUsedAt column.
+    expect(
+      migrate(db, [{ name: "003_session_last_used.sql", sql: thirdSql }]),
+    ).toEqual(["003_session_last_used.sql"]);
+
+    const columns = db
+      .query("PRAGMA table_info(sessions)")
+      .all() as Array<{ name: string }>;
+    expect(columns.some((column) => column.name === "lastUsedAt")).toBe(true);
+
+    // Existing rows are backfilled from createdAt (full idle allowance).
+    const seeded = db
+      .query("SELECT createdAt, lastUsedAt FROM sessions WHERE id = 's1'")
+      .get() as { createdAt: string; lastUsedAt: string };
+    expect(seeded.lastUsedAt).toBe(seeded.createdAt);
+    expect(seeded.lastUsedAt).toBe("2026-08-05T10:00:00.000Z");
   });
 
   it("is idempotent against the real migrations directory", () => {
