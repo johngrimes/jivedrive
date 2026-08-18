@@ -1,6 +1,10 @@
 # CI values for the automated deploy (deploy job in
 # .github/workflows/quality-and-deploy.yml). Applied on top of values.yaml;
 # the image tag and S3 credentials are passed via --set from GitHub secrets.
+# All jivedrive.config variables (rate limits, session idle days,
+# JIVEDRIVE_TRUST_PROXY, ...) and the hardened resources/securityContext
+# defaults come from values.yaml automatically - only image and persistence
+# are overridden here. The bootstrap admin stays disabled in CI.
 jivedrive:
   image:
     repository: ghcr.io/johngrimes/jivedrive

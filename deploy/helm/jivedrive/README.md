@@ -20,11 +20,17 @@ accessed over the S3 API.
 - Non-sensitive configuration passed via a ConfigMap; S3 credentials passed
   via a Kubernetes Secret (`secretConfig`).
 - Runs as a non-root user (the image's `bun` user, UID 1000).
+- Hardened container defaults: read-only root filesystem with the SQLite
+  volume writable at `/data` (plus an `emptyDir` mounted at `/tmp` for
+  scratch files), no privilege escalation, all Linux capabilities dropped,
+  seccomp `RuntimeDefault`, and default resource requests/limits (see
+  [Security hardening](#security-hardening)).
 - Automated CI: on push to `main`, the workflow in
   `.github/workflows/quality-and-deploy.yml` runs the quality gates, builds
   and publishes the image to GHCR, and deploys the chart to the minikube
   cluster with `values-ci.yaml` (image tag and S3 credentials passed as
-  `--set` from GitHub secrets).
+  `--set` from GitHub secrets). The deploy job verifies the hardened
+  rendering with `scripts/verify-helm-hardening.sh` before upgrading.
 
 ## Prerequisites
 
@@ -111,14 +117,17 @@ GHCR) plus `--set` overrides for the image tag and S3 credentials; see
 
 ### 3. First sign-in
 
-If you configured a bootstrap admin (see
-[Examples](#examples)), open the site, click "First time? Use your
-username", enter the username, and complete the passkey prompt. This
-registers the account's first (discoverable) passkey; subsequent sign-ins
-are username-less with a single "Sign in with passkey" click. Otherwise,
-the first admin must be created from inside the cluster (for example with a
-one-off `kubectl exec` against the database), or by installing with the
-bootstrap admin environment variables set.
+Enrollment is token-gated: a username alone never registers an account. If
+you configured a bootstrap admin (see [Examples](#examples)), set
+`JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN` (a secret, so put it in
+`jivedrive.secretConfig`), then open the registration link carrying that
+token — `https://drive.grimes.id.au/register?token=<token>` — and complete
+the passkey prompt. This registers the account's first (discoverable)
+passkey; subsequent sign-ins are username-less with a single "Sign in with
+passkey" click. New users enroll the same way, through an invite link
+created by an admin (see [Passkey reset](#passkey-reset)). Otherwise, the
+first admin must be created from inside the cluster (for example with a
+one-off `kubectl exec` against the database).
 
 ## Configuration
 
@@ -136,10 +145,10 @@ All values live under the `jivedrive` top-level key. Values are grouped as
 | `jivedrive.image.pullPolicy` | Image pull policy | `Always` |
 | `jivedrive.image.pullSecret` | Name of an existing `kubernetes.io/dockerconfigjson` Secret for pulling the image from a private registry; empty means no `imagePullSecrets` | `""` (none) |
 | `jivedrive.replicas` | Number of replicas; keep at `1` (SQLite, single-writer) | `1` |
-| `jivedrive.resources.requests.memory` | Memory request for the server container | unset |
-| `jivedrive.resources.requests.cpu` | CPU request for the server container | unset |
-| `jivedrive.resources.limits.memory` | Memory limit for the server container | unset |
-| `jivedrive.resources.limits.cpu` | CPU limit for the server container | unset |
+| `jivedrive.resources.requests.memory` | Memory request for the server container | `128Mi` |
+| `jivedrive.resources.requests.cpu` | CPU request for the server container | `100m` |
+| `jivedrive.resources.limits.memory` | Memory limit for the server container | `512Mi` |
+| `jivedrive.resources.limits.cpu` | CPU limit for the server container | `500m` |
 | `jivedrive.nodeSelector` | Node selector for pod scheduling | `{}` |
 | `jivedrive.tolerations` | Tolerations for pod scheduling | `[]` |
 | `jivedrive.affinity` | Affinity rules for pod scheduling | `{}` |
@@ -166,6 +175,12 @@ defaults, except where the chart defaults to the production deployment
 | `JIVEDRIVE_DB_PATH` | SQLite database file path; keep it under `jivedrive.persistence.mountPath` | `/data/jivedrive.db` |
 | `JIVEDRIVE_MIGRATIONS_DIR` | Directory of SQL migration files (baked into the image) | `/app/migrations` |
 | `JIVEDRIVE_SESSION_TTL_DAYS` | Session lifetime in days | `30` |
+| `JIVEDRIVE_SESSION_IDLE_DAYS` | Sessions expire after this many days of inactivity (rolling); the absolute `JIVEDRIVE_SESSION_TTL_DAYS` still caps them | `7` |
+| `JIVEDRIVE_RATE_LIMIT_AUTH_PER_MINUTE` | Token-bucket refill per minute for `/auth/*` | `20` |
+| `JIVEDRIVE_RATE_LIMIT_AUTH_BURST` | Token-bucket burst capacity for `/auth/*` | `10` |
+| `JIVEDRIVE_RATE_LIMIT_FILES_PER_MINUTE` | Token-bucket refill per minute for `/api/files/*` | `300` |
+| `JIVEDRIVE_RATE_LIMIT_FILES_BURST` | Token-bucket burst capacity for `/api/files/*` | `100` |
+| `JIVEDRIVE_TRUST_PROXY` | Trust the TLS terminator's `X-Forwarded-For` header for rate-limit client identity (the backend itself defaults to `false`) | `true` (chart) |
 | `JIVEDRIVE_S3_ENDPOINT` | OVHcloud Object Storage S3 endpoint URL | `https://s3.sgp.io.cloud.ovh.net` |
 | `JIVEDRIVE_S3_REGION` | OVHcloud region | `sgp` |
 | `JIVEDRIVE_S3_ACCESS_KEY_ID` | S3 access key id (secret; required) | `""` |
@@ -174,6 +189,7 @@ defaults, except where the chart defaults to the production deployment
 | `JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET` | Bucket for the bootstrap admin (required when a username is set) | unset |
 | `JIVEDRIVE_BOOTSTRAP_ADMIN_PREFIX` | Prefix for the bootstrap admin | unset |
 | `JIVEDRIVE_BOOTSTRAP_ADMIN_IS_ADMIN` | Whether the bootstrap account is an admin (`true`/`false`) | `true` |
+| `JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN` | Bootstrap admin enrollment token. A secret: put it in `jivedrive.secretConfig`, not `jivedrive.config`. REQUIRED (at least 16 characters) whenever `JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME` is set; enroll the admin by opening `/register?token=<token>` | unset (none) |
 | `JIVEDRIVE_WEBAUTHN_RP_ID` | WebAuthn relying party id; must match the site's registrable domain | `drive.grimes.id.au` |
 | `JIVEDRIVE_WEBAUTHN_ORIGIN` | WebAuthn relying party origin; must be the https origin users sign in from | `https://drive.grimes.id.au` |
 
@@ -181,6 +197,34 @@ The app refuses to start when `JIVEDRIVE_S3_ACCESS_KEY_ID` or
 `JIVEDRIVE_S3_SECRET_ACCESS_KEY` is missing, and in production
 (`NODE_ENV=production`, set by the image) when the WebAuthn variables are
 missing or not https.
+
+### Security hardening
+
+The deployment renders a hardened container by default (asserted in CI by
+`scripts/verify-helm-hardening.sh` before every deploy):
+
+- `readOnlyRootFilesystem: true` — the app writes only to the SQLite
+  database on `/data`; the root filesystem is read-only so a compromised
+  process cannot modify the image.
+- `/data` stays writable via the PVC mount (or the ephemeral `emptyDir`
+  when `jivedrive.persistence.enabled` is `false`).
+- A separate `emptyDir` is mounted at `/tmp` for runtime scratch files
+  (e.g. Bun temp files), so the read-only rootfs does not break startup.
+- `allowPrivilegeEscalation: false`, all capabilities dropped
+  (`capabilities.drop: [ALL]`), and seccomp `RuntimeDefault`.
+- The pod-level `securityContext` keeps `runAsNonRoot: true` and
+  `fsGroup: 1000`, so the pod still runs as the non-root `bun` user.
+- Default resource requests (`100m` CPU, `128Mi` memory) and limits
+  (`500m` CPU, `512Mi` memory); override via `jivedrive.resources`.
+
+### Passkey reset
+
+The admin "reset passkeys" action (on the admin users page) deletes the
+user's passkeys, revokes **all** of that user's sessions immediately, and
+returns a fresh 48-hour re-enrollment invite link. The user opens the link
+to register a new passkey through the same token-gated flow as first
+enrollment — the account is never left claimable by a username alone, and
+the user's old sessions stop working the moment the reset completes.
 
 ## Examples
 
@@ -206,6 +250,8 @@ jivedrive:
   secretConfig:
     JIVEDRIVE_S3_ACCESS_KEY_ID: "<access key>"
     JIVEDRIVE_S3_SECRET_ACCESS_KEY: "<secret key>"
+    # Required (≥16 chars) whenever a bootstrap admin username is set.
+    JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN: "<enrollment token>"
 
   persistence:
     enabled: true
