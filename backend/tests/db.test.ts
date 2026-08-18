@@ -10,6 +10,8 @@ import {
   createSession,
   createUser,
   deleteCredential,
+  deleteCredentialsByUser,
+  deleteLegacyCredentialsByUser,
   deleteInvite,
   deleteSessionById,
   deleteUser,
@@ -20,6 +22,7 @@ import {
   getUserById,
   getUserByUsername,
   listCredentialsByUser,
+  listDiscoverableCredentialsByUser,
   listInvites,
   listUsers,
   refreshInvite,
@@ -306,6 +309,115 @@ describe("passkey credentials", () => {
 
     deleteCredential(db, "cred-1");
     expect(getCredentialById(db, "cred-1")).toBeNull();
+  });
+
+  it("persists the discoverable flag and returns it from reads (T005)", () => {
+    const db = createDb();
+    const user = seedUser(db);
+    const discoverable = createCredential(db, {
+      id: "cred-disc",
+      userId: user.id,
+      publicKey: "pub-disc",
+      discoverable: true,
+    });
+    const legacy = createCredential(db, {
+      id: "cred-legacy",
+      userId: user.id,
+      publicKey: "pub-legacy",
+    });
+
+    // createCredential returns the persisted flag; missing input defaults to false.
+    expect(discoverable.discoverable).toBe(true);
+    expect(legacy.discoverable).toBe(false);
+    expect(getCredentialById(db, "cred-disc")?.discoverable).toBe(true);
+    expect(getCredentialById(db, "cred-legacy")?.discoverable).toBe(false);
+
+    const readBack = listCredentialsByUser(db, user.id);
+    expect(readBack.find((c) => c.id === "cred-disc")?.discoverable).toBe(true);
+    expect(readBack.find((c) => c.id === "cred-legacy")?.discoverable).toBe(
+      false,
+    );
+  });
+
+  it("lists only discoverable credentials for a user (T005)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    createCredential(db, {
+      id: "disc-1",
+      userId: alice.id,
+      publicKey: "p",
+      discoverable: true,
+    });
+    createCredential(db, {
+      id: "legacy-1",
+      userId: alice.id,
+      publicKey: "p",
+    });
+    createCredential(db, {
+      id: "disc-2",
+      userId: alice.id,
+      publicKey: "p",
+      discoverable: true,
+    });
+    createCredential(db, {
+      id: "disc-bob",
+      userId: bob.id,
+      publicKey: "p",
+      discoverable: true,
+    });
+
+    const discoverable = listDiscoverableCredentialsByUser(db, alice.id);
+    expect(discoverable.map((c) => c.id).sort()).toEqual(["disc-1", "disc-2"]);
+  });
+
+  it("deletes every credential row for a user (T005)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    createCredential(db, { id: "c1", userId: alice.id, publicKey: "p" });
+    createCredential(db, { id: "c2", userId: alice.id, publicKey: "p" });
+    createCredential(db, { id: "c3", userId: bob.id, publicKey: "p" });
+    deleteCredentialsByUser(db, alice.id);
+
+    expect(listCredentialsByUser(db, alice.id)).toEqual([]);
+    expect(listCredentialsByUser(db, bob.id).map((c) => c.id)).toEqual(["c3"]);
+  });
+
+  it("deletes only legacy credentials for a user, keeping discoverable ones", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    createCredential(db, {
+      id: "legacy-1",
+      userId: alice.id,
+      publicKey: "p",
+    });
+    createCredential(db, {
+      id: "legacy-2",
+      userId: alice.id,
+      publicKey: "p",
+    });
+    createCredential(db, {
+      id: "disc-1",
+      userId: alice.id,
+      publicKey: "p",
+      discoverable: true,
+    });
+    createCredential(db, {
+      id: "legacy-bob",
+      userId: bob.id,
+      publicKey: "p",
+    });
+
+    deleteLegacyCredentialsByUser(db, alice.id);
+
+    expect(listCredentialsByUser(db, alice.id).map((c) => c.id)).toEqual([
+      "disc-1",
+    ]);
+    expect(listCredentialsByUser(db, bob.id).map((c) => c.id)).toEqual([
+      "legacy-bob",
+    ]);
   });
 });
 

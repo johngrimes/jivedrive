@@ -26,7 +26,12 @@
  */
 import { useEffect, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
-import { PaperAirplaneIcon, TrashIcon, XIcon } from "@primer/octicons-react";
+import {
+  KeyIcon,
+  PaperAirplaneIcon,
+  TrashIcon,
+  XIcon,
+} from "@primer/octicons-react";
 import {
   cancelAdminInvite,
   createAdminInvite,
@@ -34,6 +39,7 @@ import {
   listAdminUsers,
   removeAdminUser,
   resendAdminInvite,
+  resetUserPasskeys,
 } from "../api/client";
 import type { AdminUser, ApiClientError, Invite } from "../api/client";
 import { useSession } from "../auth/sessionContext";
@@ -49,6 +55,12 @@ interface GeneratedLink {
 
 /** The user pending removal confirmation. */
 interface PendingRemoval {
+  id: string;
+  username: string;
+}
+
+/** The user pending passkey-reset confirmation. */
+interface PendingReset {
   id: string;
   username: string;
 }
@@ -110,6 +122,8 @@ export function AdminUsersPage() {
   const [copied, setCopied] = useState(false);
   const [removal, setRemoval] = useState<PendingRemoval | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [reset, setReset] = useState<PendingReset | null>(null);
+  const [resetting, setResetting] = useState(false);
   const [resending, setResending] = useState<ResendingInvite | null>(null);
 
   /**
@@ -286,6 +300,29 @@ export function AdminUsersPage() {
       setError(apiError?.message ?? "Could not remove the user.");
     } finally {
       setRemoving(false);
+    }
+  }
+
+  /**
+   * Confirm a passkey reset: delete every credential of the user so the
+   * fallback form works again for that account (FR-008/FR-009, US4). The
+   * account and its sessions are untouched, so a self-reset keeps the
+   * admin signed in (edge case "Admin resets their own passkeys").
+   */
+  async function handleResetConfirm(): Promise<void> {
+    if (!reset || resetting) return;
+    setResetting(true);
+    setError(null);
+    try {
+      await resetUserPasskeys(reset.id);
+      setNotice(`Passkeys reset for "${reset.username}"`);
+      setReset(null);
+      await loadData();
+    } catch (err) {
+      const apiError = err as ApiClientError;
+      setError(apiError?.message ?? "Could not reset the passkeys.");
+    } finally {
+      setResetting(false);
     }
   }
 
@@ -596,6 +633,23 @@ export function AdminUsersPage() {
                         {formatDate(entry.createdAt)}
                       </td>
                       <td className="whitespace-nowrap pr-0 text-right">
+                        <button
+                          className="btn btn-ghost min-h-11"
+                          type="button"
+                          aria-label="Reset passkeys"
+                          onClick={() =>
+                            setReset({
+                              id: entry.id,
+                              username: entry.username,
+                            })
+                          }
+                          disabled={resetting}
+                        >
+                          <KeyIcon aria-hidden="true" />
+                          <span className="hidden sm:inline">
+                            Reset passkeys
+                          </span>
+                        </button>
                         {entry.id !== user.id ? (
                           <button
                             className="btn btn-error min-h-11"
@@ -689,6 +743,62 @@ export function AdminUsersPage() {
             type="button"
             aria-label="Close"
             onClick={() => setRemoval(null)}
+          />
+        </div>
+      )}
+
+      {reset && (
+        <div className="modal modal-open">
+          <div
+            className="modal-box"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="reset-dialog-title"
+          >
+            <h2
+              id="reset-dialog-title"
+              className="text-lg font-semibold break-all"
+            >
+              Reset passkeys for {reset.username}?
+            </h2>
+            <p className="py-4">
+              All passkeys for "{reset.username}" will be deleted. Their
+              account, files and active sessions are left untouched. They can
+              register a fresh passkey from the sign-in page's username form.
+            </p>
+
+            {error && (
+              <p className="alert alert-error" role="alert">
+                {error}
+              </p>
+            )}
+
+            <div className="modal-action">
+              <button
+                className="btn"
+                type="button"
+                onClick={() => setReset(null)}
+                disabled={resetting}
+              >
+                <XIcon aria-hidden="true" />
+                Cancel
+              </button>
+              <button
+                className="btn btn-warning"
+                type="button"
+                onClick={() => void handleResetConfirm()}
+                disabled={resetting}
+              >
+                <KeyIcon aria-hidden="true" />
+                {resetting ? "Resetting..." : "Reset passkeys"}
+              </button>
+            </div>
+          </div>
+          <button
+            className="modal-backdrop"
+            type="button"
+            aria-label="Close"
+            onClick={() => setReset(null)}
           />
         </div>
       )}

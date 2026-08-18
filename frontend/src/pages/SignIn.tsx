@@ -5,13 +5,10 @@ import {
   startAuthentication,
   startRegistration,
 } from "@simplewebauthn/browser";
-import type {
-  PublicKeyCredentialCreationOptionsJSON,
-  PublicKeyCredentialRequestOptionsJSON,
-} from "@simplewebauthn/browser";
 import {
   postLoginOptions,
   postLoginVerify,
+  postRegisterOptions,
   postRegisterVerify,
 } from "../api/client";
 import type { ApiClientError } from "../api/client";
@@ -19,17 +16,22 @@ import { useSession } from "../auth/sessionContext";
 import { DriveIcon } from "../components/icons";
 
 /**
- * Sign-in page: enter a username, then complete the passkey prompt.
+ * Sign-in page.
  *
- * When the account has no passkey yet (bootstrap admin, seeded user), the
- * server sends registration options instead and the first passkey is
- * created here, which signs the user in.
+ * The primary action is a username-less passkey assertion: "Sign in with
+ * passkey" completes the ceremony with zero text entry and the server
+ * resolves the user from the asserted credential (US1, FR-001/FR-002).
+ * A "First time? Use your username" link stays visible at all times so an
+ * empty passkey sheet is never a dead end (FR-011), and reveals the
+ * first-passkey bootstrap form for accounts with no usable passkey
+ * (US2, FR-004).
  */
 export function SignIn() {
   const [username, setUsername] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [showFallback, setShowFallback] = useState(false);
   const { user, loading, refresh } = useSession();
   const navigate = useNavigate();
 
@@ -47,7 +49,55 @@ export function SignIn() {
   }
 
   /**
-   * Show a human-readable message for a failed action.
+   * Show a human-readable message for a failed username-less sign-in.
+   *
+   * @param err - the thrown error
+   */
+  function showSignInError(err: unknown): void {
+    const apiError = err as ApiClientError;
+    if (apiError?.code === "challenge_expired") {
+      setError("Your sign-in request expired. Try again.");
+    } else if (apiError?.code === "authentication_failed") {
+      setError("This passkey could not be verified. Try again.");
+    } else if (apiError?.code) {
+      setError(apiError.message);
+    } else {
+      // Ceremony failure (prompt cancelled, no passkeys): the button is
+      // re-enabled for a retry and the username form remains the escape
+      // hatch (FR-011).
+      setError(
+        "The passkey prompt was cancelled or failed. Try again, or use the username form below.",
+      );
+    }
+  }
+
+  /**
+   * Sign in with a passkey, username-less: fetch bodyless options, run
+   * the assertion ceremony, verify with the requestId, then go to the
+   * files page signed in.
+   */
+  async function handlePasskeySignIn(): Promise<void> {
+    setError(null);
+    setBusy(true);
+    setStatus("Waiting for your passkey...");
+    try {
+      const { requestId, options } = await postLoginOptions();
+      const credential = await startAuthentication({
+        optionsJSON: options,
+      });
+      await postLoginVerify(requestId, credential);
+      await refresh();
+      navigate("/files", { replace: true });
+    } catch (err) {
+      showSignInError(err);
+    } finally {
+      setBusy(false);
+      setStatus(null);
+    }
+  }
+
+  /**
+   * Show a human-readable message for a failed fallback registration.
    *
    * @param err - the thrown error
    */
@@ -57,6 +107,8 @@ export function SignIn() {
       setError(
         "Unknown username. Check the name or ask an admin for an invite.",
       );
+    } else if (apiError?.code === "user_has_passkey") {
+      setError("This account already has a passkey - sign in with it.");
     } else if (apiError?.code) {
       setError(apiError.message);
     } else {
@@ -65,8 +117,9 @@ export function SignIn() {
   }
 
   /**
-   * Start a sign-in: request options, complete the passkey ceremony, then
-   * verify with the server.
+   * Register the first passkey for an existing account: request options
+   * with the username, complete the ceremony, verify, then go to the files
+   * page signed in.
    *
    * @param event - the form submit event
    */
@@ -80,23 +133,16 @@ export function SignIn() {
     setError(null);
     setBusy(true);
     try {
-      const { options, needsRegistration } = await postLoginOptions(name);
-      if (needsRegistration) {
-        setStatus(`No passkey found for "${name}" - creating one now.`);
-        const credential = await startRegistration({
-          optionsJSON: options as PublicKeyCredentialCreationOptionsJSON,
-        });
-        await postRegisterVerify({ username: name, credential });
-      } else {
-        setStatus(`Waiting for your passkey for "${name}"...`);
-        const credential = await startAuthentication({
-          optionsJSON: options as PublicKeyCredentialRequestOptionsJSON,
-        });
-        await postLoginVerify(name, credential);
-      }
+      const { options } = await postRegisterOptions({ username: name });
+      setStatus(`Creating your first passkey for "${name}"...`);
+      const credential = await startRegistration({
+        optionsJSON: options,
+      });
+      await postRegisterVerify({ username: name, credential });
       await refresh();
       navigate("/files", { replace: true });
     } catch (err) {
+      // The form stays usable so the user can retry (FR-011).
       showError(err);
     } finally {
       setBusy(false);
@@ -124,30 +170,55 @@ export function SignIn() {
               Use your passkey to access your files
             </p>
 
-            <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-              <label className="label" htmlFor="username">
-                <span className="label-text">Username</span>
-              </label>
-              <input
-                id="username"
-                className="input w-full"
-                type="text"
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-                autoComplete="username"
-                autoCapitalize="none"
-                spellCheck={false}
-                placeholder="alice"
-              />
+            <button
+              className="btn btn-primary w-full"
+              type="button"
+              onClick={() => void handlePasskeySignIn()}
+              disabled={busy}
+            >
+              {busy ? "Signing in..." : "Sign in with passkey"}
+            </button>
 
-              <button
-                className="btn btn-primary w-full"
-                type="submit"
-                disabled={busy}
-              >
-                {busy ? "Waiting for passkey..." : "Continue with passkey"}
-              </button>
-            </form>
+            {/* Always visible: an empty passkey sheet must not be a dead
+                end (FR-011, edge case "Username-less prompt with no
+                passkeys"). */}
+            <a
+              href="#"
+              className="btn btn-ghost w-full"
+              onClick={(event) => {
+                event.preventDefault();
+                setShowFallback(true);
+              }}
+            >
+              First time? Use your username
+            </a>
+
+            {showFallback && (
+              <form onSubmit={handleSubmit} className="flex flex-col gap-2">
+                <label className="label" htmlFor="username">
+                  <span className="label-text">Username</span>
+                </label>
+                <input
+                  id="username"
+                  className="input w-full"
+                  type="text"
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  placeholder="alice"
+                />
+
+                <button
+                  className="btn btn-primary w-full"
+                  type="submit"
+                  disabled={busy}
+                >
+                  {busy ? "Creating passkey..." : "Create passkey"}
+                </button>
+              </form>
+            )}
 
             {status && (
               <p className="alert alert-info" role="status">

@@ -11,6 +11,7 @@ import {
   getInviteByToken,
   getSessionByToken,
   getUserByUsername,
+  listCredentialsByUser,
   markInviteClaimed,
 } from "../src/db/repository";
 import { createApp } from "../src/server";
@@ -21,6 +22,7 @@ import {
   makeKeyPair,
   makeRegistrationResponse,
 } from "./webauthn-test-helpers";
+import type { TestKeyPair } from "./webauthn-test-helpers";
 
 const migrationsDir = fileURLToPath(new URL("../migrations", import.meta.url));
 
@@ -92,6 +94,50 @@ function cookieFrom(res: Response): string {
   const setCookie = res.headers.get("set-cookie");
   expect(setCookie).not.toBeNull();
   return setCookie?.split(";")[0] ?? "";
+}
+
+/**
+ * Complete a username-less passkey sign-in (login/options + login/verify)
+ * for a user with a registered credential.
+ *
+ * @param app - the app under test
+ * @param user - the credential's owner (any object carrying the user id)
+ * @param keyPair - the credential's keypair
+ * @param credentialId - the credential id bytes
+ * @param counter - assertion counter to report
+ * @returns the login/verify response (carries the session cookie)
+ */
+async function signInWithPasskey(
+  app: Hono<ServerEnv>,
+  user: { id: string },
+  keyPair: TestKeyPair,
+  credentialId: Uint8Array,
+  counter = 1,
+): Promise<Response> {
+  const optionsRes = await app.request("/auth/login/options", {
+    method: "POST",
+  });
+  expect(optionsRes.status).toBe(200);
+  const { requestId, options } = (await optionsRes.json()) as {
+    requestId: string;
+    options: { challenge: string };
+  };
+  return app.request("/auth/login/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      requestId,
+      credential: makeAuthenticationResponse({
+        challenge: options.challenge,
+        origin,
+        rpId,
+        keyPair,
+        credentialId,
+        counter,
+        userHandle: Buffer.from(user.id).toString("base64url"),
+      }),
+    }),
+  });
 }
 
 describe("POST /auth/register/options", () => {
@@ -196,6 +242,108 @@ describe("POST /auth/register/options", () => {
 
     expect(res.status).toBe(400);
   });
+
+  it("returns registration options and the username for an existing user (T010)", async () => {
+    const { app, db } = createAppWithDb();
+    const user = createUser(db, {
+      username: "admin",
+      bucket: "jivedrive-prod",
+      prefix: "users/admin/",
+      isAdmin: true,
+    });
+
+    const res = await app.request("/auth/register/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "admin" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      options: {
+        rp: { id: string };
+        challenge: string;
+        user: { id: string; name: string };
+      };
+      username: string;
+    };
+    expect(body.options.rp.id).toBe(rpId);
+    expect(body.options.challenge).toMatch(/^[A-Za-z0-9_-]+$/);
+    // The options carry the user's id as the userHandle (userID) bytes.
+    expect(
+      Buffer.from(body.options.user.id, "base64url").toString("utf8"),
+    ).toBe(user.id);
+    expect(body.options.user.name).toBe("admin");
+    expect(body.username).toBe("admin");
+    // bucket/prefix are invite-flow only (contract): omitted here.
+    expect(body).not.toHaveProperty("bucket");
+    expect(body).not.toHaveProperty("prefix");
+  });
+
+  it("returns 400 unknown_user for an unknown username (T010)", async () => {
+    const { app } = createAppWithDb();
+    const res = await app.request("/auth/register/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "nobody" }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: "unknown_user" });
+  });
+
+  it("refuses a username that already has a discoverable passkey (T011)", async () => {
+    const { app, db } = createAppWithDb();
+    const user = createUser(db, {
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    });
+    createCredential(db, {
+      id: "cred-discoverable",
+      userId: user.id,
+      publicKey: "cG9rZXk",
+      discoverable: true,
+    });
+
+    const res = await app.request("/auth/register/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "alice" }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: "user_has_passkey" });
+  });
+
+  it("allows a username whose only credentials are legacy (T011)", async () => {
+    const { app, db } = createAppWithDb();
+    createUser(db, {
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    });
+    createCredential(db, {
+      id: "cred-legacy",
+      userId: getUserByUsername(db, "alice")!.id,
+      publicKey: "cG9rZXk",
+      transports: ["internal"],
+    });
+
+    const res = await app.request("/auth/register/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "alice" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      options: { challenge: string };
+      username: string;
+    };
+    expect(body.options.challenge).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(body.username).toBe("alice");
+  });
 });
 
 describe("POST /auth/register/verify", () => {
@@ -252,6 +400,57 @@ describe("POST /auth/register/verify", () => {
     expect(
       ((await me.json()) as { user: { username: string } }).user.username,
     ).toBe("alice");
+  });
+
+  it("creates the invitee with the pre-assigned id and a discoverable credential (T026)", async () => {
+    const { app, db } = createAppWithDb();
+    seedInvite(db);
+
+    // The registration options carry the pre-assigned user id as the
+    // WebAuthn userHandle (options.user.id is the base64url of the utf8
+    // id bytes): userHandle == persisted user id (R3).
+    const optionsRes = await app.request("/auth/register/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: "invite-token-1" }),
+    });
+    expect(optionsRes.status).toBe(200);
+    const optionsBody = (await optionsRes.json()) as {
+      options: { challenge: string; user: { id: string } };
+      username: string;
+    };
+    const userIdFromOptions = Buffer.from(
+      optionsBody.options.user.id,
+      "base64url",
+    ).toString("utf8");
+    expect(userIdFromOptions).not.toBe("");
+
+    const keyPair = makeKeyPair();
+    const response = makeRegistrationResponse({
+      challenge: optionsBody.options.challenge,
+      origin,
+      rpId,
+      keyPair,
+    });
+
+    const res = await app.request("/auth/register/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: "invite-token-1", credential: response }),
+    });
+    expect(res.status).toBe(200);
+
+    // The user was created with the exact id pre-generated at options
+    // time, not a fresh one (userHandle == persisted user id, R3).
+    const user = getUserByUsername(db, optionsBody.username);
+    expect(user).not.toBeNull();
+    expect(user?.id).toBe(userIdFromOptions);
+
+    // The credential is stored as discoverable so the invitee can later
+    // sign in username-less (FR-007, SC-002).
+    const stored = getCredentialById(db, response.id);
+    expect(stored?.userId).toBe(user?.id);
+    expect(stored?.discoverable).toBe(true);
   });
 
   it("refuses an expired invite at verify time", async () => {
@@ -354,53 +553,7 @@ describe("POST /auth/register/verify", () => {
     expect(await res.json()).toMatchObject({ code: "registration_failed" });
   });
 
-  it("registers a first passkey for an existing user with no credentials", async () => {
-    const { app, db } = createAppWithDb();
-    createUser(db, {
-      username: "admin",
-      bucket: "jivedrive-prod",
-      prefix: "users/admin/",
-      isAdmin: true,
-    });
-
-    // login/options for a credential-less user returns registration options.
-    const loginOptionsRes = await app.request("/auth/login/options", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "admin" }),
-    });
-    expect(loginOptionsRes.status).toBe(200);
-    const loginBody = (await loginOptionsRes.json()) as {
-      needsRegistration: boolean;
-      options: { challenge: string };
-    };
-    expect(loginBody.needsRegistration).toBe(true);
-
-    const keyPair = makeKeyPair();
-    const response = makeRegistrationResponse({
-      challenge: loginBody.options.challenge,
-      origin,
-      rpId,
-      keyPair,
-    });
-
-    const res = await app.request("/auth/register/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "admin", credential: response }),
-    });
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      user: { username: string; isAdmin: boolean };
-    };
-    expect(body.user.username).toBe("admin");
-    expect(body.user.isAdmin).toBe(true);
-    expect(getCredentialById(db, response.id)?.userId).not.toBeNull();
-    expect(cookieFrom(res)).toMatch(/^jivedrive_session=/);
-  });
-
-  it("refuses a first passkey for a user that already has one", async () => {
+  it("refuses a first passkey for a user that already has a discoverable one", async () => {
     const { app, db } = createAppWithDb();
     const user = createUser(db, {
       username: "alice",
@@ -411,6 +564,7 @@ describe("POST /auth/register/verify", () => {
       id: "cred-existing",
       userId: user.id,
       publicKey: "cG9rZXk",
+      discoverable: true,
     });
 
     const res = await app.request("/auth/register/verify", {
@@ -429,6 +583,72 @@ describe("POST /auth/register/verify", () => {
 
     expect(res.status).toBe(400);
     expect(await res.json()).toMatchObject({ code: "user_has_passkey" });
+  });
+
+  it("stores a discoverable credential, deletes legacy credentials and signs the user in (T012)", async () => {
+    const { app, db } = createAppWithDb();
+    const user = createUser(db, {
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    });
+    createCredential(db, {
+      id: "cred-legacy-1",
+      userId: user.id,
+      publicKey: "cG9rZXktMQ",
+      transports: ["internal"],
+    });
+    createCredential(db, {
+      id: "cred-legacy-2",
+      userId: user.id,
+      publicKey: "cG9rZXktMg",
+      transports: ["usb"],
+    });
+
+    const optionsRes = await app.request("/auth/register/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "alice" }),
+    });
+    expect(optionsRes.status).toBe(200);
+    const options = (await optionsRes.json()) as {
+      options: { challenge: string };
+    };
+    const keyPair = makeKeyPair();
+    const response = makeRegistrationResponse({
+      challenge: options.options.challenge,
+      origin,
+      rpId,
+      keyPair,
+    });
+
+    const res = await app.request("/auth/register/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "alice", credential: response }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { user: { username: string } };
+    expect(body.user.username).toBe("alice");
+
+    // The new credential is stored as discoverable for the same user.
+    const stored = getCredentialById(db, response.id);
+    expect(stored?.userId).toBe(user.id);
+    expect(stored?.discoverable).toBe(true);
+
+    // The legacy credentials are gone; only the new passkey remains.
+    expect(listCredentialsByUser(db, user.id).map((c) => c.id)).toEqual([
+      response.id,
+    ]);
+
+    // Session cookie must be a live session.
+    const cookie = cookieFrom(res);
+    expect(cookie).toMatch(/^jivedrive_session=/);
+    const me = await app.request("/auth/me", { headers: { cookie } });
+    expect(
+      ((await me.json()) as { user: { username: string } }).user.username,
+    ).toBe("alice");
   });
 
   it("refuses first-passkey registration for an unknown username", async () => {
@@ -464,79 +684,53 @@ describe("POST /auth/register/verify", () => {
 });
 
 describe("POST /auth/login/options", () => {
-  it("returns assertion options for a user with credentials", async () => {
-    const { app, db } = createAppWithDb();
-    const user = createUser(db, {
-      username: "alice",
-      bucket: "jivedrive-prod",
-      prefix: "users/alice/",
-    });
-    createCredential(db, {
-      id: "cred-a1",
-      userId: user.id,
-      publicKey: "cG9rZXk",
-      transports: ["internal"],
-    });
+  it("accepts an empty body and returns requestId and bodyless assertion options (T019)", async () => {
+    const { app } = createAppWithDb();
 
+    // The username-less contract: no request body at all (FR-002, R5).
     const res = await app.request("/auth/login/options", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "alice" }),
     });
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      needsRegistration: boolean;
+      requestId: string;
       options: {
         challenge: string;
-        allowCredentials: { id: string; transports: string[]; type: string }[];
+        allowCredentials?: unknown;
+        userVerification: string;
       };
     };
-    expect(body.needsRegistration).toBe(false);
+    // requestId is an opaque single-use UUID (R5).
+    expect(body.requestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
     expect(body.options.challenge).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(body.options.allowCredentials).toEqual([
-      { id: "cred-a1", transports: ["internal"], type: "public-key" },
-    ]);
+    // The username-less flow never sends allowCredentials: the
+    // authenticator only surfaces discoverable credentials (FR-010).
+    expect(body.options.allowCredentials).toBeUndefined();
+    expect(body.options.userVerification).toBe("required");
   });
 
-  it("returns registration options with a flag for a user without credentials", async () => {
-    const { app, db } = createAppWithDb();
-    createUser(db, {
-      username: "bob",
-      bucket: "jivedrive-prod",
-      prefix: "users/bob/",
-    });
-
-    const res = await app.request("/auth/login/options", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "bob" }),
-    });
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      needsRegistration: boolean;
-      options: { rp: { id: string } };
-    };
-    expect(body.needsRegistration).toBe(true);
-    expect(body.options.rp.id).toBe(rpId);
-  });
-
-  it("returns 404 for an unknown username", async () => {
+  it("returns a fresh requestId on every call (T019)", async () => {
     const { app } = createAppWithDb();
-    const res = await app.request("/auth/login/options", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "nobody" }),
-    });
 
-    expect(res.status).toBe(404);
-    expect(await res.json()).toMatchObject({ code: "unknown_user" });
+    const first = (await (
+      await app.request("/auth/login/options", { method: "POST" })
+    ).json()) as { requestId: string };
+    const second = (await (
+      await app.request("/auth/login/options", { method: "POST" })
+    ).json()) as { requestId: string };
+
+    expect(first.requestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(second.requestId).not.toBe(first.requestId);
   });
 });
 
 describe("POST /auth/login/verify", () => {
-  it("verifies an assertion, updates the counter and sets a session cookie", async () => {
+  it("creates a session for the credential's owner with no username anywhere (T020)", async () => {
     const { app, db } = createAppWithDb();
     const keyPair = makeKeyPair();
     const credentialId = new Uint8Array(16).fill(0x66);
@@ -554,27 +748,30 @@ describe("POST /auth/login/verify", () => {
       transports: ["internal"],
     });
 
+    // Username-less options: an empty body is enough (T019 contract).
     const optionsRes = await app.request("/auth/login/options", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "alice" }),
     });
-    const options = (await optionsRes.json()) as {
+    expect(optionsRes.status).toBe(200);
+    const { requestId, options } = (await optionsRes.json()) as {
+      requestId: string;
       options: { challenge: string };
     };
+
     const response = makeAuthenticationResponse({
-      challenge: options.options.challenge,
+      challenge: options.challenge,
       origin,
       rpId,
       keyPair,
       credentialId,
       counter: 3,
+      userHandle: Buffer.from(user.id).toString("base64url"),
     });
 
     const res = await app.request("/auth/login/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "alice", credential: response }),
+      body: JSON.stringify({ requestId, credential: response }),
     });
 
     expect(res.status).toBe(200);
@@ -585,7 +782,7 @@ describe("POST /auth/login/verify", () => {
     expect(getCredentialById(db, credentialIdB64)?.counter).toBe(3);
     expect(getCredentialById(db, credentialIdB64)?.lastUsedAt).not.toBeNull();
 
-    // Session cookie must be live.
+    // Session cookie must be live: /auth/me round-trips.
     const cookie = cookieFrom(res);
     const me = await app.request("/auth/me", { headers: { cookie } });
     expect(
@@ -593,45 +790,13 @@ describe("POST /auth/login/verify", () => {
     ).toBe("alice");
   });
 
-  it("returns 401 for an unknown username", async () => {
+  it("returns 401 challenge_expired for an unknown requestId (T020)", async () => {
     const { app } = createAppWithDb();
     const res = await app.request("/auth/login/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        username: "nobody",
-        credential: makeAuthenticationResponse({
-          challenge: "c",
-          origin,
-          rpId,
-          keyPair: makeKeyPair(),
-          credentialId: new Uint8Array(16),
-          counter: 1,
-        }),
-      }),
-    });
-
-    expect(res.status).toBe(401);
-  });
-
-  it("returns 401 when no login challenge was issued", async () => {
-    const { app, db } = createAppWithDb();
-    const user = createUser(db, {
-      username: "alice",
-      bucket: "jivedrive-prod",
-      prefix: "users/alice/",
-    });
-    createCredential(db, {
-      id: "cred-a1",
-      userId: user.id,
-      publicKey: "cG9rZXk",
-    });
-
-    const res = await app.request("/auth/login/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username: "alice",
+        requestId: "no-such-request",
         credential: makeAuthenticationResponse({
           challenge: "c",
           origin,
@@ -647,57 +812,84 @@ describe("POST /auth/login/verify", () => {
     expect(await res.json()).toMatchObject({ code: "challenge_expired" });
   });
 
-  it("returns 401 when the credential does not belong to the user", async () => {
-    const { app, db } = createAppWithDb();
-    const alice = createUser(db, {
-      username: "alice",
-      bucket: "jivedrive-prod",
-      prefix: "users/alice/",
-    });
-    const bob = createUser(db, {
-      username: "bob",
-      bucket: "jivedrive-prod",
-      prefix: "users/bob/",
-    });
-    createCredential(db, {
-      id: "cred-alice",
-      userId: alice.id,
-      publicKey: "cG9rZXktYWxpY2U",
-    });
-    createCredential(db, {
-      id: "cred-bob",
-      userId: bob.id,
-      publicKey: "cG9rZXktYm9i",
-    });
+  it("returns 401 authentication_failed for an unregistered credential id (T020)", async () => {
+    const { app } = createAppWithDb();
 
-    // alice requests a login challenge...
     const optionsRes = await app.request("/auth/login/options", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "alice" }),
     });
-    const options = (await optionsRes.json()) as {
+    const { requestId, options } = (await optionsRes.json()) as {
+      requestId: string;
       options: { challenge: string };
     };
 
-    // ...but asserts with bob's credential id.
     const res = await app.request("/auth/login/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        username: "alice",
+        requestId,
         credential: makeAuthenticationResponse({
-          challenge: options.options.challenge,
+          challenge: options.challenge,
           origin,
           rpId,
           keyPair: makeKeyPair(),
-          credentialId: Buffer.from("cred-bob"),
+          credentialId: Buffer.from("unregistered-credential"),
           counter: 1,
+          userHandle: Buffer.from("someone").toString("base64url"),
         }),
       }),
     });
 
     expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ code: "authentication_failed" });
+  });
+
+  it("returns 401 authentication_failed for a mismatched userHandle (T020)", async () => {
+    const { app, db } = createAppWithDb();
+    const keyPair = makeKeyPair();
+    const credentialId = new Uint8Array(16).fill(0x6b);
+    const credentialIdB64 = Buffer.from(credentialId).toString("base64url");
+    const user = createUser(db, {
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    });
+    createCredential(db, {
+      id: credentialIdB64,
+      userId: user.id,
+      publicKey: Buffer.from(keyPair.cosePublicKey).toString("base64url"),
+      counter: 0,
+    });
+
+    const optionsRes = await app.request("/auth/login/options", {
+      method: "POST",
+    });
+    const { requestId, options } = (await optionsRes.json()) as {
+      requestId: string;
+      options: { challenge: string };
+    };
+
+    // The assertion is validly signed but claims a different owner's
+    // userHandle: the server must reject it before trusting the credential.
+    const res = await app.request("/auth/login/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requestId,
+        credential: makeAuthenticationResponse({
+          challenge: options.challenge,
+          origin,
+          rpId,
+          keyPair,
+          credentialId,
+          counter: 1,
+          userHandle: Buffer.from("some-other-user").toString("base64url"),
+        }),
+      }),
+    });
+
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ code: "authentication_failed" });
   });
 
   it("returns 401 for a bad signature", async () => {
@@ -720,25 +912,25 @@ describe("POST /auth/login/verify", () => {
 
     const optionsRes = await app.request("/auth/login/options", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "alice" }),
     });
-    const options = (await optionsRes.json()) as {
+    const { requestId, options } = (await optionsRes.json()) as {
+      requestId: string;
       options: { challenge: string };
     };
     const response = makeAuthenticationResponse({
-      challenge: options.options.challenge,
+      challenge: options.challenge,
       origin,
       rpId,
       keyPair: attackerKeyPair,
       credentialId,
       counter: 1,
+      userHandle: Buffer.from(user.id).toString("base64url"),
     });
 
     const res = await app.request("/auth/login/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "alice", credential: response }),
+      body: JSON.stringify({ requestId, credential: response }),
     });
 
     expect(res.status).toBe(401);
@@ -762,29 +954,7 @@ describe("POST /auth/logout", () => {
       publicKey: Buffer.from(keyPair.cosePublicKey).toString("base64url"),
     });
 
-    const optionsRes = await app.request("/auth/login/options", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "alice" }),
-    });
-    const options = (await optionsRes.json()) as {
-      options: { challenge: string };
-    };
-    const loginRes = await app.request("/auth/login/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username: "alice",
-        credential: makeAuthenticationResponse({
-          challenge: options.options.challenge,
-          origin,
-          rpId,
-          keyPair,
-          credentialId,
-          counter: 1,
-        }),
-      }),
-    });
+    const loginRes = await signInWithPasskey(app, user, keyPair, credentialId);
     const cookie = cookieFrom(loginRes);
     const meBefore = (await (
       await app.request("/auth/me", { headers: { cookie } })
@@ -831,29 +1001,7 @@ describe("GET /auth/me", () => {
       publicKey: Buffer.from(keyPair.cosePublicKey).toString("base64url"),
     });
 
-    const optionsRes = await app.request("/auth/login/options", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "alice" }),
-    });
-    const options = (await optionsRes.json()) as {
-      options: { challenge: string };
-    };
-    const loginRes = await app.request("/auth/login/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username: "alice",
-        credential: makeAuthenticationResponse({
-          challenge: options.options.challenge,
-          origin,
-          rpId,
-          keyPair,
-          credentialId,
-          counter: 1,
-        }),
-      }),
-    });
+    const loginRes = await signInWithPasskey(app, user, keyPair, credentialId);
     const cookie = cookieFrom(loginRes);
 
     const res = await app.request("/auth/me", { headers: { cookie } });
@@ -890,29 +1038,7 @@ describe("session persistence across requests", () => {
       publicKey: Buffer.from(keyPair.cosePublicKey).toString("base64url"),
     });
 
-    const optionsRes = await app.request("/auth/login/options", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "alice" }),
-    });
-    const options = (await optionsRes.json()) as {
-      options: { challenge: string };
-    };
-    const loginRes = await app.request("/auth/login/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username: "alice",
-        credential: makeAuthenticationResponse({
-          challenge: options.options.challenge,
-          origin,
-          rpId,
-          keyPair,
-          credentialId,
-          counter: 1,
-        }),
-      }),
-    });
+    const loginRes = await signInWithPasskey(app, user, keyPair, credentialId);
     const cookie = cookieFrom(loginRes);
     const token = cookie.split("=")[1] ?? "";
     expect(getSessionByToken(db, token)?.userId).toBe(user.id);

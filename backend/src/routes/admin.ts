@@ -20,6 +20,7 @@ import type { ServerEnv } from "../server";
 import {
   countAdmins,
   createInvite,
+  deleteCredentialsByUser,
   deleteInvite,
   deleteUser,
   getInviteById,
@@ -225,6 +226,22 @@ export function adminRoutes(deps: AdminRouteDeps): Hono<ServerEnv> {
       );
     }
     deleteUser(db, id);
+    return c.body(null, 204);
+  });
+
+  // Reset a user's passkeys: delete every credential row so the fallback
+  // form works again for that account (FR-008/FR-009, US4). The account,
+  // storage objects and active sessions are untouched (the reset governs
+  // future sign-in only), and self-reset is allowed (edge case "Admin
+  // resets their own passkeys": the admin's session stays valid and they
+  // re-enroll via the fallback form on next sign-in). An unknown user is
+  // refused with 404.
+  app.delete("/users/:id/passkeys", (c) => {
+    const id = c.req.param("id");
+    if (!getUserById(db, id)) {
+      return jsonError(c, 404, "User not found", "not_found");
+    }
+    deleteCredentialsByUser(db, id);
     return c.body(null, 204);
   });
 

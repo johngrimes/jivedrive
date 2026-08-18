@@ -214,7 +214,8 @@ const config = loadConfig(env);
 const db = openDatabase(config.dbPath);
 migrateFromDir(db, config.migrationsDir);
 
-// Seed a user with no passkey: the first sign-in registers one.
+// Seed a user with no passkey: the first sign-in uses the username
+// fallback form to register the first (discoverable) passkey.
 const alice = createUser(db, {
   username: "alice",
   bucket: "jivedrive-prod",
@@ -246,6 +247,18 @@ const frank = createUser(db, {
   prefix: "users/frank/",
 });
 createSession(db, frank.id, { token: "frank-session" });
+
+// A dedicated user for the admin passkey-reset e2e flow (US4): the spec
+// bootstraps her first passkey via the fallback form, the admin resets her
+// passkeys from the Admin users page, and she re-enrolls via the fallback
+// form. No session is seeded: every sign-in in that spec goes through the
+// fallback form. No other spec depends on her, so the reset never affects
+// another flow.
+createUser(db, {
+  username: "kate",
+  bucket: "jivedrive-prod",
+  prefix: "users/kate/",
+});
 
 // A user whose space listing always fails in the mock S3 (see
 // listObjectsV2): the listing-error e2e spec asserts a failed first-page

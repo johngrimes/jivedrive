@@ -30,15 +30,18 @@ export interface RegistrationChallengeRecord {
   username: string;
   /** Invite token, or null when registering for an existing user. */
   inviteToken: string | null;
+  /** Pre-assigned id of the user the passkey will be attached to. */
+  userId: string;
   /** Epoch milliseconds when the challenge was created. */
   createdAt: number;
 }
 
-/** A pending login challenge bound to a username. */
+/** A pending login challenge bound to an opaque request id. */
 export interface LoginChallengeRecord {
   /** Base64url challenge from the generated options. */
   challenge: string;
-  username: string;
+  /** Opaque request id that keys the challenge (no username). */
+  requestId: string;
   /** Epoch milliseconds when the challenge was created. */
   createdAt: number;
 }
@@ -64,16 +67,16 @@ export interface ChallengeStore {
     now?: number,
   ): RegistrationChallengeRecord | null;
   /**
-   * Store a login challenge under a username.
+   * Store a login challenge under an opaque request id.
    *
-   * @param key - username
+   * @param key - opaque request id
    * @param record - the challenge record
    */
   putLogin(key: string, record: LoginChallengeRecord): void;
   /**
    * Take and remove a login challenge, or null when missing/expired.
    *
-   * @param key - username
+   * @param key - opaque request id
    * @param now - reference time in epoch ms, defaults to Date.now()
    * @returns the record, consumed
    */
@@ -94,6 +97,15 @@ export interface RegistrationOptionsInput {
   /** User-visible relying party name. */
   rpName: string;
   username: string;
+  /**
+   * Pre-assigned user id; its utf8 bytes become the WebAuthn userHandle
+   * (user.id) so the persisted user id equals the authenticator's userHandle.
+   * Required for the username-less flow; when omitted the library generates
+   * a random userHandle (legacy callers).
+   */
+  userId?: string;
+  /** User-visible name shown in the passkey prompt. */
+  userDisplayName?: string;
   /** Credentials already registered to the user, to exclude. */
   excludeCredentials?: { id: string; transports?: string[] }[];
 }
@@ -122,8 +134,12 @@ export interface VerifyRegistrationInput {
 /** Options for {@link generateAuthenticationOptions}. */
 export interface LoginOptionsInput {
   rpId: string;
-  /** Credentials registered to the user. */
-  allowCredentials: { id: string; transports?: string[] }[];
+  /**
+   * Credentials to offer, or omitted for the username-less flow: the
+   * authenticator then surfaces only its discoverable credentials and the
+   * server never sends allowCredentials.
+   */
+  allowCredentials?: { id: string; transports?: string[] }[];
 }
 
 /** Options for {@link verifyLogin}. */
@@ -204,7 +220,12 @@ export function createChallengeStore(
 /**
  * Generate PublicKeyCredentialCreationOptions for passkey registration.
  *
- * @param input - relying party, username and excluded credentials
+ * Every registration requests a discoverable (resident) key with required
+ * user verification, so the resulting credential can be used for
+ * username-less sign-in.
+ *
+ * @param input - relying party, username, pre-assigned user id and
+ *   display name, and excluded credentials
  * @returns registration options for navigator.credentials.create()
  */
 export async function generateRegistrationOptions(
@@ -214,7 +235,17 @@ export async function generateRegistrationOptions(
     rpName: input.rpName,
     rpID: input.rpId,
     userName: input.username,
+    // The userHandle must equal the persisted user id so an assertion can be
+    // resolved to the owning user and hardened against userHandle spoofing.
+    ...(input.userId
+      ? { userID: new Uint8Array(Buffer.from(input.userId, "utf8")) }
+      : {}),
+    userDisplayName: input.userDisplayName ?? "",
     attestationType: "none",
+    authenticatorSelection: {
+      residentKey: "required",
+      userVerification: "required",
+    },
     excludeCredentials: input.excludeCredentials?.map((credential) => ({
       id: credential.id,
       transports: credential.transports as AuthenticatorTransportFuture[],
@@ -253,7 +284,11 @@ export async function verifyRegistration(
 /**
  * Generate PublicKeyCredentialRequestOptions for passkey sign-in.
  *
- * @param input - relying party and the user's credentials
+ * When `allowCredentials` is not supplied the generated options carry no
+ * allowCredentials list: the authenticator only surfaces discoverable
+ * credentials, which is what the username-less flow relies on.
+ *
+ * @param input - relying party and optionally the user's credentials
  * @returns assertion options for navigator.credentials.get()
  */
 export async function generateAuthenticationOptions(
@@ -261,10 +296,15 @@ export async function generateAuthenticationOptions(
 ): Promise<PublicKeyCredentialRequestOptionsJSON> {
   return swaGenerateAuthenticationOptions({
     rpID: input.rpId,
-    allowCredentials: input.allowCredentials.map((credential) => ({
-      id: credential.id,
-      transports: credential.transports as AuthenticatorTransportFuture[],
-    })),
+    userVerification: "required",
+    ...(input.allowCredentials
+      ? {
+          allowCredentials: input.allowCredentials.map((credential) => ({
+            id: credential.id,
+            transports: credential.transports as AuthenticatorTransportFuture[],
+          })),
+        }
+      : {}),
   });
 }
 

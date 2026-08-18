@@ -31,8 +31,9 @@ Steps:
 1. Deploy with `JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME=admin` and
    `JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET` / `JIVEDRIVE_BOOTSTRAP_ADMIN_PREFIX`
    set.
-2. Open the site, enter `admin`, complete the passkey prompt, land on the
-   file browser for the configured bucket and prefix.
+2. Open the site, click "First time? Use your username", enter `admin`,
+   complete the passkey prompt, land on the file browser for the configured
+   bucket and prefix.
 
 What was validated:
 
@@ -44,11 +45,13 @@ What was validated:
 - The chart wires the bootstrap variables into the deployment when set:
   `helm template prod deploy/helm/jivedrive -f <values>` rendered
   `JIVEDRIVE_BOOTSTRAP_ADMIN_*` entries in the ConfigMap.
-- First sign-in with a passkey (registration ceremony on first use) is
+- First sign-in via the username fallback form (first-passkey bootstrap) is
   covered end-to-end by `e2e/auth.spec.ts` ("a seeded user signs in with a
-  passkey and signs out"): the seeded user has no passkey, the first sign-in
-  registers one and lands on `/files` for the user's bucket and prefix.
-  Run: `bun run test:e2e`.
+  passkey and signs out"): the seeded user has no passkey, so the first
+  sign-in reveals the fallback form, registers the first (discoverable)
+  passkey and lands on `/files` for the user's bucket and prefix. The same
+  test then signs out and signs back in username-less: one "Sign in with
+  passkey" click, zero keystrokes. Run: `bun run test:e2e`.
 
 Not validated here:
 

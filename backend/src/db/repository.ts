@@ -24,6 +24,11 @@ export interface PasskeyCredential {
   counter: number;
   /** JSON array of transports. */
   transports: string[];
+  /**
+   * True when created with `residentKey: "required"` (usable username-less);
+   * false for legacy credentials (never offered, deleted on re-enrollment).
+   */
+  discoverable: boolean;
   createdAt: string;
   /** ISO 8601 timestamp or null when never used. */
   lastUsedAt: string | null;
@@ -77,6 +82,8 @@ export interface CreateCredentialInput {
   publicKey: string;
   counter?: number;
   transports?: string[];
+  /** Defaults to false (legacy credential). */
+  discoverable?: boolean;
   createdAt?: string;
   lastUsedAt?: string | null;
 }
@@ -119,6 +126,7 @@ interface CredentialRow {
   publicKey: string;
   counter: number;
   transports: string;
+  discoverable: number;
   createdAt: string;
   lastUsedAt: string | null;
 }
@@ -150,7 +158,11 @@ function mapUserRow(row: UserRow): User {
 }
 
 function mapCredentialRow(row: CredentialRow): PasskeyCredential {
-  return { ...row, transports: JSON.parse(row.transports) as string[] };
+  return {
+    ...row,
+    transports: JSON.parse(row.transports) as string[],
+    discoverable: row.discoverable === 1,
+  };
 }
 
 function mapInviteRow(row: InviteRow): Invite {
@@ -315,8 +327,9 @@ export function createCredential(
   input: CreateCredentialInput,
 ): PasskeyCredential {
   const createdAt = input.createdAt ?? new Date().toISOString();
+  const discoverable = input.discoverable ?? false;
   db.query(
-    "INSERT INTO passkey_credentials (id, userId, publicKey, counter, transports, createdAt, lastUsedAt) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO passkey_credentials (id, userId, publicKey, counter, transports, createdAt, lastUsedAt, discoverable) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
   ).run(
     input.id,
     input.userId,
@@ -325,6 +338,7 @@ export function createCredential(
     JSON.stringify(input.transports ?? []),
     createdAt,
     input.lastUsedAt ?? null,
+    discoverable ? 1 : 0,
   );
   return {
     id: input.id,
@@ -332,6 +346,7 @@ export function createCredential(
     publicKey: input.publicKey,
     counter: input.counter ?? 0,
     transports: input.transports ?? [],
+    discoverable,
     createdAt,
     lastUsedAt: input.lastUsedAt ?? null,
   };
@@ -367,6 +382,49 @@ export function listCredentialsByUser(
     )
     .all(userId) as CredentialRow[];
   return rows.map(mapCredentialRow);
+}
+
+/**
+ * @param db - database connection
+ * @param userId - user id
+ * @returns the user's discoverable credentials (usable username-less)
+ */
+export function listDiscoverableCredentialsByUser(
+  db: Database,
+  userId: string,
+): PasskeyCredential[] {
+  const rows = db
+    .query(
+      "SELECT * FROM passkey_credentials WHERE userId = ? AND discoverable = 1 ORDER BY rowid ASC",
+    )
+    .all(userId) as CredentialRow[];
+  return rows.map(mapCredentialRow);
+}
+
+/**
+ * Delete every credential row for a user (admin passkey reset).
+ *
+ * @param db - database connection
+ * @param userId - user id
+ */
+export function deleteCredentialsByUser(db: Database, userId: string): void {
+  db.query("DELETE FROM passkey_credentials WHERE userId = ?").run(userId);
+}
+
+/**
+ * Delete only the legacy (non-discoverable) credential rows for a user,
+ * keeping discoverable ones (fallback re-enrollment cleanup, FR-006).
+ *
+ * @param db - database connection
+ * @param userId - user id
+ */
+export function deleteLegacyCredentialsByUser(
+  db: Database,
+  userId: string,
+): void {
+  db.query(
+    "DELETE FROM passkey_credentials WHERE userId = ? AND discoverable = 0",
+  ).run(userId);
 }
 
 /**

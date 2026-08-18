@@ -4,6 +4,8 @@ import {
   enableVirtualAuthenticator,
   expectNoHorizontalOverflow,
   expectSignedInAs,
+  signIn,
+  signOut,
 } from "./helpers";
 
 /**
@@ -259,6 +261,63 @@ test("an admin removes a user and their session stops working", async ({
   expect(me.status()).toBe(200);
   const body = (await me.json()) as { user: unknown };
   expect(body.user).toBeNull();
+});
+
+test("an admin resets a user's passkeys and the user re-enrolls via the fallback form", async ({
+  page,
+  context,
+  browser,
+}) => {
+  await openAdmin(page, context);
+
+  // Re-arm first: the e2e server keeps one in-memory DB for the whole run,
+  // so a previous (failed) attempt may have left kate with a passkey. An
+  // unconditional reset deletes any leftover (the route is idempotent: 204
+  // even when zero rows exist) and makes the bootstrap below deterministic.
+  const row = userRow(page, "kate");
+  await expect(row).toBeVisible();
+  await row.getByRole("button", { name: "Reset passkeys" }).click();
+  let dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("kate");
+  await dialog.getByRole("button", { name: "Reset passkeys" }).click();
+  await expect(page.getByText(/Passkeys reset for "kate"/)).toBeVisible();
+  // Reload to clear the notice: the second reset below must be observable.
+  await page.reload();
+  await expect(userRow(page, "kate")).toBeVisible();
+
+  // kate's own context: she bootstraps her first passkey via the fallback
+  // form (the fallback gate allows accounts with no discoverable passkey).
+  const kateContext = await browser.newContext();
+  const katePage = await kateContext.newPage();
+  await enableVirtualAuthenticator(kateContext, katePage);
+  await katePage.goto("/");
+  await signIn(katePage, "kate");
+  await expect(katePage).toHaveURL(/\/files/);
+  await expectSignedInAs(katePage, "kate");
+  await signOut(katePage, "kate");
+
+  // The admin resets kate's passkeys from the users table, with
+  // confirmation (US4 scenario 1): the dialog explains that the account
+  // and its files/sessions are left untouched.
+  await userRow(page, "kate")
+    .getByRole("button", { name: "Reset passkeys" })
+    .click();
+  dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("kate");
+  await expect(dialog).toContainText("left untouched");
+  await dialog.getByRole("button", { name: "Reset passkeys" }).click();
+
+  // Explicit success feedback (FR-011): the reset is confirmed visibly.
+  await expect(page.getByText(/Passkeys reset for "kate"/)).toBeVisible();
+
+  // US4 scenario 3: the fallback form works again for kate. She re-enrolls
+  // in the same context and lands signed in (FR-009).
+  await katePage.goto("/");
+  await signIn(katePage, "kate");
+  await expect(katePage).toHaveURL(/\/files/);
+  await expectSignedInAs(katePage, "kate");
+
+  await kateContext.close();
 });
 
 test("an expired invite shows an expired status with a re-send option", async ({

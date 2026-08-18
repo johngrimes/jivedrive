@@ -28,14 +28,18 @@ export async function enableVirtualAuthenticator(
 }
 
 /**
- * Fill in the username and submit the sign-in form.
+ * Reveal the username fallback form and register the first passkey for an
+ * account with no usable passkey (seeded users, bootstrap admin).
  *
  * @param page - the page
- * @param username - the username to sign in as
+ * @param username - the username to bootstrap a passkey for
  */
 export async function signIn(page: Page, username: string): Promise<void> {
+  await page
+    .getByRole("link", { name: "First time? Use your username" })
+    .click();
   await page.getByLabel("Username").fill(username);
-  await page.getByRole("button", { name: "Continue with passkey" }).click();
+  await page.getByRole("button", { name: "Create passkey" }).click();
 }
 
 /**

@@ -178,7 +178,7 @@ describe("migrateFromDir", () => {
     const db = createDb();
     const applied = migrateFromDir(db, dir);
 
-    expect(applied).toEqual(["001_init.sql"]);
+    expect(applied).toEqual(["001_init.sql", "002_passkey_discoverable.sql"]);
 
     // Every table from data-model.md exists.
     for (const table of [
@@ -196,6 +196,58 @@ describe("migrateFromDir", () => {
           .get(table),
       ).toBeTruthy();
     }
+  });
+
+  it("002 adds a discoverable column defaulting to 0; existing rows read as legacy", () => {
+    const db = createDb();
+    const initialSql = readFileSync(
+      join(migrationsDir, "001_init.sql"),
+      "utf8",
+    );
+    const secondSql = readFileSync(
+      join(migrationsDir, "002_passkey_discoverable.sql"),
+      "utf8",
+    );
+
+    // Apply only the initial schema first, then insert legacy data.
+    expect(migrate(db, [{ name: "001_init.sql", sql: initialSql }])).toEqual([
+      "001_init.sql",
+    ]);
+    db.run(
+      "INSERT INTO users (id, username, bucket, prefix, isAdmin, createdAt) VALUES ('u1', 'alice', 'jivedrive-prod', 'users/alice/', 0, '2026-08-01T00:00:00.000Z')",
+    );
+    db.run(
+      "INSERT INTO passkey_credentials (id, userId, publicKey, counter, transports, createdAt, lastUsedAt) VALUES ('c1', 'u1', 'pub', 0, '[]', '2026-08-01T00:00:00.000Z', NULL)",
+    );
+
+    // Applying 002 must add the discoverable column.
+    expect(
+      migrate(db, [{ name: "002_passkey_discoverable.sql", sql: secondSql }]),
+    ).toEqual(["002_passkey_discoverable.sql"]);
+
+    const columns = db
+      .query("PRAGMA table_info(passkey_credentials)")
+      .all() as Array<{ name: string; dflt_value: string | null }>;
+    const discoverable = columns.find(
+      (column) => column.name === "discoverable",
+    );
+    expect(discoverable).toBeTruthy();
+    expect(discoverable?.dflt_value).toBe("0");
+
+    // Existing rows read as legacy (0) after the migration.
+    const legacy = db
+      .query("SELECT discoverable FROM passkey_credentials WHERE id = 'c1'")
+      .get() as { discoverable: number };
+    expect(legacy.discoverable).toBe(0);
+
+    // New rows without an explicit discoverable value default to 0.
+    db.run(
+      "INSERT INTO passkey_credentials (id, userId, publicKey, createdAt) VALUES ('c2', 'u1', 'pub2', '2026-08-02T00:00:00.000Z')",
+    );
+    const fresh = db
+      .query("SELECT discoverable FROM passkey_credentials WHERE id = 'c2'")
+      .get() as { discoverable: number };
+    expect(fresh.discoverable).toBe(0);
   });
 
   it("is idempotent against the real migrations directory", () => {
