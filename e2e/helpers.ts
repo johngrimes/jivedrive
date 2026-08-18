@@ -28,12 +28,23 @@ export async function enableVirtualAuthenticator(
 }
 
 /**
- * Enroll the first passkey via an invite link: open the register page with
- * the invite token and complete the registration ceremony. The passkey is
- * created on the account the invite targets (a new user, or an existing
- * account with matching scope when the invite attaches); the ceremony
- * signs the user in (US1, FR-001/FR-002). The username fallback form no
- * longer exists, so this is the only first-passkey enrollment path.
+ * Enroll the first passkey by opening a full registration URL (invite or
+ * re-enrollment link) and completing the ceremony. The passkey is created
+ * on the account the URL targets (a new user, or an existing account with
+ * matching scope when the invite attaches); the ceremony signs the user
+ * in (US1, FR-001/FR-002). The username fallback form no longer exists,
+ * so this is the only first-passkey enrollment path.
+ *
+ * @param page - the page
+ * @param url - the full registration URL (/register?token=…)
+ */
+export async function enrollViaLink(page: Page, url: string): Promise<void> {
+  await page.goto(url);
+  await page.getByRole("button", { name: "Create passkey" }).click();
+}
+
+/**
+ * Enroll the first passkey via an invite link built from a token.
  *
  * @param page - the page
  * @param token - the invite token from the invite link
@@ -42,8 +53,7 @@ export async function enrollViaInvite(
   page: Page,
   token: string,
 ): Promise<void> {
-  await page.goto(`/register?token=${token}`);
-  await page.getByRole("button", { name: "Create passkey" }).click();
+  await enrollViaLink(page, `/register?token=${token}`);
 }
 
 /**

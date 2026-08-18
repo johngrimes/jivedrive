@@ -571,6 +571,26 @@ export function deleteInvite(db: Database, id: string): void {
 }
 
 /**
+ * Delete every unclaimed invite for a username (admin passkey reset).
+ *
+ * Expired-but-unclaimed invites are included: they are dead weight and
+ * would otherwise make the next invite creation 409-refuse (the create
+ * route refuses when a pending or expired invite exists), violating
+ * "exactly one live invite". Claimed invites survive for audit.
+ *
+ * @param db - database connection
+ * @param username - target username
+ */
+export function cancelPendingInvitesByUsername(
+  db: Database,
+  username: string,
+): void {
+  db.query(
+    "DELETE FROM invites WHERE username = ? AND claimedByUserId IS NULL",
+  ).run(username);
+}
+
+/**
  * Replace an invite's token and expiry (admin re-send). Everything else
  * about the invite is untouched.
  *
