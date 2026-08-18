@@ -51,9 +51,7 @@ describe("SignIn", () => {
       'a[href="/register"]',
     ) as HTMLAnchorElement | null;
     expect(registerLink).not.toBeNull();
-    expect(registerLink?.textContent).toContain(
-      "Register with an invite link",
-    );
+    expect(registerLink?.textContent).toContain("Register with an invite link");
   });
 
   it("renders no username input and no username fallback form (T016)", async () => {
@@ -63,7 +61,9 @@ describe("SignIn", () => {
     // "First time?" hint, no Create passkey button on the sign-in page.
     expect(container.querySelector('input[type="text"]')).toBeNull();
     expect(container.querySelector("#username")).toBeNull();
-    expect(container.textContent).not.toContain("First time? Use your username");
+    expect(container.textContent).not.toContain(
+      "First time? Use your username",
+    );
     expect(container.textContent).not.toContain("Create passkey");
   });
 });

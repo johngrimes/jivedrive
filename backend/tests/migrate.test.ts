@@ -289,9 +289,9 @@ describe("migrateFromDir", () => {
       migrate(db, [{ name: "003_session_last_used.sql", sql: thirdSql }]),
     ).toEqual(["003_session_last_used.sql"]);
 
-    const columns = db
-      .query("PRAGMA table_info(sessions)")
-      .all() as Array<{ name: string }>;
+    const columns = db.query("PRAGMA table_info(sessions)").all() as Array<{
+      name: string;
+    }>;
     expect(columns.some((column) => column.name === "lastUsedAt")).toBe(true);
 
     // Existing rows are backfilled from createdAt (full idle allowance).

@@ -445,8 +445,7 @@ export async function removeAdminUser(id: string): Promise<void> {
  *   a 403 carries code "forbidden"
  */
 export function resetUserPasskeys(id: string): Promise<InviteResponse> {
-  return apiFetch<InviteResponse>(
-    `/api/admin/users/${id}/passkeys`,
-    { method: "DELETE" },
-  );
+  return apiFetch<InviteResponse>(`/api/admin/users/${id}/passkeys`, {
+    method: "DELETE",
+  });
 }

@@ -788,10 +788,10 @@ export function AdminUsersPage() {
             </h2>
             <p className="py-4">
               All passkeys for "{reset.username}" will be deleted and every
-              session for the account will be revoked, including your own if
-              you are resetting yourself. Pending invites are cancelled and a
-              fresh 48-hour re-enrollment link is issued. The user signs in
-              again by opening that link and creating a new passkey.
+              session for the account will be revoked, including your own if you
+              are resetting yourself. Pending invites are cancelled and a fresh
+              48-hour re-enrollment link is issued. The user signs in again by
+              opening that link and creating a new passkey.
             </p>
 
             {error && (

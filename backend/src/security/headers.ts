@@ -84,10 +84,7 @@ export function createSecurityHeadersMiddleware(
     c.header("X-Frame-Options", "DENY");
     c.header("X-Content-Type-Options", "nosniff");
     c.header("Referrer-Policy", "same-origin");
-    c.header(
-      "Permissions-Policy",
-      "camera=(), microphone=(), geolocation=()",
-    );
+    c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
     const path = c.req.path;
     if (
       path.startsWith("/api") ||

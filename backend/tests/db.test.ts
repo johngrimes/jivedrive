@@ -663,7 +663,8 @@ describe("sessions", () => {
       createdAt: "2026-08-05T10:00:00.000Z",
       expiresAt: "2026-09-04T10:00:00.000Z",
     });
-    const second = createSession(db, {
+    // A second session that must keep its own lastUsedAt untouched.
+    createSession(db, {
       token: "tok-second",
       userId: user.id,
       createdAt: "2026-08-05T11:00:00.000Z",
