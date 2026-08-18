@@ -201,8 +201,12 @@ const env: Record<string, string | undefined> = {
   JIVEDRIVE_PORT: process.env.JIVEDRIVE_PORT ?? "5173",
   JIVEDRIVE_DB_PATH: process.env.JIVEDRIVE_DB_PATH ?? ":memory:",
   JIVEDRIVE_MIGRATIONS_DIR: resolve(import.meta.dir, "../migrations"),
+  // The mock S3 HTTP server on localhost:5299 is where the browser uploads
+  // PUT the file body via XHR, so the CSP connect-src (derived from the
+  // endpoint origin) must match it — otherwise the CSP blocks uploads.
+  // Keep process.env first so verification scripts can override.
   JIVEDRIVE_S3_ENDPOINT:
-    process.env.JIVEDRIVE_S3_ENDPOINT ?? "https://s3.gra.io.cloud.ovh.net",
+    process.env.JIVEDRIVE_S3_ENDPOINT ?? `http://localhost:${MOCK_S3_PORT}`,
   JIVEDRIVE_S3_ACCESS_KEY_ID: process.env.JIVEDRIVE_S3_ACCESS_KEY_ID ?? "test",
   JIVEDRIVE_S3_SECRET_ACCESS_KEY:
     process.env.JIVEDRIVE_S3_SECRET_ACCESS_KEY ?? "test",
