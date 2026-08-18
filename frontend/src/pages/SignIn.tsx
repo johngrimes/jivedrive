@@ -120,7 +120,6 @@ export function SignIn() {
                 {error}
               </p>
             )}
-
           </div>
         </section>
       </div>
