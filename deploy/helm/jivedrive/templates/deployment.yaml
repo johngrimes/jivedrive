@@ -18,6 +18,11 @@ spec:
     metadata:
       labels:
         {{- include "jivedrive.labels" . | nindent 8 }}
+      annotations:
+        # Config and secret changes roll the pod; without these the
+        # Deployment spec never changes and env updates silently don't apply.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
     spec:
       # The runtime image runs as the non-root "bun" user (UID 1000);
       # fsGroup 1000 gives that user write access to mounted volumes.
