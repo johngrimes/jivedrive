@@ -1,11 +1,19 @@
 /**
  * Auth routes: passkey registration and sign-in, logout and current user.
- * Implemented per `contracts/openapi.yaml` (T027).
+ * Implemented per `contracts/openapi.yaml`.
  *
- * Registration is username-first and invite-token based; a user with no
- * passkey yet (bootstrap admin, seeded user) registers their first passkey
- * through the same verify endpoint keyed by username instead of token.
+ * Sign-in is username-less: login/options returns assertion options with no
+ * allowCredentials (the authenticator only surfaces discoverable
+ * credentials), bound to an opaque single-use requestId; login/verify
+ * consumes the requestId's challenge and resolves the user from the
+ * asserted credential (FR-002).
+ *
+ * Registration is invite-token based (new users) or username based (first
+ * discoverable passkey for an existing account with no usable passkey).
+ * Every registered passkey is discoverable; re-enrolling an account with
+ * only legacy non-discoverable credentials deletes those legacy rows.
  */
+import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
@@ -26,11 +34,12 @@ import {
 import {
   createCredential,
   createUser,
+  deleteLegacyCredentialsByUser,
   getCredentialById,
   getInviteByToken,
   getUserById,
   getUserByUsername,
-  listCredentialsByUser,
+  listDiscoverableCredentialsByUser,
   markInviteClaimed,
   updateCredentialCounter,
 } from "../db/repository";
@@ -194,43 +203,96 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
     const body = await parseBody(c);
     if (!body.ok) return body.error;
     const token = body.value.token;
-    if (typeof token !== "string" || token === "") {
-      return jsonError(c, 400, "Invite token is required", "bad_request");
-    }
+    const username = body.value.username;
 
-    const invite = getInviteByToken(db, token);
-    const problem = inviteProblem(invite, new Date());
-    if (problem) return jsonError(c, 400, problem.message, problem.code);
-    if (!invite)
-      return jsonError(c, 400, "Invite not found", "invite_not_found");
-    if (getUserByUsername(db, invite.username)) {
-      return jsonError(
-        c,
-        400,
-        `Username "${invite.username}" is already taken`,
-        "username_taken",
+    if (typeof token === "string" && token !== "") {
+      const invite = getInviteByToken(db, token);
+      const problem = inviteProblem(invite, new Date());
+      if (problem) return jsonError(c, 400, problem.message, problem.code);
+      if (!invite)
+        return jsonError(c, 400, "Invite not found", "invite_not_found");
+      if (getUserByUsername(db, invite.username)) {
+        return jsonError(
+          c,
+          400,
+          `Username "${invite.username}" is already taken`,
+          "username_taken",
+        );
+      }
+
+      // Pre-assign the user id so the WebAuthn userHandle equals the
+      // persisted user id; createUser reuses it at verify time.
+      const userId = randomUUID();
+      const options = await generateRegistrationOptions({
+        rpId: config.webauthn.rpId,
+        rpName: RP_NAME,
+        username: invite.username,
+        userId,
+        userDisplayName: invite.username,
+      });
+      challenges.putRegistration(`reg:${token}`, {
+        challenge: options.challenge,
+        username: invite.username,
+        inviteToken: token,
+        userId,
+        createdAt: Date.now(),
+      });
+      return c.json(
+        {
+          options,
+          username: invite.username,
+          bucket: invite.bucket,
+          prefix: invite.prefix,
+        },
+        200,
       );
     }
 
-    const options = await generateRegistrationOptions({
-      rpId: config.webauthn.rpId,
-      rpName: RP_NAME,
-      username: invite.username,
-    });
-    challenges.putRegistration(`reg:${token}`, {
-      challenge: options.challenge,
-      username: invite.username,
-      inviteToken: token,
-      createdAt: Date.now(),
-    });
-    return c.json(
-      {
-        options,
-        username: invite.username,
-        bucket: invite.bucket,
-        prefix: invite.prefix,
-      },
-      200,
+    if (typeof username === "string" && username !== "") {
+      // First-passkey bootstrap for an existing account: the account must
+      // exist and hold zero discoverable credentials (legacy-only accounts
+      // are allowed; FR-005).
+      const user = getUserByUsername(db, username);
+      if (!user) {
+        return jsonError(
+          c,
+          400,
+          `No account with username "${username}"`,
+          "unknown_user",
+        );
+      }
+      if (listDiscoverableCredentialsByUser(db, user.id).length > 0) {
+        return jsonError(
+          c,
+          400,
+          "This account already has a passkey - sign in with it",
+          "user_has_passkey",
+        );
+      }
+
+      const options = await generateRegistrationOptions({
+        rpId: config.webauthn.rpId,
+        rpName: RP_NAME,
+        username: user.username,
+        userId: user.id,
+        userDisplayName: user.username,
+      });
+      challenges.putRegistration(`reg:${username}`, {
+        challenge: options.challenge,
+        username: user.username,
+        inviteToken: null,
+        userId: user.id,
+        createdAt: Date.now(),
+      });
+      // bucket/prefix are invite-flow only (contract): omitted here.
+      return c.json({ options, username: user.username }, 200);
+    }
+
+    return jsonError(
+      c,
+      400,
+      "An invite token or username is required",
+      "bad_request",
     );
   });
 
@@ -285,6 +347,7 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
           );
         }
         const user = createUser(db, {
+          id: challenge.userId,
           username: invite.username,
           bucket: invite.bucket,
           prefix: invite.prefix,
@@ -296,6 +359,7 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
           publicKey: data.publicKey,
           counter: data.counter,
           transports: data.transports,
+          discoverable: true,
         });
         markInviteClaimed(db, invite.id, user.id);
         startSession(c, config, db, user.id);
@@ -306,8 +370,10 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
     }
 
     if (typeof username === "string" && username !== "") {
-      // First-passkey registration for an existing user with no credentials
-      // (bootstrap admin, seeded user).
+      // First-passkey registration for an existing user with no usable
+      // passkey (bootstrap admin, seeded user). The gate is re-checked
+      // here (same as register/options) so an options/verify gap cannot
+      // bypass it.
       const user = getUserByUsername(db, username);
       if (!user) {
         return jsonError(
@@ -317,11 +383,11 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
           "unknown_user",
         );
       }
-      if (listCredentialsByUser(db, user.id).length > 0) {
+      if (listDiscoverableCredentialsByUser(db, user.id).length > 0) {
         return jsonError(
           c,
           400,
-          "This account already has a passkey",
+          "This account already has a passkey - sign in with it",
           "user_has_passkey",
         );
       }
@@ -357,7 +423,11 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
           publicKey: data.publicKey,
           counter: data.counter,
           transports: data.transports,
+          discoverable: true,
         });
+        // Legacy non-discoverable credentials can never work in the
+        // username-less flow: delete them on re-enrollment (FR-006).
+        deleteLegacyCredentialsByUser(db, user.id);
         startSession(c, config, db, user.id);
         return c.json({ user: toApiUser(user) }, 200);
       } catch {
@@ -375,71 +445,38 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
 
   app.post("/login/options", async (c) => {
     challenges.sweep();
-    const body = await parseBody(c);
-    if (!body.ok) return body.error;
-    const username = body.value.username;
-    if (typeof username !== "string" || username === "") {
-      return jsonError(c, 400, "Username is required", "bad_request");
-    }
-
-    const user = getUserByUsername(db, username);
-    if (!user) {
-      return jsonError(c, 404, "Unknown username", "unknown_user");
-    }
-
-    const credentials = listCredentialsByUser(db, user.id);
-    if (credentials.length > 0) {
-      const options = await generateAuthenticationOptions({
-        rpId: config.webauthn.rpId,
-        allowCredentials: credentials.map((credential) => ({
-          id: credential.id,
-          transports: credential.transports,
-        })),
-      });
-      challenges.putLogin(`login:${username}`, {
-        challenge: options.challenge,
-        username,
-        createdAt: Date.now(),
-      });
-      return c.json({ options, needsRegistration: false }, 200);
-    }
-
-    // The user has no passkey yet: send registration options and a flag so
-    // the client creates the first passkey on sign-in.
-    const options = await generateRegistrationOptions({
+    // Username-less sign-in (FR-002, R5): no request body is read. The
+    // assertion options carry no allowCredentials so the authenticator only
+    // surfaces its discoverable credentials (FR-010), and the challenge is
+    // bound to an opaque single-use requestId.
+    const options = await generateAuthenticationOptions({
       rpId: config.webauthn.rpId,
-      rpName: RP_NAME,
-      username,
     });
-    challenges.putRegistration(`reg:${username}`, {
+    const requestId = randomUUID();
+    challenges.putLogin(`login:${requestId}`, {
       challenge: options.challenge,
-      username,
-      inviteToken: null,
+      requestId,
       createdAt: Date.now(),
     });
-    return c.json({ options, needsRegistration: true }, 200);
+    return c.json({ requestId, options }, 200);
   });
 
   app.post("/login/verify", async (c) => {
     challenges.sweep();
     const body = await parseBody(c);
     if (!body.ok) return body.error;
-    const username = body.value.username;
+    const requestId = body.value.requestId;
     const credential = body.value.credential;
-    if (typeof username !== "string" || username === "") {
-      return jsonError(c, 401, "Username is required", "bad_request");
-    }
-    const credentialId = credentialIdOf(credential);
-    if (!credentialId) {
-      return jsonError(c, 401, "Missing credential", "authentication_failed");
-    }
-
-    const user = getUserByUsername(db, username);
-    if (!user) {
-      return jsonError(c, 401, "Unknown username", "unknown_user");
+    if (typeof requestId !== "string" || requestId === "") {
+      return jsonError(
+        c,
+        401,
+        "Authentication session expired, please try again",
+        "challenge_expired",
+      );
     }
 
-    const challenge = challenges.takeLogin(`login:${username}`);
+    const challenge = challenges.takeLogin(`login:${requestId}`);
     if (!challenge) {
       return jsonError(
         c,
@@ -449,12 +486,34 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
       );
     }
 
+    const credentialId = credentialIdOf(credential);
+    if (!credentialId) {
+      return jsonError(c, 401, "Missing credential", "authentication_failed");
+    }
+
     const stored = getCredentialById(db, credentialId);
-    if (!stored || stored.userId !== user.id) {
+    if (!stored) {
       return jsonError(
         c,
         401,
         "No matching passkey for this account",
+        "authentication_failed",
+      );
+    }
+
+    // Hardening: the authenticator's userHandle must agree with the stored
+    // credential's owner. @simplewebauthn/server 13 has no
+    // expectedUserHandle option, so the check happens here (R6).
+    const userHandle = (credential as AuthenticationResponseJSON).response
+      .userHandle;
+    if (
+      userHandle !== undefined &&
+      userHandle !== Buffer.from(stored.userId).toString("base64url")
+    ) {
+      return jsonError(
+        c,
+        401,
+        "Passkey verification failed",
         "authentication_failed",
       );
     }
@@ -482,7 +541,16 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
       );
     }
 
-    startSession(c, config, db, user.id);
+    startSession(c, config, db, stored.userId);
+    const user = getUserById(db, stored.userId);
+    if (!user) {
+      return jsonError(
+        c,
+        401,
+        "No matching passkey for this account",
+        "authentication_failed",
+      );
+    }
     return c.json({ user: toApiUser(user) }, 200);
   });
 

@@ -7,6 +7,7 @@ import {
   createCredential,
   createInvite,
   createUser,
+  getCredentialById,
   getInviteByToken,
   getSessionByToken,
   getUserByUsername,
@@ -338,6 +339,117 @@ describe("DELETE /api/admin/users", () => {
       method: "DELETE",
     });
     expect(unsigned.status).toBe(401);
+  });
+});
+
+describe("DELETE /api/admin/users/:id/passkeys", () => {
+  /** DELETE all passkeys of a user id with the admin cookie. */
+  async function resetPasskeys(
+    app: ReturnType<typeof createApp>,
+    id: string,
+    cookie = adminCookie,
+  ): Promise<Response> {
+    return app.request(`/api/admin/users/${encodeURIComponent(id)}/passkeys`, {
+      method: "DELETE",
+      headers: { cookie },
+    });
+  }
+
+  it("deletes every credential of a user while leaving the account and sessions intact", async () => {
+    const { app, db } = createAdminApp();
+    const target = createUser(db, {
+      username: "target",
+      bucket,
+      prefix: "users/target/",
+    });
+    createSession(db, target.id, { token: "target-session" });
+    // Two credentials, discoverable and legacy alike: the reset must delete
+    // every row, not only the discoverable ones (FR-008).
+    createCredential(db, {
+      id: "target-cred-1",
+      userId: target.id,
+      publicKey: "pub-1",
+      discoverable: true,
+    });
+    createCredential(db, {
+      id: "target-cred-2",
+      userId: target.id,
+      publicKey: "pub-2",
+      discoverable: false,
+    });
+
+    const res = await resetPasskeys(app, target.id);
+
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe("");
+    expect(getCredentialById(db, "target-cred-1")).toBeNull();
+    expect(getCredentialById(db, "target-cred-2")).toBeNull();
+    // The user row and their session survive (FR-008): the account stays
+    // and the session keeps validating.
+    expect(getUserByUsername(db, "target")).not.toBeNull();
+    expect(getSessionByToken(db, "target-session")).not.toBeNull();
+    // The admin and their session are untouched too.
+    expect(getUserByUsername(db, "admin")).not.toBeNull();
+    expect(getSessionByToken(db, "admin-session")).not.toBeNull();
+  });
+
+  it("returns 404 for an unknown user and deletes nothing", async () => {
+    const { app, db } = createAdminApp();
+
+    const res = await resetPasskeys(app, "no-such-user");
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({
+      error: "User not found",
+      code: "not_found",
+    });
+    // No user was harmed; the seeded admin and member remain.
+    expect(getUserByUsername(db, "admin")).not.toBeNull();
+    expect(getUserByUsername(db, "member")).not.toBeNull();
+  });
+
+  it("allows an admin to reset their own passkeys (self-reset)", async () => {
+    const { app, db } = createAdminApp();
+    const { admin } = seededUsers(db);
+    createCredential(db, {
+      id: "admin-cred",
+      userId: admin.id,
+      publicKey: "pub-admin",
+      discoverable: true,
+    });
+
+    const res = await resetPasskeys(app, admin.id);
+
+    // Self-reset is allowed (edge case "Admin resets their own passkeys");
+    // the credential is gone but the admin account and their current
+    // session survive.
+    expect(res.status).toBe(204);
+    expect(getCredentialById(db, "admin-cred")).toBeNull();
+    expect(getUserByUsername(db, "admin")).not.toBeNull();
+    expect(getSessionByToken(db, "admin-session")).not.toBeNull();
+  });
+
+  it("refuses a non-admin with 403 and an unsigned request with 401", async () => {
+    const { app, db } = createAdminApp();
+    const { member } = seededUsers(db);
+    createCredential(db, {
+      id: "member-cred",
+      userId: member.id,
+      publicKey: "pub",
+      discoverable: true,
+    });
+
+    const forbidden = await resetPasskeys(app, member.id, memberCookie);
+    expect(forbidden.status).toBe(403);
+    // US4 scenario 2: nothing is deleted by the refused request.
+    expect(getCredentialById(db, "member-cred")).not.toBeNull();
+
+    const unsigned = await app.request(
+      `/api/admin/users/${member.id}/passkeys`,
+      { method: "DELETE" },
+    );
+    expect(unsigned.status).toBe(401);
+    expect(getCredentialById(db, "member-cred")).not.toBeNull();
   });
 });
 

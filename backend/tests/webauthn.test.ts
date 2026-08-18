@@ -50,6 +50,7 @@ describe("challenge store", () => {
       challenge: "challenge-1",
       username: "alice",
       inviteToken: "tok-1",
+      userId: "user-1",
       createdAt: Date.now(),
     };
 
@@ -59,17 +60,35 @@ describe("challenge store", () => {
     expect(store.size()).toBe(0);
   });
 
-  it("stores and takes a login challenge exactly once", () => {
+  it("stores and takes a login challenge exactly once, keyed by an opaque id", () => {
     const store = createChallengeStore();
     const record = {
       challenge: "challenge-2",
-      username: "alice",
+      requestId: "req-1",
       createdAt: Date.now(),
     };
 
-    store.putLogin("alice", record);
-    expect(store.takeLogin("alice")).toEqual(record);
-    expect(store.takeLogin("alice")).toBeNull();
+    store.putLogin("req-1", record);
+    expect(store.takeLogin("req-1")).toEqual(record);
+    expect(store.takeLogin("req-1")).toBeNull();
+    // A different opaque id never resolves the same challenge.
+    expect(store.takeLogin("req-2")).toBeNull();
+  });
+
+  it("stores login challenges without a username", () => {
+    const store = createChallengeStore();
+    const record = {
+      challenge: "challenge-3",
+      requestId: "req-3",
+      createdAt: Date.now(),
+    };
+
+    store.putLogin("req-3", record);
+
+    const taken = store.takeLogin("req-3");
+    expect(taken).not.toBeNull();
+    expect(taken).not.toHaveProperty("username");
+    expect(taken).toHaveProperty("requestId", "req-3");
   });
 
   it("returns null for an expired registration challenge", () => {
@@ -79,10 +98,23 @@ describe("challenge store", () => {
       challenge: "c",
       username: "alice",
       inviteToken: "tok-1",
+      userId: "user-1",
       createdAt: now - 5 * 60 * 1000,
     });
 
     expect(store.takeRegistration("tok-1", now)).toBeNull();
+  });
+
+  it("returns null for an expired login challenge", () => {
+    const store = createChallengeStore(300_000);
+    const now = 1_000_000;
+    store.putLogin("req-1", {
+      challenge: "c",
+      requestId: "req-1",
+      createdAt: now - 300_001,
+    });
+
+    expect(store.takeLogin("req-1", now)).toBeNull();
   });
 
   it("returns null for a challenge expiring exactly at the reference time", () => {
@@ -92,6 +124,7 @@ describe("challenge store", () => {
       challenge: "c",
       username: "alice",
       inviteToken: "tok-1",
+      userId: "user-1",
       createdAt: now - 300_000,
     });
 
@@ -105,11 +138,12 @@ describe("challenge store", () => {
       challenge: "c1",
       username: "alice",
       inviteToken: "expired",
+      userId: "user-1",
       createdAt: now - 300_001,
     });
     store.putLogin("fresh", {
       challenge: "c2",
-      username: "alice",
+      requestId: "fresh",
       createdAt: now,
     });
 
@@ -126,6 +160,8 @@ describe("registration options", () => {
       rpId,
       rpName: "JiveDrive",
       username: "alice",
+      userId: "user-id-1",
+      userDisplayName: "Alice",
     });
 
     expect(options.rp.id).toBe(rpId);
@@ -136,11 +172,44 @@ describe("registration options", () => {
     expect(options.attestation).toBe("none");
   });
 
+  it("requests a discoverable resident key with required user verification (T002)", async () => {
+    const options = await generateRegistrationOptions({
+      rpId,
+      rpName: "JiveDrive",
+      username: "alice",
+      userId: "user-id-1",
+      userDisplayName: "Alice",
+    });
+
+    expect(options.authenticatorSelection).toMatchObject({
+      residentKey: "required",
+      userVerification: "required",
+    });
+  });
+
+  it("carries the supplied userID and userDisplayName (T002)", async () => {
+    const options = await generateRegistrationOptions({
+      rpId,
+      rpName: "JiveDrive",
+      username: "alice",
+      userId: "user-id-1",
+      userDisplayName: "Alice Grimes",
+    });
+
+    // The userID is the utf8 userId, base64url-encoded by the ceremony.
+    expect(options.user.id).toBe(
+      Buffer.from("user-id-1", "utf8").toString("base64url"),
+    );
+    expect(options.user.displayName).toBe("Alice Grimes");
+  });
+
   it("excludes already-registered credentials", async () => {
     const options = await generateRegistrationOptions({
       rpId,
       rpName: "JiveDrive",
       username: "alice",
+      userId: "user-id-1",
+      userDisplayName: "Alice",
       excludeCredentials: [{ id: "cred-abc", transports: ["internal"] }],
     });
 
@@ -295,12 +364,17 @@ describe("login options", () => {
     ]);
   });
 
-  it("produces an empty allowCredentials list without stored credentials", async () => {
-    const options = await generateAuthenticationOptions({
-      rpId,
-      allowCredentials: [],
-    });
-    expect(options.allowCredentials).toEqual([]);
+  it("omits allowCredentials entirely when none are supplied (T003)", async () => {
+    const options = await generateAuthenticationOptions({ rpId });
+
+    expect(options.allowCredentials).toBeUndefined();
+    expect(JSON.stringify(options)).not.toContain("allowCredentials");
+  });
+
+  it("requires user verification on authentication options (T003)", async () => {
+    const options = await generateAuthenticationOptions({ rpId });
+
+    expect(options.userVerification).toBe("required");
   });
 });
 

@@ -117,21 +117,21 @@ export function getMe(): Promise<{ user: User | null }> {
 
 /** Response of POST /auth/login/options. */
 export interface LoginOptionsResponse {
-  /** Assertion options when the user has credentials. */
-  options:
-    | PublicKeyCredentialRequestOptionsJSON
-    | PublicKeyCredentialCreationOptionsJSON;
-  /** True when the user has no passkey yet and must register one. */
-  needsRegistration: boolean;
+  /** Opaque single-use id required by login/verify. */
+  requestId: string;
+  /** Assertion options (no allowCredentials: discoverable-credential flow). */
+  options: PublicKeyCredentialRequestOptionsJSON;
 }
 
 /** Response of POST /auth/register/options. */
 export interface RegisterOptionsResponse {
   options: PublicKeyCredentialCreationOptionsJSON;
-  /** Username from the invite. */
+  /** Username from the invite or the fallback form. */
   username: string;
-  bucket: string;
-  prefix: string;
+  /** Invite flow only. */
+  bucket?: string;
+  /** Invite flow only. */
+  prefix?: string;
 }
 
 /** Response of the verify endpoints. */
@@ -140,49 +140,57 @@ export interface AuthResponse {
 }
 
 /**
- * Start a passkey sign-in for a username.
+ * Start a username-less passkey sign-in.
  *
- * @param username - the username from the sign-in form
- * @returns assertion (or registration) options and a registration flag
+ * No request body: the server returns assertion options with no
+ * allowCredentials so the authenticator only surfaces its discoverable
+ * credentials, plus an opaque single-use requestId for the verify step.
+ *
+ * @returns the requestId and assertion options
  */
-export function postLoginOptions(
-  username: string,
-): Promise<LoginOptionsResponse> {
+export function postLoginOptions(): Promise<LoginOptionsResponse> {
   return apiFetch<LoginOptionsResponse>("/auth/login/options", {
     method: "POST",
-    body: JSON.stringify({ username }),
   });
 }
 
 /**
  * Verify a passkey assertion and create a session.
  *
- * @param username - the username from the sign-in form
+ * The server resolves the signed-in user from the asserted credential; no
+ * username is sent anywhere in the flow.
+ *
+ * @param requestId - the opaque id returned by postLoginOptions
  * @param credential - the assertion response from the browser
  * @returns the signed-in user
  */
 export function postLoginVerify(
-  username: string,
+  requestId: string,
   credential: AuthenticationResponseJSON,
 ): Promise<AuthResponse> {
   return apiFetch<AuthResponse>("/auth/login/verify", {
     method: "POST",
-    body: JSON.stringify({ username, credential }),
+    body: JSON.stringify({ requestId, credential }),
   });
 }
 
 /**
- * Start passkey registration for an invite token.
+ * Start passkey registration for an invite token or an existing username.
  *
- * @param token - invite token from the invite link
- * @returns registration options and the invite's username/bucket/prefix
+ * The username variant bootstraps the first passkey for an account with no
+ * usable passkey; the response then carries no bucket/prefix (invite flow
+ * only).
+ *
+ * @param body - either the invite token or the account username
+ * @returns registration options and the username (plus bucket/prefix for
+ *   the invite flow)
  */
 export function postRegisterOptions(
-  token: string,
+  body: { token: string } | { username: string },
 ): Promise<RegisterOptionsResponse> {
   return apiFetch<RegisterOptionsResponse>("/auth/register/options", {
     method: "POST",
-    body: JSON.stringify({ token }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -423,6 +431,23 @@ export async function cancelAdminInvite(id: string): Promise<void> {
 export async function removeAdminUser(id: string): Promise<void> {
   await apiFetch<void>(
     `/api/admin/users?id=${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    { noBody: true },
+  );
+}
+
+/**
+ * Delete every passkey of a user (admin only, FR-008). The account,
+ * storage objects and active sessions are untouched; the user can register
+ * a fresh passkey via the sign-in fallback form afterwards (FR-009).
+ *
+ * @param id - user id
+ * @throws {ApiClientError} on failure; a 404 carries code "not_found" and
+ *   a 403 carries code "forbidden"
+ */
+export async function resetUserPasskeys(id: string): Promise<void> {
+  await apiFetch<void>(
+    `/api/admin/users/${id}/passkeys`,
     { method: "DELETE" },
     { noBody: true },
   );

@@ -96,7 +96,11 @@ error listing every problem when missing or invalid.
 
 ## Passkey setup
 
-JiveDrive authenticates with platform passkeys (WebAuthn), username-first.
+JiveDrive authenticates with platform passkeys (WebAuthn), username-less:
+sign-in is a single "Sign in with passkey" click using discoverable
+credentials, with no text entry. A "First time? Use your username" fallback
+form creates the first passkey for accounts that have none (bootstrap admin,
+seeded users, or after an admin resets passkeys).
 Two settings must match what the browser sees:
 
 - `JIVEDRIVE_WEBAUTHN_RP_ID` is the relying party id: the registrable domain
@@ -111,7 +115,9 @@ WebAuthn only works in a [secure context](https://developer.mozilla.org/en-US/do
 sees, the passkey ceremony fails, so terminate TLS in front of the app at the
 configured origin before deploying. Passkey management (adding, removing,
 backing up credentials) is delegated to the platform - a lost passkey is
-recovered by having an admin remove and re-invite the user.
+recovered by having an admin reset the user's passkeys (Admin users page),
+after which the user re-enrolls via the "First time? Use your username"
+form.
 
 ## Deployment
 
@@ -175,8 +181,11 @@ complete configuration reference and examples.
 
 ### 3. First sign-in
 
-Sign in at `https://drive.grimes.id.au` with the bootstrap admin username, or
-with a user invited by an admin. The first sign-in registers the passkey.
+Sign in at `https://drive.grimes.id.au` with a single "Sign in with passkey"
+click. On first sign-in an account has no passkey yet, so click "First time?
+Use your username" and enter your username (the bootstrap admin's, or a user
+invited by an admin) to create the first passkey; subsequent sign-ins are
+username-less.
 
 ## Testing
 

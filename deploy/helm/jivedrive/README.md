@@ -112,10 +112,13 @@ GHCR) plus `--set` overrides for the image tag and S3 credentials; see
 ### 3. First sign-in
 
 If you configured a bootstrap admin (see
-[Examples](#examples)), open the site, enter the username, and complete the
-passkey prompt. Otherwise, the first admin must be created from inside the
-cluster (for example with a one-off `kubectl exec` against the database), or
-by installing with the bootstrap admin environment variables set.
+[Examples](#examples)), open the site, click "First time? Use your
+username", enter the username, and complete the passkey prompt. This
+registers the account's first (discoverable) passkey; subsequent sign-ins
+are username-less with a single "Sign in with passkey" click. Otherwise,
+the first admin must be created from inside the cluster (for example with a
+one-off `kubectl exec` against the database), or by installing with the
+bootstrap admin environment variables set.
 
 ## Configuration
 

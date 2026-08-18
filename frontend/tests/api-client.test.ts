@@ -19,6 +19,7 @@ import {
   postUploadUrl,
   removeAdminUser,
   resendAdminInvite,
+  resetUserPasskeys,
 } from "../src/api/client";
 
 type FetchMock = ReturnType<typeof vi.fn>;
@@ -132,43 +133,41 @@ describe("getMe", () => {
 });
 
 describe("postLoginOptions", () => {
-  it("posts the username and returns the options response", async () => {
-    const body = {
-      options: { challenge: "abc" },
-      needsRegistration: false,
-    };
+  it("sends no body and returns the requestId and options (T021)", async () => {
+    const body = { requestId: "abc-123", options: { challenge: "def" } };
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
     vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
 
-    const result = await postLoginOptions("alice");
+    const result = await postLoginOptions();
 
     expect(result).toEqual(body);
     expect(fetchMock).toHaveBeenCalledWith(
       "/auth/login/options",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ username: "alice" }),
-      }),
+      expect.objectContaining({ method: "POST" }),
     );
+    // The username-less flow sends no body (FR-002).
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(init?.body).toBeUndefined();
   });
 });
 
 describe("postLoginVerify", () => {
-  it("posts username and credential", async () => {
+  it("posts requestId and credential (T021)", async () => {
     const credential = { id: "cred" };
+    const requestId = "abc-123";
     const fetchMock = vi
       .fn()
       .mockResolvedValue(jsonResponse({ user: { username: "alice" } }));
     vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
 
-    const result = await postLoginVerify("alice", credential as never);
+    const result = await postLoginVerify(requestId, credential as never);
 
     expect(result.user.username).toBe("alice");
     expect(fetchMock).toHaveBeenCalledWith(
       "/auth/login/verify",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ username: "alice", credential }),
+        body: JSON.stringify({ requestId, credential }),
       }),
     );
   });
@@ -185,7 +184,7 @@ describe("postRegisterOptions", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
     vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
 
-    const result = await postRegisterOptions("token-1");
+    const result = await postRegisterOptions({ token: "token-1" });
 
     expect(result).toEqual(body);
     expect(fetchMock).toHaveBeenCalledWith(
@@ -193,6 +192,26 @@ describe("postRegisterOptions", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ token: "token-1" }),
+      }),
+    );
+  });
+
+  it("posts only the username for the fallback flow (T013)", async () => {
+    const body = {
+      options: { challenge: "abc" },
+      username: "alice",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await postRegisterOptions({ username: "alice" });
+
+    expect(result).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/auth/register/options",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ username: "alice" }),
       }),
     );
   });
@@ -509,6 +528,20 @@ describe("admin API", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/admin/users?id=${encodeURIComponent("user id/with slashes")}`,
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("resetUserPasskeys sends a DELETE to the user's passkeys endpoint without parsing a body", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await resetUserPasskeys("user-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/users/user-1/passkeys",
       expect.objectContaining({ method: "DELETE" }),
     );
   });

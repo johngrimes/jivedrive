@@ -24,7 +24,7 @@ export function Register() {
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
-    postRegisterOptions(token)
+    postRegisterOptions({ token })
       .then((body) => {
         if (!cancelled) setInvite(body);
       })
