@@ -1,8 +1,6 @@
-import { useState } from "react";
-import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, Outlet, useNavigate } from "react-router-dom";
 import { PersonIcon, GearIcon } from "@primer/octicons-react";
 import { useSession } from "../auth/sessionContext";
-import { Sidebar } from "./Sidebar";
 
 /**
  * Application shell: persistent header showing the sign-in state on every
@@ -21,23 +19,6 @@ import { Sidebar } from "./Sidebar";
 export function AppShell() {
   const { user, loading, signOut } = useSession();
   const navigate = useNavigate();
-  const location = useLocation();
-  const [drawerOpen, setDrawerOpen] = useState(false);
-
-  // Close the drawer after every navigation (FR-011): tapping a drawer
-  // link navigates, and the destination must not stay covered by the
-  // drawer on mobile. The close keys on location.key (not pathname) so it
-  // also fires for same-route pushes — tapping the current route's link in
-  // the drawer still closes it instead of leaving it covering the screen.
-  // State is adjusted during render when the location prop changes (the
-  // repo's established pattern, see Files.tsx), because the close is a
-  // response to the location prop changing, not a sync with an external
-  // system.
-  const [prevKey, setPrevKey] = useState(location.key);
-  if (prevKey !== location.key) {
-    setPrevKey(location.key);
-    setDrawerOpen(false);
-  }
 
   /**
    * Sign out and return to the sign-in page.

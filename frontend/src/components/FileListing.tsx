@@ -202,95 +202,63 @@ export function FileListing({
 
   return (
     <>
-      <table className="table w-full">
-        <thead>
-          <tr>
-            <th scope="col">Name</th>
-            <th scope="col" className="hidden sm:table-cell">
-              Size
-            </th>
-            <th scope="col" className="hidden sm:table-cell">
-              Modified
-            </th>
-            <th scope="col" className="text-right">
-              Actions
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {folders.map((folder) => (
-            <tr key={`folder:${folder}`}>
-              <td className="break-all">
-                <a
-                  className="link min-h-11 inline-flex items-center gap-1 font-semibold"
-                  href="#"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    onOpenFolder(folder);
-                  }}
-                >
-                  <FileDirectoryFillIcon
-                    aria-hidden="true"
-                    className="shrink-0"
-                  />
-                  {folder}
-                </a>
-              </td>
-              <td className="hidden sm:table-cell">—</td>
-              <td className="hidden sm:table-cell">—</td>
-              <td className="text-right" />
-            </tr>
-          ))}
-          {files.map((file) => (
-            <tr key={file.key}>
-              <td className="break-all">
-                <div className="min-h-11 flex items-center gap-1">
-                  <FileIcon aria-hidden="true" className="shrink-0" />
-                  <span className="min-w-0">{file.name}</span>
-                </div>
-                <span className="block text-xs opacity-60 sm:hidden">
-                  {formatSize(file.size)} · {formatDate(file.lastModified)}
-                </span>
-              </td>
-              <td className="hidden sm:table-cell">{formatSize(file.size)}</td>
-              <td className="hidden sm:table-cell">
-                {formatDate(file.lastModified)}
-              </td>
-              <td className="whitespace-nowrap text-right">
-                <div className="flex items-center justify-end gap-1">
-                  <button
-                    type="button"
-                    className="btn btn-ghost min-h-11"
-                    aria-label="Download"
-                    onClick={() => onDownload(file)}
-                  >
-                    <DownloadIcon aria-hidden="true" />
-                    <span className="hidden sm:inline">Download</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-ghost min-h-11"
-                    aria-label="Share"
-                    onClick={() => onShare(file)}
-                  >
-                    <ShareAndroidIcon aria-hidden="true" />
-                    <span className="hidden sm:inline">Share</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-ghost min-h-11"
-                    aria-label="Delete"
-                    onClick={() => onDelete(file)}
-                  >
-                    <TrashIcon aria-hidden="true" />
-                    <span className="hidden sm:inline">Delete</span>
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <ul className="list">
+        {folders.map((folder) => (
+          <li className="list-row" key={`folder:${folder}`}>
+            <a
+              className="link min-h-11 inline-flex items-center gap-3 font-semibold no-underline"
+              href="#"
+              onClick={(event) => {
+                event.preventDefault();
+                onOpenFolder(folder);
+              }}
+            >
+              <FileDirectoryFillIcon aria-hidden="true" className="shrink-0" />
+              {folder}
+            </a>
+          </li>
+        ))}
+        {files.map((file) => (
+          <li className="list-row" key={file.key}>
+            <div className="min-h-11 flex items-center gap-3">
+              <FileIcon aria-hidden="true" className="shrink-0" />
+              <span className="min-w-0">{file.name}</span>
+            </div>
+            <span className="block text-xs opacity-60 sm:hidden">
+              {formatSize(file.size)} · {formatDate(file.lastModified)}
+            </span>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                className="btn btn-accent btn-sm btn-soft min-h-11"
+                aria-label="Download"
+                onClick={() => onDownload(file)}
+              >
+                <DownloadIcon aria-hidden="true" />
+                <span className="hidden sm:inline">Download</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-accent btn-sm btn-soft min-h-11"
+                aria-label="Share"
+                onClick={() => onShare(file)}
+              >
+                <ShareAndroidIcon aria-hidden="true" />
+                <span className="hidden sm:inline">Share</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-accent btn-sm btn-soft min-h-11"
+                aria-label="Delete"
+                onClick={() => onDelete(file)}
+              >
+                <TrashIcon aria-hidden="true" />
+                <span className="hidden sm:inline">Delete</span>
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
       {nextCursor && (
         <div className="mt-4 flex justify-center">
           <button

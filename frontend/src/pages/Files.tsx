@@ -169,8 +169,7 @@ export function FilesPage() {
 
   return (
     <div className="flex w-full max-w-4xl flex-col gap-4 pt-2">
-      <main className="min-w-0 flex-1 rounded-box bg-base-200 p-4 md:p-6">
-        <h1 className="mb-1 text-2xl font-semibold">Files</h1>
+      <main className="min-w-0 flex-1 rounded-box bg-base-200 p-4 pt-0 md:p-6 md:pt-0">
         <Breadcrumbs segments={segments} onNavigate={setPrefix} />
 
         <div className="mb-3 flex items-center justify-between gap-4">
