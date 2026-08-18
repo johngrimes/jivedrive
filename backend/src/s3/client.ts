@@ -72,17 +72,22 @@ export function createS3Client(s3: S3Config): S3Client {
 }
 
 /**
- * Assert that an object key falls within a user's prefix.
+ * Assert that an object key falls within a user's prefix and contains no
+ * parent-traversal ("..") segment.
  *
  * @param prefix - the user's normalised prefix
  * @param key - the object key to check
- * @throws {RangeError} when the key is outside the prefix
+ * @throws {RangeError} when the key is outside the prefix or contains a
+ *   ".." segment
  */
 export function assertKeyInScope(prefix: string, key: string): void {
   if (!key.startsWith(prefix)) {
     throw new RangeError(
       `Key "${key}" is outside the user's prefix "${prefix}"`,
     );
+  }
+  if (key.split("/").includes("..")) {
+    throw new RangeError(`Key "${key}" contains a ".." segment`);
   }
 }
 

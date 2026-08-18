@@ -771,6 +771,7 @@ describe("POST /api/admin/invites", () => {
       { username: "Alice!", bucket, prefix: "users/alice/" },
       { username: "alice", bucket: "Invalid_Bucket_Name", prefix: "u/" },
       { username: "alice", bucket, prefix: "/leading/slash/" },
+      { username: "alice", bucket, prefix: "users/../bob/" },
       { username: "alice", bucket, prefix: "u/", isAdmin: "yes" },
       {},
       { username: "alice", bucket },

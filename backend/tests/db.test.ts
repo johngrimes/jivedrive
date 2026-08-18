@@ -83,6 +83,17 @@ describe("normalizePrefix", () => {
   it("rejects a prefix with a leading slash", () => {
     expect(() => normalizePrefix("/users/alice")).toThrow(/leading/);
   });
+
+  it("rejects a prefix containing a .. segment (T053)", () => {
+    for (const bad of ["users/../bob", "../bob", "a/../../b"]) {
+      expect(() => normalizePrefix(bad)).toThrow(/\.\./);
+    }
+  });
+
+  it("allows two dots inside a segment name (T053)", () => {
+    expect(normalizePrefix("a..b/")).toBe("a..b/");
+    expect(normalizePrefix("users/a..b")).toBe("users/a..b/");
+  });
 });
 
 describe("users", () => {
@@ -133,6 +144,13 @@ describe("users", () => {
   it("rejects a prefix with a leading slash", () => {
     const db = createDb();
     expect(() => seedUser(db, { prefix: "/users/alice" })).toThrow(/leading/);
+  });
+
+  it("rejects a prefix containing a .. segment on create (T053)", () => {
+    const db = createDb();
+    for (const prefix of ["users/../bob", "../bob", "a/../../b"]) {
+      expect(() => seedUser(db, { prefix })).toThrow(/\.\./);
+    }
   });
 
   it("rejects a duplicate username", () => {
@@ -484,6 +502,9 @@ describe("invites", () => {
     expect(() => createInvite(db, { ...base, prefix: "/users/alice" })).toThrow(
       /leading/,
     );
+    expect(() =>
+      createInvite(db, { ...base, prefix: "users/../bob/" }),
+    ).toThrow(/\.\./);
   });
 
   it("lists invites", () => {

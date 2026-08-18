@@ -249,7 +249,7 @@ describe("GET /api/files", () => {
   it("rejects a prefix that escapes the user's space", async () => {
     const { app, calls } = createFilesApp();
 
-    for (const bad of ["../bob", "/etc", "a/../../bob"]) {
+    for (const bad of ["../bob", "/etc", "a/../../bob", "users/../bob"]) {
       const res = await app.request(
         `/api/files?prefix=${encodeURIComponent(bad)}`,
         { headers: { cookie: aliceCookie } },
@@ -323,6 +323,23 @@ describe("GET /api/files/download-url", () => {
 
     expect(res.status).toBe(400);
     expect(await res.json()).toMatchObject({ code: "out_of_scope" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects a key containing a .. segment without a signed URL (T054)", async () => {
+    const { app, calls } = createFilesApp();
+
+    for (const key of ["users/alice/../bob.txt", "users/alice/a/../../x"]) {
+      const res = await app.request(
+        `/api/files/download-url?key=${encodeURIComponent(key)}`,
+        { headers: { cookie: aliceCookie } },
+      );
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ code: "out_of_scope" });
+      expect(body.url).toBeUndefined();
+    }
     expect(calls).toHaveLength(0);
   });
 
@@ -491,7 +508,7 @@ describe("POST /api/files/upload-url", () => {
   it("rejects a folder that escapes the user's space without touching storage", async () => {
     const { app, calls } = createFilesApp();
 
-    for (const folder of ["../bob", "/etc", "a/../../bob"]) {
+    for (const folder of ["../bob", "/etc", "a/../../bob", "users/../bob"]) {
       const res = await postUploadUrl(app, {
         folder,
         fileName: "x.txt",
@@ -663,6 +680,19 @@ describe("POST /api/files/share-url", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("rejects a key containing a .. segment without a signed URL (T054)", async () => {
+    const { app, calls } = createFilesApp();
+
+    for (const key of ["users/alice/../bob.txt", "users/alice/a/../../x"]) {
+      const res = await postShareUrl(app, { key });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ code: "out_of_scope" });
+      expect(body.url).toBeUndefined();
+    }
+    expect(calls).toHaveLength(0);
+  });
+
   it("rejects a missing or empty key", async () => {
     const { app } = createFilesApp();
 
@@ -779,6 +809,18 @@ describe("DELETE /api/files", () => {
       expect(await res.json()).toMatchObject({ code: "out_of_scope" });
     }
     // No head or delete ever runs against an out-of-scope key.
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects a key containing a .. segment without touching storage (T054)", async () => {
+    const { app, calls } = createFilesApp();
+
+    for (const key of ["users/alice/../bob.txt", "users/alice/a/../../x"]) {
+      const res = await deleteFile(app, key);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "out_of_scope" });
+    }
+    // No head or delete ever runs against a key with a traversal segment.
     expect(calls).toHaveLength(0);
   });
 
