@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { startAuthentication } from "@simplewebauthn/browser";
 import { postLoginOptions, postLoginVerify } from "../api/client";
 import type { ApiClientError } from "../api/client";
@@ -12,9 +12,9 @@ import { DriveIcon } from "../components/icons";
  * The only sign-in action is a username-less passkey assertion: "Sign in
  * with passkey" completes the ceremony with zero text entry and the server
  * resolves the user from the asserted credential (US1, FR-001/FR-002).
- * First-passkey enrollment is token-gated only, so the page offers the
- * invite-link registration path instead of a username form; a username
- * alone can never claim an account (FR-001).
+ * First-passkey enrollment is token-gated only and happens on the
+ * Register page via a full invite link; a username alone can never claim
+ * an account (FR-001).
  */
 export function SignIn() {
   const [error, setError] = useState<string | null>(null);
@@ -51,10 +51,8 @@ export function SignIn() {
       setError(apiError.message);
     } else {
       // Ceremony failure (prompt cancelled, no passkeys): the button is
-      // re-enabled for a retry; new users register via the invite link.
-      setError(
-        "The passkey prompt was cancelled or failed. Try again, or register with an invite link.",
-      );
+      // re-enabled for a retry; new users register via a full invite link.
+      setError("The passkey prompt was cancelled or failed. Try again.");
     }
   }
 
@@ -123,11 +121,6 @@ export function SignIn() {
               </p>
             )}
 
-            <div className="divider">or</div>
-
-            <Link className="btn btn-outline w-full" to="/register">
-              Register with an invite link
-            </Link>
           </div>
         </section>
       </div>

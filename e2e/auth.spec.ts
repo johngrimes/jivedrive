@@ -103,16 +103,13 @@ test("sign-in page is usable at mobile, tablet and desktop widths", async ({
   ]) {
     await page.setViewportSize(viewport);
     await page.goto("/");
-    // The token-gated sign-in page (US1, FR-001/FR-002) offers exactly two
-    // paths: the primary username-less passkey button and the invite-link
-    // registration path. There is no username input and no "First time?"
-    // fallback form anymore. The ceremony is not triggered here: this
-    // context has no credential.
+    // The token-gated sign-in page (US1, FR-001/FR-002) offers a single
+    // path: the primary username-less passkey button. Registration happens
+    // via a full invite link on /register, so there is no in-page register
+    // link, no username input and no "First time?" fallback form. The
+    // ceremony is not triggered here: this context has no credential.
     await expect(
       page.getByRole("button", { name: "Sign in with passkey" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: "Register with an invite link" }),
     ).toBeVisible();
     await expect(page.getByLabel("Username")).toHaveCount(0);
     await expect(

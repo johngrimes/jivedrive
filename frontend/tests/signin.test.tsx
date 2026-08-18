@@ -38,7 +38,7 @@ async function renderSignIn(): Promise<HTMLElement> {
 }
 
 describe("SignIn", () => {
-  it("renders the passkey sign-in button and the invite-link registration path (T016)", async () => {
+  it("renders the passkey sign-in button and no register link (T016)", async () => {
     const container = await renderSignIn();
 
     const passkeyButton = container.querySelector(
@@ -47,11 +47,9 @@ describe("SignIn", () => {
     expect(passkeyButton).not.toBeNull();
     expect(passkeyButton?.textContent).toContain("Sign in with passkey");
 
-    const registerLink = container.querySelector(
-      'a[href="/register"]',
-    ) as HTMLAnchorElement | null;
-    expect(registerLink).not.toBeNull();
-    expect(registerLink?.textContent).toContain("Register with an invite link");
+    // Registration is token-gated and happens via a full invite link, so
+    // the sign-in page offers no in-page register path (FR-001).
+    expect(container.querySelector('a[href="/register"]')).toBeNull();
   });
 
   it("renders no username input and no username fallback form (T016)", async () => {
