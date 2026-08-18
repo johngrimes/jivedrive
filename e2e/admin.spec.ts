@@ -2,9 +2,9 @@ import { expect, test } from "@playwright/test";
 import type { BrowserContext, Page, TestInfo } from "@playwright/test";
 import {
   enableVirtualAuthenticator,
+  enrollViaLink,
   expectNoHorizontalOverflow,
   expectSignedInAs,
-  signIn,
   signOut,
 } from "./helpers";
 
@@ -263,7 +263,7 @@ test("an admin removes a user and their session stops working", async ({
   expect(body.user).toBeNull();
 });
 
-test("an admin resets a user's passkeys and the user re-enrolls via the fallback form", async ({
+test("an admin resets a user's passkeys and the user re-enrolls via the returned reset link", async ({
   page,
   context,
   browser,
@@ -272,48 +272,54 @@ test("an admin resets a user's passkeys and the user re-enrolls via the fallback
 
   // Re-arm first: the e2e server keeps one in-memory DB for the whole run,
   // so a previous (failed) attempt may have left kate with a passkey. An
-  // unconditional reset deletes any leftover (the route is idempotent: 204
-  // even when zero rows exist) and makes the bootstrap below deterministic.
+  // unconditional reset deletes any leftover credentials and sessions and
+  // cancels stale invites, and the response carries the fresh re-enrollment
+  // link (FR-006); no seeded invite is needed, so every attempt starts
+  // from the same state.
   const row = userRow(page, "kate");
   await expect(row).toBeVisible();
   await row.getByRole("button", { name: "Reset passkeys" }).click();
   let dialog = page.getByRole("alertdialog");
   await expect(dialog).toContainText("kate");
+  // The dialog explains the new semantics: sessions are revoked and a
+  // re-enrollment link is issued (no more "left untouched").
+  await expect(dialog).toContainText("revoked");
+  await expect(dialog).toContainText("re-enrollment");
   await dialog.getByRole("button", { name: "Reset passkeys" }).click();
-  await expect(page.getByText(/Passkeys reset for "kate"/)).toBeVisible();
-  // Reload to clear the notice: the second reset below must be observable.
-  await page.reload();
-  await expect(userRow(page, "kate")).toBeVisible();
 
-  // kate's own context: she bootstraps her first passkey via the fallback
-  // form (the fallback gate allows accounts with no discoverable passkey).
+  // Explicit success feedback plus the re-enrollment link from the reset
+  // response (US2 scenario 1).
+  await expect(page.getByText(/Passkeys reset for "kate"/)).toBeVisible();
+  const firstLink = await generatedLink(page);
+  expect(firstLink).toMatch(/^http:\/\/localhost:5173\/register\?token=/);
+
+  // kate's own context: she enrolls her first passkey via THAT link (the
+  // reset-created invite attaches to her existing account, US1 attach
+  // semantics) and signs out again.
   const kateContext = await browser.newContext();
   const katePage = await kateContext.newPage();
   await enableVirtualAuthenticator(kateContext, katePage);
-  await katePage.goto("/");
-  await signIn(katePage, "kate");
+  await enrollViaLink(katePage, firstLink);
   await expect(katePage).toHaveURL(/\/files/);
   await expectSignedInAs(katePage, "kate");
   await signOut(katePage, "kate");
 
-  // The admin resets kate's passkeys from the users table, with
-  // confirmation (US4 scenario 1): the dialog explains that the account
-  // and its files/sessions are left untouched.
+  // The admin resets kate again: the UI shows a NEW re-enrollment link
+  // (fresh token, not the one already claimed), and kate re-enrolls via it
+  // in the same context and lands signed in again (US2 scenario 1; the
+  // attach flow matches: kate exists with zero discoverable passkeys).
   await userRow(page, "kate")
     .getByRole("button", { name: "Reset passkeys" })
     .click();
   dialog = page.getByRole("alertdialog");
   await expect(dialog).toContainText("kate");
-  await expect(dialog).toContainText("left untouched");
   await dialog.getByRole("button", { name: "Reset passkeys" }).click();
-
-  // Explicit success feedback (FR-011): the reset is confirmed visibly.
   await expect(page.getByText(/Passkeys reset for "kate"/)).toBeVisible();
+  const secondLink = await generatedLink(page, firstLink);
+  expect(secondLink).toMatch(/^http:\/\/localhost:5173\/register\?token=/);
+  expect(secondLink).not.toBe(firstLink);
 
-  // US4 scenario 3: the fallback form works again for kate. She re-enrolls
-  // in the same context and lands signed in (FR-009).
-  await katePage.goto("/");
-  await signIn(katePage, "kate");
+  await enrollViaLink(katePage, secondLink);
   await expect(katePage).toHaveURL(/\/files/);
   await expectSignedInAs(katePage, "kate");
 

@@ -51,6 +51,8 @@ interface GeneratedLink {
   url: string;
   /** The invitee the link belongs to. */
   username: string;
+  /** How the link was produced: invite creation/resend or passkey reset. */
+  kind: "invite" | "reset";
 }
 
 /** The user pending removal confirmation. */
@@ -211,7 +213,11 @@ export function AdminUsersPage() {
         prefix,
         isAdmin,
       });
-      setGeneratedLink({ url: body.link, username: body.invite.username });
+      setGeneratedLink({
+        url: body.link,
+        username: body.invite.username,
+        kind: "invite",
+      });
       setNotice(`Invite for "${body.invite.username}" created`);
       setUsername("");
       setBucket("");
@@ -253,7 +259,11 @@ export function AdminUsersPage() {
     setCopied(false);
     try {
       const body = await resendAdminInvite(invite.id);
-      setGeneratedLink({ url: body.link, username: body.invite.username });
+      setGeneratedLink({
+        url: body.link,
+        username: body.invite.username,
+        kind: "invite",
+      });
       setNotice(`Invite for "${body.invite.username}" re-sent`);
       await loadData();
     } catch (err) {
@@ -304,18 +314,27 @@ export function AdminUsersPage() {
   }
 
   /**
-   * Confirm a passkey reset: delete every credential of the user so the
-   * fallback form works again for that account (FR-008/FR-009, US4). The
-   * account and its sessions are untouched, so a self-reset keeps the
-   * admin signed in (edge case "Admin resets their own passkeys").
+   * Confirm a passkey reset (FR-006): delete every credential of the user,
+   * revoke all of their sessions (including the caller's own on
+   * self-reset) and cancel pending invites; the response carries the fresh
+   * 48-hour re-enrollment invite and its link, which is shown for copying
+   * so the user can re-enroll (US1 attach flow) — no dead end.
    */
   async function handleResetConfirm(): Promise<void> {
     if (!reset || resetting) return;
     setResetting(true);
     setError(null);
+    setCopied(false);
     try {
-      await resetUserPasskeys(reset.id);
-      setNotice(`Passkeys reset for "${reset.username}"`);
+      const body = await resetUserPasskeys(reset.id);
+      setGeneratedLink({
+        url: body.link,
+        username: body.invite.username,
+        kind: "reset",
+      });
+      setNotice(
+        `Passkeys reset for "${body.invite.username}". Re-enrollment link created.`,
+      );
       setReset(null);
       await loadData();
     } catch (err) {
@@ -429,7 +448,9 @@ export function AdminUsersPage() {
             <div className="card mt-4 bg-base-100 shadow-xl">
               <div className="card-body">
                 <p className="font-semibold break-all">
-                  Invite link for {generatedLink.username}
+                  {generatedLink.kind === "reset"
+                    ? `Re-enrollment link for ${generatedLink.username}`
+                    : `Invite link for ${generatedLink.username}`}
                 </p>
                 <div className="flex items-stretch gap-2">
                   <input
@@ -437,7 +458,11 @@ export function AdminUsersPage() {
                     type="text"
                     readOnly
                     value={generatedLink.url}
-                    aria-label="Invite link"
+                    aria-label={
+                      generatedLink.kind === "reset"
+                        ? "Re-enrollment link"
+                        : "Invite link"
+                    }
                   />
                   <button
                     className="btn"
@@ -762,9 +787,11 @@ export function AdminUsersPage() {
               Reset passkeys for {reset.username}?
             </h2>
             <p className="py-4">
-              All passkeys for "{reset.username}" will be deleted. Their
-              account, files and active sessions are left untouched. They can
-              register a fresh passkey from the sign-in page's username form.
+              All passkeys for "{reset.username}" will be deleted and every
+              session for the account will be revoked, including your own if you
+              are resetting yourself. Pending invites are cancelled and a fresh
+              48-hour re-enrollment link is issued. The user signs in again by
+              opening that link and creating a new passkey.
             </p>
 
             {error && (

@@ -308,6 +308,9 @@ jobs:
           GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
 
+      - name: Verify Helm hardening
+        run: bash scripts/verify-helm-hardening.sh
+
       - name: Deploy with Helm
         run: |
           helm upgrade --install jivedrive deploy/helm/jivedrive -n jivedrive \

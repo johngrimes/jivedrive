@@ -81,6 +81,14 @@ describe("assertKeyInScope", () => {
   it("accepts a key equal to the user's prefix", () => {
     expect(() => assertKeyInScope(userPrefix, "users/alice/")).not.toThrow();
   });
+
+  it("rejects keys containing a .. segment even inside the prefix (T054)", () => {
+    // These keys string-prefix-match the user's prefix but contain a
+    // parent-traversal segment, so they must be refused.
+    for (const key of ["users/alice/../bob.txt", "users/alice/a/../../x"]) {
+      expect(() => assertKeyInScope(userPrefix, key)).toThrow(RangeError);
+    }
+  });
 });
 
 describe("createS3Client", () => {
@@ -257,6 +265,13 @@ describe("headObject", () => {
       headObject(client, bucket, userPrefix, "users/bob/a.txt"),
     ).rejects.toThrow(RangeError);
   });
+
+  it("rejects a key containing a .. segment (T054)", async () => {
+    const { client } = s3Input(() => ({}));
+    await expect(
+      headObject(client, bucket, userPrefix, "users/alice/../bob.txt"),
+    ).rejects.toThrow(RangeError);
+  });
 });
 
 describe("deleteObject", () => {
@@ -274,6 +289,13 @@ describe("deleteObject", () => {
     const { client } = s3Input(() => ({}));
     await expect(
       deleteObject(client, bucket, userPrefix, "users/bob/a.txt"),
+    ).rejects.toThrow(RangeError);
+  });
+
+  it("rejects a key containing a .. segment (T054)", async () => {
+    const { client } = s3Input(() => ({}));
+    await expect(
+      deleteObject(client, bucket, userPrefix, "users/alice/../bob.txt"),
     ).rejects.toThrow(RangeError);
   });
 });
@@ -328,6 +350,15 @@ describe("presigned URLs", () => {
   it("rejects a key outside the user's prefix", async () => {
     await expect(
       presignedGetUrl(client, bucket, userPrefix, "users/bob/a.txt", 60),
+    ).rejects.toThrow(RangeError);
+  });
+
+  it("rejects a key containing a .. segment (T054)", async () => {
+    await expect(
+      presignedGetUrl(client, bucket, userPrefix, "users/alice/../bob.txt", 60),
+    ).rejects.toThrow(RangeError);
+    await expect(
+      presignedPutUrl(client, bucket, userPrefix, "users/alice/../bob.txt", 60),
     ).rejects.toThrow(RangeError);
   });
 });

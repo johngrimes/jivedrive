@@ -126,12 +126,12 @@ export interface LoginOptionsResponse {
 /** Response of POST /auth/register/options. */
 export interface RegisterOptionsResponse {
   options: PublicKeyCredentialCreationOptionsJSON;
-  /** Username from the invite or the fallback form. */
+  /** Username the passkey will be registered for (invite or bootstrap). */
   username: string;
-  /** Invite flow only. */
-  bucket?: string;
-  /** Invite flow only. */
-  prefix?: string;
+  /** Storage bucket from the invite or the bootstrap user's account. */
+  bucket: string;
+  /** Storage prefix from the invite or the bootstrap user's account. */
+  prefix: string;
 }
 
 /** Response of the verify endpoints. */
@@ -175,35 +175,31 @@ export function postLoginVerify(
 }
 
 /**
- * Start passkey registration for an invite token or an existing username.
+ * Start passkey registration for a token: an invite token (new user, or
+ * re-enrollment after an admin passkey reset) or the bootstrap enrollment
+ * token (provisioned admin with no passkey yet). A username alone is never
+ * accepted (FR-001/FR-002).
  *
- * The username variant bootstraps the first passkey for an account with no
- * usable passkey; the response then carries no bucket/prefix (invite flow
- * only).
- *
- * @param body - either the invite token or the account username
- * @returns registration options and the username (plus bucket/prefix for
- *   the invite flow)
+ * @param token - the invite token or bootstrap enrollment token
+ * @returns registration options and the username/bucket/prefix
  */
 export function postRegisterOptions(
-  body: { token: string } | { username: string },
+  token: string,
 ): Promise<RegisterOptionsResponse> {
   return apiFetch<RegisterOptionsResponse>("/auth/register/options", {
     method: "POST",
-    body: JSON.stringify(body),
+    body: JSON.stringify({ token }),
   });
 }
 
 /**
- * Verify a passkey registration. Accepts either an invite token or a
- * username (for first-passkey registration of an existing user).
+ * Verify a passkey registration for a token (invite or bootstrap).
  *
- * @param body - token or username plus the registration response
+ * @param body - the token plus the registration response from the browser
  * @returns the signed-in user
  */
 export function postRegisterVerify(body: {
-  token?: string;
-  username?: string;
+  token: string;
   credential: RegistrationResponseJSON;
 }): Promise<AuthResponse> {
   return apiFetch<AuthResponse>("/auth/register/verify", {
@@ -437,18 +433,19 @@ export async function removeAdminUser(id: string): Promise<void> {
 }
 
 /**
- * Delete every passkey of a user (admin only, FR-008). The account,
- * storage objects and active sessions are untouched; the user can register
- * a fresh passkey via the sign-in fallback form afterwards (FR-009).
+ * Delete every passkey of a user (admin only, FR-006). The reset revokes
+ * ALL of the user's sessions (including the caller's own when resetting
+ * self), cancels pending invites for the username, and returns a fresh
+ * 48-hour re-enrollment invite and its registration link. The account and
+ * its storage objects are untouched.
  *
  * @param id - user id
+ * @returns the re-enrollment invite and its link
  * @throws {ApiClientError} on failure; a 404 carries code "not_found" and
  *   a 403 carries code "forbidden"
  */
-export async function resetUserPasskeys(id: string): Promise<void> {
-  await apiFetch<void>(
-    `/api/admin/users/${id}/passkeys`,
-    { method: "DELETE" },
-    { noBody: true },
-  );
+export function resetUserPasskeys(id: string): Promise<InviteResponse> {
+  return apiFetch<InviteResponse>(`/api/admin/users/${id}/passkeys`, {
+    method: "DELETE",
+  });
 }

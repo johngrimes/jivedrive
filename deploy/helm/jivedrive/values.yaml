@@ -18,16 +18,15 @@ jivedrive:
   # this at 1.
   replicas: 1
 
-  # Resource requests and limits for the server container. Unset by default;
-  # Kubernetes then schedules the pod with no requests or limits.
+  # Resource requests and limits for the server container. The defaults keep
+  # the pod within sane bounds on a small cluster; tune per deployment.
   resources:
-    {}
-    # requests:
-    #   memory: "256Mi"
-    #   cpu: "100m"
-    # limits:
-    #   memory: "512Mi"
-    #   cpu: "500m"
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
 
   # Pod scheduling. All optional, all unset by default.
   nodeSelector: {}
@@ -47,16 +46,29 @@ jivedrive:
     # Migrations are baked into the image at /app/migrations.
     JIVEDRIVE_MIGRATIONS_DIR: "/app/migrations"
     JIVEDRIVE_SESSION_TTL_DAYS: "30"
+    # Sessions also expire after this many days of inactivity (rolling).
+    JIVEDRIVE_SESSION_IDLE_DAYS: "7"
+    # Token-bucket rate limits: /auth/* allows authPerMinute per minute with
+    # a burst of authBurst; /api/files/* likewise with files*.
+    JIVEDRIVE_RATE_LIMIT_AUTH_PER_MINUTE: "20"
+    JIVEDRIVE_RATE_LIMIT_AUTH_BURST: "10"
+    JIVEDRIVE_RATE_LIMIT_FILES_PER_MINUTE: "300"
+    JIVEDRIVE_RATE_LIMIT_FILES_BURST: "100"
+    # TLS is terminated in front of the service, which sets X-Forwarded-For;
+    # trusting it lets the rate limiter key on the real client address.
+    JIVEDRIVE_TRUST_PROXY: "true"
     JIVEDRIVE_S3_ENDPOINT: "https://s3.sgp.io.cloud.ovh.net"
     JIVEDRIVE_S3_REGION: "sgp"
     JIVEDRIVE_WEBAUTHN_RP_ID: "drive.grimes.id.au"
     JIVEDRIVE_WEBAUTHN_ORIGIN: "https://drive.grimes.id.au"
     # Optional bootstrap admin provisioned at first start. Unset by default;
-    # to provision one, uncomment and set these:
+    # to provision one, uncomment and set these (the enrollment token below
+    # is REQUIRED whenever the username is set - see the chart README):
     # JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin"
     # JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: "jivedrive-prod"
     # JIVEDRIVE_BOOTSTRAP_ADMIN_PREFIX: "users/admin/"
     # JIVEDRIVE_BOOTSTRAP_ADMIN_IS_ADMIN: "true"
+    # JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN: ""
 
   # Sensitive environment variables for the server, stored in a Kubernetes
   # Secret. The app refuses to start without S3 credentials, so set both
@@ -64,6 +76,10 @@ jivedrive:
   secretConfig:
     JIVEDRIVE_S3_ACCESS_KEY_ID: ""
     JIVEDRIVE_S3_SECRET_ACCESS_KEY: ""
+    # The bootstrap enrollment token is a secret: set it here (or with
+    # --set) instead of in jivedrive.config. REQUIRED (≥16 chars) whenever
+    # JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME is set; see the chart README.
+    # JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN: ""
 
   # Kubernetes Service in front of the server. No Ingress is created by
   # this chart: expose the service with your own Ingress, a LoadBalancer,

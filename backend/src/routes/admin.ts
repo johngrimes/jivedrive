@@ -18,10 +18,12 @@ import type { Database } from "bun:sqlite";
 import type { AppConfig } from "../config";
 import type { ServerEnv } from "../server";
 import {
+  cancelPendingInvitesByUsername,
   countAdmins,
   createInvite,
   deleteCredentialsByUser,
   deleteInvite,
+  deleteSessionsByUser,
   deleteUser,
   getInviteById,
   getUserById,
@@ -229,20 +231,44 @@ export function adminRoutes(deps: AdminRouteDeps): Hono<ServerEnv> {
     return c.body(null, 204);
   });
 
-  // Reset a user's passkeys: delete every credential row so the fallback
-  // form works again for that account (FR-008/FR-009, US4). The account,
-  // storage objects and active sessions are untouched (the reset governs
-  // future sign-in only), and self-reset is allowed (edge case "Admin
-  // resets their own passkeys": the admin's session stays valid and they
-  // re-enroll via the fallback form on next sign-in). An unknown user is
-  // refused with 404.
+  // Reset a user's passkeys (FR-006, US2): delete every credential row,
+  // revoke ALL of the user's sessions (including the caller's own when
+  // resetting self), cancel pending invites for the username so exactly
+  // one live invite exists, and create a fresh 48-hour re-enrollment
+  // invite carrying the user's own bucket/prefix/isAdmin, issued by the
+  // caller. The response returns the new invite and its registration
+  // link; the user re-enrolls via the US1 attach flow (the invite's
+  // username matches an existing zero-passkey account). The user row and
+  // storage objects are untouched, so the admin count never changes and
+  // resetting the last admin is allowed. An unknown user is refused with
+  // 404 and nothing is created or deleted.
   app.delete("/users/:id/passkeys", (c) => {
     const id = c.req.param("id");
-    if (!getUserById(db, id)) {
+    const target = getUserById(db, id);
+    if (!target) {
       return jsonError(c, 404, "User not found", "not_found");
     }
     deleteCredentialsByUser(db, id);
-    return c.body(null, 204);
+    deleteSessionsByUser(db, id);
+    cancelPendingInvitesByUsername(db, target.username);
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + INVITE_TTL_MS).toISOString();
+    const invite = createInvite(db, {
+      token: newInviteToken(),
+      username: target.username,
+      bucket: target.bucket,
+      prefix: target.prefix,
+      isAdmin: target.isAdmin,
+      issuedByUserId: c.get("user").id,
+      expiresAt,
+    });
+    return c.json(
+      {
+        invite: toAdminInvite(invite, now),
+        link: inviteLink(config, invite.token),
+      },
+      200,
+    );
   });
 
   // List pending, claimed and expired invites with derived status.

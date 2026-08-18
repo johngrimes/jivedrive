@@ -4,9 +4,10 @@
 # file-backed SQLite database and in-memory mock object store, then
 # exercises the /api/admin endpoints with curl: create/resend/cancel/list
 # invites, register an invitee through the real WebAuthn flow (crafted
-# with the test keypair helpers), list/remove users, the last-admin and
-# remove-self protections, non-admin 403s, and storage untouched by user
-# removal.
+# with the test keypair helpers), passkey reset (200 {invite, link},
+# session revocation, re-enrollment via the returned link), list/remove
+# users, the last-admin and remove-self protections, non-admin 403s, and
+# storage untouched by user removal.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -217,6 +218,116 @@ else
   echo "FAIL yuri missing from the user list: $USERS"
   FAILED=1
 fi
+
+# --- 2b. Passkey reset: 200 {invite, link}, revocation, re-enrollment ----
+# The reset endpoint changed from 204 to 200 {invite, link} (spec 005
+# US2/FR-006): it deletes the user's credentials, revokes ALL of the
+# user's sessions, cancels pending invites for the username, and returns a
+# fresh 48-hour re-enrollment invite link. Re-enrolling through that link
+# goes through the US1 attach flow: the invite's username matches the
+# existing zero-passkey account with identical bucket/prefix/isAdmin, so
+# the passkey attaches to the same user row.
+echo "== Passkey reset =="
+RESP=$(mktemp)
+
+# Create an invite for a fresh username and enroll them via the token flow
+# (no username-based enrollment exists any more - register/options and
+# register/verify accept a token only, FR-001/FR-002).
+curl -s -o "$RESP" -w "" -X POST -b "$ADMIN_COOKIE" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"walter","bucket":"jivedrive-prod","prefix":"users/walter/"}' \
+  "$BASE_URL/api/admin/invites"
+WALTER_TOKEN=$(jq -r .link "$RESP" | sed 's/.*token=//')
+WALTER_SESSION=$(register_via_api "$WALTER_TOKEN" "44")
+if [[ -z "$WALTER_SESSION" ]]; then
+  echo "FAIL walter registration did not set a session cookie"
+  FAILED=1
+else
+  echo "PASS walter enrolled via the invite token and received a session"
+fi
+WALTER_ID=$(curl -s "$BASE_URL/api/admin/users" -b "$ADMIN_COOKIE" | \
+  jq -r '.users[] | select(.username == "walter") | .id')
+if [[ -z "$WALTER_ID" ]]; then
+  echo "FAIL walter missing from the user list"
+  FAILED=1
+fi
+
+# Admin reset: HTTP 200 with {invite, link}.
+RESET=$(curl -s -o "$RESP" -w "%{http_code}" -X DELETE \
+  -b "$ADMIN_COOKIE" "$BASE_URL/api/admin/users/$WALTER_ID/passkeys")
+if [[ "$RESET" == "200" ]]; then
+  echo "PASS reset passkeys -> HTTP 200"
+else
+  echo "FAIL reset passkeys expected HTTP 200, got $RESET: $(cat "$RESP")"
+  FAILED=1
+fi
+RESET_BODY=$(cat "$RESP")
+
+# The returned invite is pending and carries the user's bucket/prefix.
+if [[ "$(jq -r .invite.status <<<"$RESET_BODY")" == "pending" ]] \
+  && [[ "$(jq -r .invite.username <<<"$RESET_BODY")" == "walter" ]] \
+  && [[ "$(jq -r .invite.bucket <<<"$RESET_BODY")" == "jivedrive-prod" ]] \
+  && [[ "$(jq -r .invite.prefix <<<"$RESET_BODY")" == "users/walter/" ]]; then
+  echo "PASS reset invite is pending with walter's bucket/prefix"
+else
+  echo "FAIL reset invite shape: $RESET_BODY"
+  FAILED=1
+fi
+WALTER_LINK=$(jq -r .link <<<"$RESET_BODY")
+if [[ "$WALTER_LINK" == http://localhost:5173/register?token=* ]]; then
+  echo "PASS reset link carries the registration token"
+else
+  echo "FAIL reset link malformed: $WALTER_LINK"
+  FAILED=1
+fi
+
+# The user's old session no longer resolves after the reset (FR-006).
+ME=$(curl -s "$BASE_URL/auth/me" -b "$WALTER_SESSION")
+if jq -e ".user == null" >/dev/null <<<"$ME"; then
+  echo "PASS walter's old session is revoked (/auth/me reports null)"
+else
+  echo "FAIL walter's old session still resolves: $ME"
+  FAILED=1
+fi
+
+# A fresh pending invite for the username is in the admin list.
+INVITES=$(curl -s "$BASE_URL/api/admin/invites" -b "$ADMIN_COOKIE")
+if jq -e ".invites[] | select(.username == \"walter\" and .status == \"pending\")" >/dev/null <<<"$INVITES"; then
+  echo "PASS reset invite listed as pending for walter"
+else
+  echo "FAIL walter's reset invite not pending in the list: $INVITES"
+  FAILED=1
+fi
+
+# Re-enroll via the returned link (US1 attach flow: same username,
+# matching scope, zero discoverable passkeys -> succeeds).
+WALTER_RE_TOKEN=$(jq -r .link <<<"$RESET_BODY" | sed 's/.*token=//')
+WALTER_RE_SESSION=$(register_via_api "$WALTER_RE_TOKEN" "45")
+if [[ -z "$WALTER_RE_SESSION" ]]; then
+  echo "FAIL walter re-enrollment via the reset link did not set a session"
+  FAILED=1
+else
+  echo "PASS walter re-enrolled via the reset link (attach flow)"
+fi
+
+# Attach never duplicates: exactly one walter user row exists.
+USERS=$(curl -s "$BASE_URL/api/admin/users" -b "$ADMIN_COOKIE")
+if [[ "$(jq '[.users[] | select(.username == "walter")] | length' <<<"$USERS")" == "1" ]]; then
+  echo "PASS re-enrollment attached to the existing account (no duplicate user)"
+else
+  echo "FAIL re-enrollment created a duplicate user: $USERS"
+  FAILED=1
+fi
+
+# The re-enrollment session resolves to the same account.
+ME=$(curl -s "$BASE_URL/auth/me" -b "$WALTER_RE_SESSION")
+if jq -e ".user != null and .user.username == \"walter\"" >/dev/null <<<"$ME"; then
+  echo "PASS walter's new session resolves after re-enrollment"
+else
+  echo "FAIL walter's new session does not resolve: $ME"
+  FAILED=1
+fi
+rm -f "$RESP"
 
 # --- 3. Removal ----------------------------------------------------------
 echo "== User removal =="

@@ -4,6 +4,7 @@ import type { S3Client } from "@aws-sdk/client-s3";
 import { fileURLToPath } from "node:url";
 import { migrateFromDir, openDatabase } from "../src/db/migrate";
 import {
+  countAdmins,
   createCredential,
   createInvite,
   createUser,
@@ -14,7 +15,7 @@ import {
   listInvites,
   markInviteClaimed,
 } from "../src/db/repository";
-import { createSession } from "../src/auth/sessions";
+import { createSession, validateSession } from "../src/auth/sessions";
 import { createApp } from "../src/server";
 import { createS3Client } from "../src/s3/client";
 import type { AppConfig } from "../src/config";
@@ -34,13 +35,27 @@ const config: AppConfig = {
   dbPath: ":memory:",
   migrationsDir,
   sessionTtlDays: 30,
+  sessionIdleDays: 7,
+  rateLimit: {
+    authPerMinute: 20,
+    authBurst: 10,
+    filesPerMinute: 300,
+    filesBurst: 100,
+    trustProxy: false,
+  },
   s3: {
     endpoint: "https://s3.gra.io.cloud.ovh.net",
     region: "gra",
     accessKeyId: "AKIAEXAMPLE123",
     secretAccessKey: "s3cr3t",
   },
-  bootstrapAdmin: { username: null, bucket: null, prefix: "", isAdmin: true },
+  bootstrapAdmin: {
+    username: null,
+    bucket: null,
+    prefix: "",
+    isAdmin: true,
+    enrollmentToken: null,
+  },
   webauthn: { rpId: "localhost", origin: "http://localhost:5173" },
 };
 
@@ -355,16 +370,15 @@ describe("DELETE /api/admin/users/:id/passkeys", () => {
     });
   }
 
-  it("deletes every credential of a user while leaving the account and sessions intact", async () => {
+  it("deletes credentials, revokes all sessions, cancels pending invites and returns the re-enrollment invite and link (T023)", async () => {
     const { app, db } = createAdminApp();
     const target = createUser(db, {
       username: "target",
       bucket,
       prefix: "users/target/",
     });
-    createSession(db, target.id, { token: "target-session" });
     // Two credentials, discoverable and legacy alike: the reset must delete
-    // every row, not only the discoverable ones (FR-008).
+    // every row, not only the discoverable ones.
     createCredential(db, {
       id: "target-cred-1",
       userId: target.id,
@@ -377,24 +391,76 @@ describe("DELETE /api/admin/users/:id/passkeys", () => {
       publicKey: "pub-2",
       discoverable: false,
     });
+    // Two sessions with known tokens, so revocation is observable through
+    // validateSession after the reset (FR-006).
+    createSession(db, target.id, { token: "target-session-1" });
+    createSession(db, target.id, { token: "target-session-2" });
+    // A pending invite for the username: cancelled by the reset so exactly
+    // one live invite exists.
+    createInvite(db, {
+      token: "inv-target-pending",
+      username: "target",
+      bucket,
+      prefix: "users/target/",
+      issuedByUserId: seededUsers(db).admin.id,
+      expiresAt: "2999-01-01T00:00:00.000Z",
+    });
+    // A claimed invite for the same username: survives for audit.
+    const claimed = createInvite(db, {
+      token: "inv-target-claimed",
+      username: "target",
+      bucket,
+      prefix: "users/target/",
+      issuedByUserId: seededUsers(db).admin.id,
+      expiresAt: "2999-01-01T00:00:00.000Z",
+    });
+    markInviteClaimed(db, claimed.id, target.id);
 
     const res = await resetPasskeys(app, target.id);
 
-    expect(res.status).toBe(204);
-    expect(await res.text()).toBe("");
+    // 200 with the re-enrollment invite and its link (contract v1.2.0).
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as InviteResponse;
+    expect(body.link).toMatch(/\/register\?token=/);
+    // The new invite carries the user's own bucket/prefix/isAdmin so the
+    // US1 attach flow can redeem it against the existing account.
+    expect(body.invite).toMatchObject({
+      username: "target",
+      bucket,
+      prefix: "users/target/",
+      isAdmin: false,
+      status: "pending",
+    });
     expect(getCredentialById(db, "target-cred-1")).toBeNull();
     expect(getCredentialById(db, "target-cred-2")).toBeNull();
-    // The user row and their session survive (FR-008): the account stays
-    // and the session keeps validating.
+    // Every session of the target is revoked: the tokens no longer validate.
+    expect(validateSession(db, "target-session-1")).toBeNull();
+    expect(validateSession(db, "target-session-2")).toBeNull();
+    // The pending invite is cancelled; the claimed invite survives.
+    expect(getInviteByToken(db, "inv-target-pending")).toBeNull();
+    expect(getInviteByToken(db, "inv-target-claimed")).not.toBeNull();
+    // Exactly one live (pending) invite exists for the username.
+    const pendingForTarget = listInvites(db).filter(
+      (invite) =>
+        invite.username === "target" && invite.claimedByUserId === null,
+    );
+    expect(pendingForTarget).toHaveLength(1);
+    // The user row stays (a reset is not a removal) and the admin's
+    // session is untouched.
     expect(getUserByUsername(db, "target")).not.toBeNull();
-    expect(getSessionByToken(db, "target-session")).not.toBeNull();
-    // The admin and their session are untouched too.
-    expect(getUserByUsername(db, "admin")).not.toBeNull();
-    expect(getSessionByToken(db, "admin-session")).not.toBeNull();
+    expect(validateSession(db, "admin-session")).not.toBeNull();
   });
 
-  it("returns 404 for an unknown user and deletes nothing", async () => {
+  it("returns 404 for an unknown user, creating no invite and deleting nothing (T025)", async () => {
     const { app, db } = createAdminApp();
+    const { member } = seededUsers(db);
+    createCredential(db, {
+      id: "member-cred",
+      userId: member.id,
+      publicKey: "pub",
+      discoverable: true,
+    });
+    const invitesBefore = listInvites(db).length;
 
     const res = await resetPasskeys(app, "no-such-user");
 
@@ -403,12 +469,15 @@ describe("DELETE /api/admin/users/:id/passkeys", () => {
       error: "User not found",
       code: "not_found",
     });
-    // No user was harmed; the seeded admin and member remain.
+    // No invite was created and no credential or session was touched.
+    expect(listInvites(db)).toHaveLength(invitesBefore);
+    expect(getCredentialById(db, "member-cred")).not.toBeNull();
+    expect(validateSession(db, "member-session")).not.toBeNull();
     expect(getUserByUsername(db, "admin")).not.toBeNull();
     expect(getUserByUsername(db, "member")).not.toBeNull();
   });
 
-  it("allows an admin to reset their own passkeys (self-reset)", async () => {
+  it("revokes the caller's own session on self-reset and still returns the link (T024)", async () => {
     const { app, db } = createAdminApp();
     const { admin } = seededUsers(db);
     createCredential(db, {
@@ -420,13 +489,61 @@ describe("DELETE /api/admin/users/:id/passkeys", () => {
 
     const res = await resetPasskeys(app, admin.id);
 
-    // Self-reset is allowed (edge case "Admin resets their own passkeys");
-    // the credential is gone but the admin account and their current
-    // session survive.
-    expect(res.status).toBe(204);
+    // Self-reset is allowed (FR-006); the credential is gone and the
+    // caller's own session row is deleted by the reset, but the response
+    // still returns the re-enrollment link (no dead end).
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as InviteResponse;
+    expect(body.link).toMatch(/\/register\?token=/);
     expect(getCredentialById(db, "admin-cred")).toBeNull();
+    expect(validateSession(db, "admin-session")).toBeNull();
     expect(getUserByUsername(db, "admin")).not.toBeNull();
-    expect(getSessionByToken(db, "admin-session")).not.toBeNull();
+  });
+
+  it("allows resetting the last admin: the user row and admin count are untouched (T026)", async () => {
+    const { app, db } = createAdminApp();
+    const { admin } = seededUsers(db);
+    createCredential(db, {
+      id: "admin-cred",
+      userId: admin.id,
+      publicKey: "pub-admin",
+      discoverable: true,
+    });
+    createSession(db, admin.id, { token: "admin-session-2" });
+    // Only the seeded admin has isAdmin: resetting them is the last-admin
+    // case, which must be allowed.
+    expect(countAdmins(db)).toBe(1);
+
+    const res = await resetPasskeys(app, admin.id);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as InviteResponse;
+    expect(body.link).toMatch(/\/register\?token=/);
+    // The user row is kept: only credentials, sessions and invites are
+    // touched, so the admin count never changes — nothing to guard.
+    expect(getUserByUsername(db, "admin")).not.toBeNull();
+    expect(countAdmins(db)).toBe(1);
+    expect(validateSession(db, "admin-session")).toBeNull();
+    expect(validateSession(db, "admin-session-2")).toBeNull();
+  });
+
+  it("leaves other users' sessions untouched by a reset (T027)", async () => {
+    const { app, db } = createAdminApp();
+    const target = createUser(db, {
+      username: "target",
+      bucket,
+      prefix: "users/target/",
+    });
+    createSession(db, target.id, { token: "target-session" });
+    expect(validateSession(db, "member-session")).not.toBeNull();
+
+    const res = await resetPasskeys(app, target.id);
+
+    expect(res.status).toBe(200);
+    expect(validateSession(db, "target-session")).toBeNull();
+    // The seeded member's session (and the admin's) still validate.
+    expect(validateSession(db, "member-session")).not.toBeNull();
+    expect(validateSession(db, "admin-session")).not.toBeNull();
   });
 
   it("refuses a non-admin with 403 and an unsigned request with 401", async () => {
@@ -654,6 +771,7 @@ describe("POST /api/admin/invites", () => {
       { username: "Alice!", bucket, prefix: "users/alice/" },
       { username: "alice", bucket: "Invalid_Bucket_Name", prefix: "u/" },
       { username: "alice", bucket, prefix: "/leading/slash/" },
+      { username: "alice", bucket, prefix: "users/../bob/" },
       { username: "alice", bucket, prefix: "u/", isAdmin: "yes" },
       {},
       { username: "alice", bucket },

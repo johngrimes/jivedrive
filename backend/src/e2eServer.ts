@@ -201,21 +201,40 @@ const env: Record<string, string | undefined> = {
   JIVEDRIVE_PORT: process.env.JIVEDRIVE_PORT ?? "5173",
   JIVEDRIVE_DB_PATH: process.env.JIVEDRIVE_DB_PATH ?? ":memory:",
   JIVEDRIVE_MIGRATIONS_DIR: resolve(import.meta.dir, "../migrations"),
+  // The mock S3 HTTP server on localhost:5299 is where the browser uploads
+  // PUT the file body via XHR, so the CSP connect-src (derived from the
+  // endpoint origin) must match it — otherwise the CSP blocks uploads.
+  // Keep process.env first so verification scripts can override.
   JIVEDRIVE_S3_ENDPOINT:
-    process.env.JIVEDRIVE_S3_ENDPOINT ?? "https://s3.gra.io.cloud.ovh.net",
+    process.env.JIVEDRIVE_S3_ENDPOINT ?? `http://localhost:${MOCK_S3_PORT}`,
   JIVEDRIVE_S3_ACCESS_KEY_ID: process.env.JIVEDRIVE_S3_ACCESS_KEY_ID ?? "test",
   JIVEDRIVE_S3_SECRET_ACCESS_KEY:
     process.env.JIVEDRIVE_S3_SECRET_ACCESS_KEY ?? "test",
   JIVEDRIVE_WEBAUTHN_RP_ID: "localhost",
   JIVEDRIVE_WEBAUTHN_ORIGIN: "http://localhost:5173",
+  // This test-only server serves every Playwright spec from one client
+  // identity (127.0.0.1) in seconds, so the production defaults (auth
+  // 20/min) would 429 mid-run. Override with generous values, keeping
+  // process.env first so the Polish phase can run the 429 scenario
+  // against this server with explicit env overrides (same pattern as
+  // JIVEDRIVE_PORT above).
+  JIVEDRIVE_RATE_LIMIT_AUTH_PER_MINUTE:
+    process.env.JIVEDRIVE_RATE_LIMIT_AUTH_PER_MINUTE ?? "100000",
+  JIVEDRIVE_RATE_LIMIT_AUTH_BURST:
+    process.env.JIVEDRIVE_RATE_LIMIT_AUTH_BURST ?? "10000",
+  JIVEDRIVE_RATE_LIMIT_FILES_PER_MINUTE:
+    process.env.JIVEDRIVE_RATE_LIMIT_FILES_PER_MINUTE ?? "100000",
+  JIVEDRIVE_RATE_LIMIT_FILES_BURST:
+    process.env.JIVEDRIVE_RATE_LIMIT_FILES_BURST ?? "10000",
 };
 
 const config = loadConfig(env);
 const db = openDatabase(config.dbPath);
 migrateFromDir(db, config.migrationsDir);
 
-// Seed a user with no passkey: the first sign-in uses the username
-// fallback form to register the first (discoverable) passkey.
+// Seed a user with no passkey: the first enrollment goes through a seeded
+// invite (invite-alice below) that attaches the first (discoverable)
+// passkey to this existing account (US1 attach semantics).
 const alice = createUser(db, {
   username: "alice",
   bucket: "jivedrive-prod",
@@ -248,12 +267,13 @@ const frank = createUser(db, {
 });
 createSession(db, frank.id, { token: "frank-session" });
 
-// A dedicated user for the admin passkey-reset e2e flow (US4): the spec
-// bootstraps her first passkey via the fallback form, the admin resets her
-// passkeys from the Admin users page, and she re-enrolls via the fallback
-// form. No session is seeded: every sign-in in that spec goes through the
-// fallback form. No other spec depends on her, so the reset never affects
-// another flow.
+// A dedicated user for the admin passkey-reset e2e flow (US2): the spec
+// resets her passkeys from the Admin users page, she enrolls via the
+// returned re-enrollment link, and the admin resets her again to re-enroll
+// via a fresh link. No session and no invite is seeded: every sign-in in
+// that spec goes through the reset-created re-enrollment link, so the flow
+// is retry-safe against the shared in-memory database. No other spec
+// depends on her, so the reset never affects another flow.
 createUser(db, {
   username: "kate",
   bucket: "jivedrive-prod",
@@ -327,6 +347,24 @@ createInvite(db, {
   issuedByUserId: admin.id,
   expiresAt: future,
 });
+// Invites for the US1 enrollment flow: the sign-in page has no username
+// fallback form, so first-passkey enrollment goes through an invite link.
+// invite-alice attaches alice's first passkey to her existing account
+// (auth.spec); kate's admin-spec enrollment needs no seeded invite — the
+// passkey reset returns its own re-enrollment link (US2). The -r1/-r2
+// copies exist so CI retries (Playwright retries: 2) still find fresh
+// pending invites after a failed attempt claimed the originals: the e2e
+// server keeps one in-memory database for the whole run.
+for (const suffix of ["", "-r1", "-r2"]) {
+  createInvite(db, {
+    token: `invite-alice${suffix}`,
+    username: "alice",
+    bucket: "jivedrive-prod",
+    prefix: "users/alice/",
+    issuedByUserId: admin.id,
+    expiresAt: future,
+  });
+}
 
 // Alice's space: three subfolders (docs, photos, empty) and seven root
 // files, more than one page of the e2e page size (5).

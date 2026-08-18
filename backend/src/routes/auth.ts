@@ -8,12 +8,20 @@
  * consumes the requestId's challenge and resolves the user from the
  * asserted credential (FR-002).
  *
- * Registration is invite-token based (new users) or username based (first
- * discoverable passkey for an existing account with no usable passkey).
- * Every registered passkey is discoverable; re-enrolling an account with
- * only legacy non-discoverable credentials deletes those legacy rows.
+ * Registration is token-gated only (FR-001/FR-002): every request must
+ * carry a valid secret token — an invite token (new users, or
+ * re-enrollment after an admin passkey reset) or the bootstrap enrollment
+ * token (the provisioned admin's first passkey). A username alone is
+ * always refused with a generic error, and responses never reveal account
+ * existence or passkey state without a valid token (FR-005). Redeeming an
+ * invite for a username that already exists attaches the passkey to that
+ * account when bucket/prefix/isAdmin match and the account holds zero
+ * discoverable credentials (FR-004); otherwise the claim is refused
+ * without re-scoping. Every registered passkey is discoverable;
+ * re-enrolling an account with only legacy non-discoverable credentials
+ * deletes those legacy rows.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
@@ -164,6 +172,22 @@ function credentialIdOf(response: unknown): string | null {
 }
 
 /**
+ * Compare two strings in constant time by comparing the SHA-256 digests of
+ * both inputs. Digest lengths are always equal (32 bytes), so
+ * `timingSafeEqual` never throws, and the comparison reveals nothing about
+ * the length of the secrets (FR-003).
+ *
+ * @param a - first string
+ * @param b - second string
+ * @returns true when the digests match
+ */
+function constantTimeEquals(a: string, b: string): boolean {
+  const digestA = createHash("sha256").update(a).digest();
+  const digestB = createHash("sha256").update(b).digest();
+  return timingSafeEqual(digestA, digestB);
+}
+
+/**
  * Create a session for a user and set the session cookie on the response.
  *
  * @param c - Hono context
@@ -203,25 +227,56 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
     const body = await parseBody(c);
     if (!body.ok) return body.error;
     const token = body.value.token;
-    const username = body.value.username;
+    if (typeof token !== "string" || token === "") {
+      return jsonError(c, 400, "An invite token is required", "bad_request");
+    }
 
-    if (typeof token === "string" && token !== "") {
-      const invite = getInviteByToken(db, token);
+    // (a) Invite semantics: the invite defines the claim target.
+    const invite = getInviteByToken(db, token);
+    if (invite) {
       const problem = inviteProblem(invite, new Date());
       if (problem) return jsonError(c, 400, problem.message, problem.code);
-      if (!invite)
-        return jsonError(c, 400, "Invite not found", "invite_not_found");
-      if (getUserByUsername(db, invite.username)) {
-        return jsonError(
-          c,
-          400,
-          `Username "${invite.username}" is already taken`,
-          "username_taken",
+
+      const existing = getUserByUsername(db, invite.username);
+      if (existing) {
+        // Attach path: the passkey will attach to the existing account.
+        // The zero-credentials gate is the attach invariant (FR-004);
+        // legacy-only accounts are still attachable.
+        if (listDiscoverableCredentialsByUser(db, existing.id).length > 0) {
+          return jsonError(
+            c,
+            400,
+            "This account already has a passkey - sign in with it",
+            "user_has_passkey",
+          );
+        }
+        const options = await generateRegistrationOptions({
+          rpId: config.webauthn.rpId,
+          rpName: RP_NAME,
+          username: existing.username,
+          userId: existing.id,
+          userDisplayName: existing.username,
+        });
+        challenges.putRegistration(`reg:${token}`, {
+          challenge: options.challenge,
+          username: existing.username,
+          inviteToken: token,
+          userId: existing.id,
+          createdAt: Date.now(),
+        });
+        return c.json(
+          {
+            options,
+            username: existing.username,
+            bucket: invite.bucket,
+            prefix: invite.prefix,
+          },
+          200,
         );
       }
 
-      // Pre-assign the user id so the WebAuthn userHandle equals the
-      // persisted user id; createUser reuses it at verify time.
+      // New user: pre-assign the user id so the WebAuthn userHandle equals
+      // the persisted user id; createUser reuses it at verify time.
       const userId = randomUUID();
       const options = await generateRegistrationOptions({
         rpId: config.webauthn.rpId,
@@ -248,18 +303,23 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
       );
     }
 
-    if (typeof username === "string" && username !== "") {
-      // First-passkey bootstrap for an existing account: the account must
-      // exist and hold zero discoverable credentials (legacy-only accounts
-      // are allowed; FR-005).
+    // (b) Bootstrap semantics: the configured enrollment token gates the
+    // provisioned admin's first passkey (FR-003, R2).
+    const enrollmentToken = config.bootstrapAdmin.enrollmentToken;
+    if (
+      enrollmentToken !== null &&
+      constantTimeEquals(token, enrollmentToken)
+    ) {
+      const username = config.bootstrapAdmin.username;
+      if (username === null) {
+        return jsonError(c, 400, "Invite not found", "invite_not_found");
+      }
       const user = getUserByUsername(db, username);
+      // A missing bootstrap user yields the same generic refusal as an
+      // unknown invite: the response never reveals a bootstrap token
+      // exists (FR-005).
       if (!user) {
-        return jsonError(
-          c,
-          400,
-          `No account with username "${username}"`,
-          "unknown_user",
-        );
+        return jsonError(c, 400, "Invite not found", "invite_not_found");
       }
       if (listDiscoverableCredentialsByUser(db, user.id).length > 0) {
         return jsonError(
@@ -269,7 +329,6 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
           "user_has_passkey",
         );
       }
-
       const options = await generateRegistrationOptions({
         rpId: config.webauthn.rpId,
         rpName: RP_NAME,
@@ -277,23 +336,30 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
         userId: user.id,
         userDisplayName: user.username,
       });
-      challenges.putRegistration(`reg:${username}`, {
+      // Namespaced challenge key so the verify-time binding check
+      // (challenge.inviteToken === token) works uniformly.
+      challenges.putRegistration(`bootstrap:${token}`, {
         challenge: options.challenge,
         username: user.username,
-        inviteToken: null,
+        inviteToken: token,
         userId: user.id,
         createdAt: Date.now(),
       });
-      // bucket/prefix are invite-flow only (contract): omitted here.
-      return c.json({ options, username: user.username }, 200);
+      return c.json(
+        {
+          options,
+          username: user.username,
+          bucket: user.bucket,
+          prefix: user.prefix,
+        },
+        200,
+      );
     }
 
-    return jsonError(
-      c,
-      400,
-      "An invite token or username is required",
-      "bad_request",
-    );
+    // (c) Generic refusal: identical for unknown invites and wrong
+    // bootstrap tokens (SC-002). Account existence and passkey state are
+    // never revealed without a valid token (FR-005).
+    return jsonError(c, 400, "Invite not found", "invite_not_found");
   });
 
   app.post("/register/verify", async (c) => {
@@ -302,24 +368,19 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
     if (!body.ok) return body.error;
     const credential = body.value.credential;
     const token = body.value.token;
-    const username = body.value.username;
+    if (typeof token !== "string" || token === "") {
+      return jsonError(c, 400, "An invite token is required", "bad_request");
+    }
 
-    if (typeof token === "string" && token !== "") {
-      // Invite-based registration: username, bucket and prefix come from
-      // the invite.
-      const invite = getInviteByToken(db, token);
+    // (a) Invite semantics: username, bucket and prefix come from the
+    // invite; the claim attaches to an existing account when the attach
+    // invariant holds (FR-004).
+    const invite = getInviteByToken(db, token);
+    if (invite) {
+      // Re-check the invite (claimed/expired) so a challenge obtained
+      // before the invite was consumed elsewhere is refused (T013).
       const problem = inviteProblem(invite, new Date());
       if (problem) return jsonError(c, 400, problem.message, problem.code);
-      if (!invite)
-        return jsonError(c, 400, "Invite not found", "invite_not_found");
-      if (getUserByUsername(db, invite.username)) {
-        return jsonError(
-          c,
-          400,
-          `Username "${invite.username}" is already taken`,
-          "username_taken",
-        );
-      }
 
       const challenge = challenges.takeRegistration(`reg:${token}`);
       if (!challenge || challenge.inviteToken !== token) {
@@ -346,6 +407,43 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
             "credential_exists",
           );
         }
+
+        const existing = getUserByUsername(db, invite.username);
+        if (existing) {
+          // Attach gate: the claim attaches only when the account still
+          // holds zero discoverable passkeys and the invite's scope and
+          // privilege match the account exactly (FR-004). Never re-scope
+          // or re-privilege; never create a credential on a mismatch.
+          const zeroDiscoverable =
+            listDiscoverableCredentialsByUser(db, existing.id).length === 0;
+          const scopeMatches =
+            invite.bucket === existing.bucket &&
+            invite.prefix === existing.prefix &&
+            invite.isAdmin === existing.isAdmin;
+          if (!zeroDiscoverable || !scopeMatches) {
+            return jsonError(
+              c,
+              400,
+              "This invite cannot be attached to the existing account",
+              "attach_refused",
+            );
+          }
+          createCredential(db, {
+            id: data.id,
+            userId: existing.id,
+            publicKey: data.publicKey,
+            counter: data.counter,
+            transports: data.transports,
+            discoverable: true,
+          });
+          // Legacy non-discoverable credentials can never work in the
+          // username-less flow: delete them on re-enrollment.
+          deleteLegacyCredentialsByUser(db, existing.id);
+          markInviteClaimed(db, invite.id, existing.id);
+          startSession(c, config, db, existing.id);
+          return c.json({ user: toApiUser(existing) }, 200);
+        }
+
         const user = createUser(db, {
           id: challenge.userId,
           username: invite.username,
@@ -369,18 +467,30 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
       }
     }
 
-    if (typeof username === "string" && username !== "") {
-      // First-passkey registration for an existing user with no usable
-      // passkey (bootstrap admin, seeded user). The gate is re-checked
-      // here (same as register/options) so an options/verify gap cannot
-      // bypass it.
+    // (b) Bootstrap semantics: the token is re-checked in constant time
+    // and the zero-credentials gate is re-applied at verify time, so a
+    // challenge obtained before the admin enrolled elsewhere is refused
+    // (T013).
+    const enrollmentToken = config.bootstrapAdmin.enrollmentToken;
+    if (
+      enrollmentToken !== null &&
+      constantTimeEquals(token, enrollmentToken)
+    ) {
+      const username = config.bootstrapAdmin.username;
+      if (username === null) {
+        return jsonError(c, 400, "Invite not found", "invite_not_found");
+      }
       const user = getUserByUsername(db, username);
       if (!user) {
+        return jsonError(c, 400, "Invite not found", "invite_not_found");
+      }
+      const challenge = challenges.takeRegistration(`bootstrap:${token}`);
+      if (!challenge || challenge.inviteToken !== token) {
         return jsonError(
           c,
           400,
-          `No account with username "${username}"`,
-          "unknown_user",
+          "Registration session expired, please try again",
+          "challenge_expired",
         );
       }
       if (listDiscoverableCredentialsByUser(db, user.id).length > 0) {
@@ -389,16 +499,6 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
           400,
           "This account already has a passkey - sign in with it",
           "user_has_passkey",
-        );
-      }
-
-      const challenge = challenges.takeRegistration(`reg:${username}`);
-      if (!challenge || challenge.username !== username) {
-        return jsonError(
-          c,
-          400,
-          "Registration session expired, please try again",
-          "challenge_expired",
         );
       }
 
@@ -425,8 +525,6 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
           transports: data.transports,
           discoverable: true,
         });
-        // Legacy non-discoverable credentials can never work in the
-        // username-less flow: delete them on re-enrollment (FR-006).
         deleteLegacyCredentialsByUser(db, user.id);
         startSession(c, config, db, user.id);
         return c.json({ user: toApiUser(user) }, 200);
@@ -435,12 +533,8 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
       }
     }
 
-    return jsonError(
-      c,
-      400,
-      "An invite token or username is required",
-      "bad_request",
-    );
+    // (c) Generic refusal, identical to the options endpoint (SC-002).
+    return jsonError(c, 400, "Invite not found", "invite_not_found");
   });
 
   app.post("/login/options", async (c) => {
@@ -567,7 +661,12 @@ export function authRoutes(deps: AuthRouteDeps): Hono<ServerEnv> {
   app.get("/me", (c) => {
     const token = getCookie(c, SESSION_COOKIE_NAME);
     if (!token) return c.json({ user: null }, 200);
-    const session = validateSession(db, token);
+    const session = validateSession(
+      db,
+      token,
+      undefined,
+      config.sessionIdleDays,
+    );
     if (!session) return c.json({ user: null }, 200);
     const user = getUserById(db, session.userId);
     return c.json({ user: user ? toApiUser(user) : null }, 200);

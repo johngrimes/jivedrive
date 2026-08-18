@@ -60,7 +60,10 @@ export interface Session {
   token: string;
   userId: string;
   createdAt: string;
+  /** Absolute TTL. */
   expiresAt: string;
+  /** ISO 8601 timestamp of last activity (rolling idle clock). */
+  lastUsedAt: string;
 }
 
 /** Input for {@link createUser}. */
@@ -108,6 +111,8 @@ export interface CreateSessionInput {
   token: string;
   userId: string;
   createdAt?: string;
+  /** ISO 8601 timestamp; defaults to createdAt (full idle allowance). */
+  lastUsedAt?: string;
   expiresAt: string;
 }
 
@@ -151,6 +156,8 @@ interface SessionRow {
   userId: string;
   createdAt: string;
   expiresAt: string;
+  /** Null only for rows written before migration 003 backfilled them. */
+  lastUsedAt: string | null;
 }
 
 function mapUserRow(row: UserRow): User {
@@ -170,7 +177,12 @@ function mapInviteRow(row: InviteRow): Invite {
 }
 
 function mapSessionRow(row: SessionRow): Session {
-  return { ...row };
+  return {
+    ...row,
+    // A SQL NULL (row written before migration 003) starts with a full idle
+    // allowance: treat it as createdAt.
+    lastUsedAt: row.lastUsedAt ?? row.createdAt,
+  };
 }
 
 /**
@@ -200,18 +212,23 @@ export function validateBucket(bucket: string): void {
 }
 
 /**
- * Normalise a storage prefix: no leading slash, exactly one trailing slash,
- * empty string for the bucket root.
+ * Normalise a storage prefix: no leading slash, no ".." segment, exactly
+ * one trailing slash, empty string for the bucket root.
  *
  * @param prefix - raw prefix
  * @returns the normalised prefix
- * @throws {Error} when the prefix starts with "/"
+ * @throws {Error} when the prefix starts with "/" or contains a ".." segment
  */
 export function normalizePrefix(prefix: string | null | undefined): string {
   const value = prefix ?? "";
   if (value === "") return "";
   if (value.startsWith("/")) {
     throw new Error(`Invalid prefix "${value}": must not have a leading "/"`);
+  }
+  if (value.split("/").includes("..")) {
+    throw new Error(
+      `Invalid prefix "${value}": must not contain ".." segments`,
+    );
   }
   return value.replace(/\/+$/, "") + "/";
 }
@@ -559,6 +576,26 @@ export function deleteInvite(db: Database, id: string): void {
 }
 
 /**
+ * Delete every unclaimed invite for a username (admin passkey reset).
+ *
+ * Expired-but-unclaimed invites are included: they are dead weight and
+ * would otherwise make the next invite creation 409-refuse (the create
+ * route refuses when a pending or expired invite exists), violating
+ * "exactly one live invite". Claimed invites survive for audit.
+ *
+ * @param db - database connection
+ * @param username - target username
+ */
+export function cancelPendingInvitesByUsername(
+  db: Database,
+  username: string,
+): void {
+  db.query(
+    "DELETE FROM invites WHERE username = ? AND claimedByUserId IS NULL",
+  ).run(username);
+}
+
+/**
  * Replace an invite's token and expiry (admin re-send). Everything else
  * about the invite is untouched.
  *
@@ -593,15 +630,17 @@ export function createSession(
 ): Session {
   const id = input.id ?? randomUUID();
   const createdAt = input.createdAt ?? new Date().toISOString();
+  const lastUsedAt = input.lastUsedAt ?? createdAt;
   db.query(
-    "INSERT INTO sessions (id, token, userId, createdAt, expiresAt) VALUES (?, ?, ?, ?, ?)",
-  ).run(id, input.token, input.userId, createdAt, input.expiresAt);
+    "INSERT INTO sessions (id, token, userId, createdAt, expiresAt, lastUsedAt) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run(id, input.token, input.userId, createdAt, input.expiresAt, lastUsedAt);
   return {
     id,
     token: input.token,
     userId: input.userId,
     createdAt,
     expiresAt: input.expiresAt,
+    lastUsedAt,
   };
 }
 
@@ -622,4 +661,33 @@ export function getSessionByToken(db: Database, token: string): Session | null {
  */
 export function deleteSessionById(db: Database, id: string): void {
   db.query("DELETE FROM sessions WHERE id = ?").run(id);
+}
+
+/**
+ * Update the last-used time of one session (rolling idle clock).
+ *
+ * @param db - database connection
+ * @param id - session id
+ * @param lastUsedAt - ISO 8601 timestamp
+ */
+export function updateSessionLastUsed(
+  db: Database,
+  id: string,
+  lastUsedAt: string,
+): void {
+  db.query("UPDATE sessions SET lastUsedAt = ? WHERE id = ?").run(
+    lastUsedAt,
+    id,
+  );
+}
+
+/**
+ * Delete every session row for one user (passkey reset revocation).
+ * Sessions of other users are untouched.
+ *
+ * @param db - database connection
+ * @param userId - user id
+ */
+export function deleteSessionsByUser(db: Database, userId: string): void {
+  db.query("DELETE FROM sessions WHERE userId = ?").run(userId);
 }
