@@ -433,18 +433,20 @@ export async function removeAdminUser(id: string): Promise<void> {
 }
 
 /**
- * Delete every passkey of a user (admin only, FR-008). The account,
- * storage objects and active sessions are untouched; the user can register
- * a fresh passkey via the sign-in fallback form afterwards (FR-009).
+ * Delete every passkey of a user (admin only, FR-006). The reset revokes
+ * ALL of the user's sessions (including the caller's own when resetting
+ * self), cancels pending invites for the username, and returns a fresh
+ * 48-hour re-enrollment invite and its registration link. The account and
+ * its storage objects are untouched.
  *
  * @param id - user id
+ * @returns the re-enrollment invite and its link
  * @throws {ApiClientError} on failure; a 404 carries code "not_found" and
  *   a 403 carries code "forbidden"
  */
-export async function resetUserPasskeys(id: string): Promise<void> {
-  await apiFetch<void>(
+export function resetUserPasskeys(id: string): Promise<InviteResponse> {
+  return apiFetch<InviteResponse>(
     `/api/admin/users/${id}/passkeys`,
     { method: "DELETE" },
-    { noBody: true },
   );
 }
