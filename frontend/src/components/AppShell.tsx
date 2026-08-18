@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { PersonIcon, ThreeBarsIcon } from "@primer/octicons-react";
+import { PersonIcon, GearIcon } from "@primer/octicons-react";
 import { useSession } from "../auth/sessionContext";
 import { Sidebar } from "./Sidebar";
 
@@ -72,8 +72,16 @@ export function AppShell() {
             </span>
           ) : user ? (
             <>
+              {user.isAdmin && (
+                <Link to="/admin">
+                  <button className="btn" type="button">
+                    <GearIcon size={16} />
+                    Settings
+                  </button>
+                </Link>
+              )}
               <button
-                className="btn shrink-0"
+                className="btn"
                 type="button"
                 title="Click to sign out"
                 onClick={() => void handleSignOut()}
