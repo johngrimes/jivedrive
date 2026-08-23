@@ -8,6 +8,10 @@ chart validation for the deployment path. Updated for spec
 (invite token or bootstrap enrollment token), the admin passkey reset
 returns a re-enrollment link and revokes sessions, and the app now ships
 security headers, rate limiting and a hardened Helm chart.
+Updated for spec `006-folder-sharing`: persistent user-to-user folder
+grants (create/list/revoke via `/api/shares`, identity-only user search,
+space-scoped `/api/files` operations on `shared:<shareId>`) are exercised
+end to end and via curl; see the 006 section at the end of this document.
 
 ## Environment and method
 
@@ -416,3 +420,143 @@ helm template         -> renders, passes kubectl client dry-run
 scripts/verify-helm-hardening.sh -> all assertions pass
 scripts/verify-admin.sh           -> all checks pass (incl. passkey reset)
 ```
+## Feature 006 - Folder sharing (persistent user-to-user grants)
+
+Spec
+[`006-folder-sharing/quickstart.md`](../.local/specs/006-folder-sharing/quickstart.md)
+adds persistent, revocable folder grants between users (FR-016/FR-017): an
+owner shares a subfolder with a recipient via a searchable picker, the
+recipient sees a mount labelled "Shared by \<owner\>" at their space root with
+full read/write access, the owner can revoke at any time, and deleting a
+user cascades their shares away (quickstart scenarios 1-5).
+
+Environment:
+
+- The e2e server now seeds a second non-admin user `bob` (prefix
+  `users/bob/`, a root file and a same-named `projects` folder of his own,
+  pre-seeded `bob-session` cookie) alongside the spec 005 seeds; alice's
+  space gains a shareable `projects/` folder (`plan.txt`, `docs/report.pdf`).
+- The curl validation boots the e2e server on a scratch port (5174) with a
+  file-backed database (`JIVEDRIVE_PORT=5174 JIVEDRIVE_DB_PATH=...`), the
+  same overrides `scripts/verify-share.sh` uses.
+- Viewports: 375, 768 and 1280 px (constitution VI) via the responsive
+  tests in `e2e/share-folder.spec.ts` and the existing
+  `e2e/responsive.spec.ts`.
+
+All commands below ran green on 2026-08-23. Final counts from the spec 006
+Polish full pass (T039/T040): backend unit tests 388 passed, frontend unit
+tests 71 passed, e2e 62 passed.
+
+### Scenario 1 - Alice shares a folder with Bob
+
+1. Sign in as alice and open the share dialog on `projects`:
+   `e2e/share-folder.spec.ts` ("US1: alice shares the projects folder with
+   bob via the share dialog").
+2. Search `bo`: the picker returns `bob` as an identity-only result
+   (FR-006) - the US1 e2e test, plus `scripts/verify-folder-share.sh`
+   (`search q=bo returns bob`, `search result is identity-only`).
+3. Select bob and confirm: `POST /api/shares` returns 201, the dialog
+   lists bob with a share date, and the `projects` row shows the "Shared"
+   chip (FR-018).
+4. API check: `GET /api/shares` as alice returns `outgoing` with
+   `folder: "projects/"` and `recipient.username: "bob"` (asserted in the
+   US1 e2e test and in `verify-folder-share.sh`'s `list shows the outgoing
+   share`).
+
+Contract refusals covered by `scripts/verify-folder-share.sh`: duplicate
+create 409 `already_shared`, self-share 400 `cannot_share_with_self`,
+unknown recipient 404, space root 400 `invalid_folder`, unsigned requests
+401. Unit coverage: `backend/tests/routes-shares.test.ts` (T013/T014) and
+`backend/tests/routes-users.test.ts` (T015).
+
+### Scenario 2 - Bob sees the mount and reads
+
+1. Bob's root shows `projects` labelled "Shared by alice" alongside his own
+   same-named folder (two rows, mount row labelled, no share button on the
+   received row, FR-015): `e2e/share-folder.spec.ts` ("US2: bob browses and
+   downloads the projects folder shared by alice").
+2. Opening the mount lists the sharer's contents and `report.pdf` downloads
+   byte-for-byte (`%PDF-1.4 report`); the breadcrumbs keep the mount name
+   and the "Shared by alice" label: US2 e2e test, and
+   `verify-folder-share.sh` (`bob lists the shared folder (plan.txt
+   visible) before revocation`).
+3. API check: `GET /api/files?space=shared:<shareId>&prefix=` lists the
+   sharer's folder with mount-relative keys: the US2 e2e test's
+   `space=shared` URL assertion, plus `backend/tests/scope.test.ts` (T005)
+   and `backend/tests/routes-files.test.ts` (T007/T022).
+
+### Scenario 3 - Bob writes to the shared folder
+
+`e2e/share-folder.spec.ts` ("US3: bob uploads, overwrites and deletes a
+file in the projects folder shared by alice"):
+
+1. Bob uploads `notes.txt` into the mount (progress bar, then "Uploaded
+   notes.txt"); it appears in the listing.
+2. A second upload without consent is refused (409) and the confirmation
+   dialog appears; Replace overwrites with the new content.
+3. Deleting `notes.txt` removes it from the mount.
+4. API check: alice's own `GET /api/files?prefix=projects&space=own` shows
+   the same changes (single source of truth: the sharer's prefix) -
+   asserted in the US3 e2e test. Upload/overwrite/delete in a shared space
+   are unit-tested in `backend/tests/routes-files.test.ts` (T026).
+
+### Scenario 4 - Revocation cuts access
+
+1. Alice revokes bob's share in the dialog: `e2e/share-folder.spec.ts`
+   ("US4: alice revokes bob's share; the mount disappears and every request
+   404s") and `scripts/verify-folder-share.sh` (`alice revokes the share`
+   HTTP 204).
+2. Bob's next root load has no mount: US4 e2e test.
+3. API check: bob's `GET /api/files?space=shared:<id>` returns 404
+   (`verify-folder-share.sh`: `bob's shared space returns 404 after
+   revocation`) and the share drops from alice's `outgoing` (`owner listing
+   no longer shows the revoked share`). Opening the old shared URL as bob
+   surfaces the explicit revocation message with Retry (US4 e2e test,
+   T030). Revocation and re-share semantics are unit-tested in
+   `backend/tests/routes-shares.test.ts` (T029) and
+   `backend/tests/scope.test.ts` (T005).
+
+### Scenario 5 - Account deletion cleans up shares
+
+`e2e/share-folder.spec.ts` ("US5: admin deletes bob; alice's mount, share
+dialog and /api/shares show no trace of bob"): the admin deletes bob;
+alice's root shows no "Shared by bob" mount, her share dialog lists no
+bob, and `GET /api/shares` shows no bob in either direction; bob's session
+is gone (`/auth/me` reports `user: null`). The FK cascade (`ON DELETE
+CASCADE` on both share FKs, enforced by `PRAGMA foreign_keys = ON`)
+removes the rows with no manual cleanup; unit-tested in
+`backend/tests/routes-admin.test.ts` (T032) and `backend/tests/db.test.ts`
+(T003).
+
+### Responsive coverage (constitution VI)
+
+`e2e/share-folder.spec.ts` exercises the share flows at 375, 768 and
+1280 px (T038):
+
+- Alice's root with the share dialog open: no horizontal overflow; the
+  search input and results list are usable (type `bo`, pick bob); the
+  recipient row's revoke button keeps a 44px+ touch target (`min-h-11`).
+- Bob's mount view with a subfolder: no horizontal overflow at the root and
+  inside `docs/`; breadcrumbs carry the mount name and the "Shared by
+  alice" label; upload/download/delete controls are present with 44px+
+  touch targets; a real download of `report.pdf` works at 375 px.
+
+Commands run:
+
+```bash
+bun run test                # 388 backend + 71 frontend tests pass
+bun run test:e2e            # 62 passed (share-folder.spec.ts: 7 tests incl. the 3-width responsive sweep)
+bash scripts/verify-folder-share.sh   # 15 PASS assertions, exit 0
+bun run lint                # clean
+bun run typecheck           # clean
+bun run format:check        # clean
+```
+
+Not validated here (same environment limits as spec 005):
+
+- Real OVHcloud Object Storage: shares resolve to S3 scopes against the
+  in-memory mock, and presigned URLs are exercised through the mock HTTP
+  server on port 5299. At deploy time the same flows run against the real
+  bucket with no code change (the resolver only composes bucket/prefix).
+- A Kubernetes deployment: unchanged from spec 005; this feature adds no
+  runtime configuration.

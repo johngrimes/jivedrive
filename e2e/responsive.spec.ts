@@ -212,12 +212,21 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     await startSignedIn(page, context);
     await page.setViewportSize(MOBILE_VIEWPORT);
 
-    // US2 sc.3: folders stay links (they navigate), carry the folder
-    // octicon, and never expose the file actions.
+    // US2 sc.3 / US1 (R13): folders stay links (they navigate), carry the
+    // folder octicon, and expose exactly one action - the share-folder
+    // button - never the file actions (Download/Share/Delete).
     const folderRow = page.locator("li.list-row", { hasText: "docs" });
     await expect(folderRow.getByRole("link", { name: "docs" })).toBeVisible();
-    await expect(folderRow.locator("svg")).toBeVisible();
-    await expect(folderRow.getByRole("button")).toHaveCount(0);
+    await expect(
+      folderRow.getByRole("link", { name: "docs" }).locator("svg"),
+    ).toBeVisible();
+    await expect(folderRow.getByRole("button")).toHaveCount(1);
+    await expect(
+      folderRow.getByRole("button", { name: "Share docs" }),
+    ).toBeVisible();
+    await expect(
+      folderRow.getByRole("button", { name: /^(Download|Share|Delete)$/ }),
+    ).toHaveCount(0);
     await expect(folderRow).not.toContainText("📁");
 
     // Tapping the folder navigates into it.

@@ -3,6 +3,7 @@ import {
   apiFetch,
   cancelAdminInvite,
   createAdminInvite,
+  createShare,
   deleteFile,
   getDownloadUrl,
   getHealth,
@@ -10,6 +11,7 @@ import {
   listAdminInvites,
   listAdminUsers,
   listFiles,
+  listShares,
   postLoginOptions,
   postLoginVerify,
   postLogout,
@@ -20,6 +22,8 @@ import {
   removeAdminUser,
   resendAdminInvite,
   resetUserPasskeys,
+  revokeShare,
+  searchUsers,
 } from "../src/api/client";
 
 type FetchMock = ReturnType<typeof vi.fn>;
@@ -247,7 +251,7 @@ describe("listFiles", () => {
 
     expect(result).toEqual(body);
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/files",
+      "/api/files?space=own",
       expect.objectContaining({ credentials: "include" }),
     );
   });
@@ -263,12 +267,12 @@ describe("listFiles", () => {
     await listFiles("docs/reports");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/files?prefix=docs%2Freports",
+      "/api/files?prefix=docs%2Freports&space=own",
       expect.anything(),
     );
   });
 
-  it("sends the cursor for the next page", async () => {
+  it("sends the cursor for the next page as the third argument", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
@@ -276,10 +280,10 @@ describe("listFiles", () => {
       );
     vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
 
-    await listFiles("", "token-2");
+    await listFiles("", "own", "token-2");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/files?cursor=token-2",
+      "/api/files?cursor=token-2&space=own",
       expect.anything(),
     );
   });
@@ -305,6 +309,7 @@ describe("postUploadUrl", () => {
           folder: "docs",
           fileName: "a.txt",
           overwrite: false,
+          space: "own",
         }),
       }),
     );
@@ -327,7 +332,11 @@ describe("postShareUrl", () => {
       "/api/files/share-url",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ key: "users/alice/a.txt", expiresIn: "1h" }),
+        body: JSON.stringify({
+          key: "users/alice/a.txt",
+          expiresIn: "1h",
+          space: "own",
+        }),
       }),
     );
   });
@@ -345,7 +354,11 @@ describe("postShareUrl", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/files/share-url",
       expect.objectContaining({
-        body: JSON.stringify({ key: "users/alice/a.txt", expiresIn: "7d" }),
+        body: JSON.stringify({
+          key: "users/alice/a.txt",
+          expiresIn: "7d",
+          space: "own",
+        }),
       }),
     );
   });
@@ -361,7 +374,7 @@ describe("deleteFile", () => {
     await deleteFile("users/alice/my file #1?.txt");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      `/api/files?key=${encodeURIComponent("users/alice/my file #1?.txt")}`,
+      `/api/files?key=${encodeURIComponent("users/alice/my file #1?.txt")}&space=own`,
       expect.objectContaining({ method: "DELETE" }),
     );
   });
@@ -380,7 +393,7 @@ describe("getDownloadUrl", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/files/download-url?key=${encodeURIComponent(
         "users/alice/my file #1?.txt",
-      )}`,
+      )}&space=own`,
       expect.anything(),
     );
   });
@@ -505,5 +518,245 @@ describe("admin API", () => {
       "/api/admin/users/user-1/passkeys",
       expect.objectContaining({ method: "DELETE" }),
     );
+  });
+});
+
+describe("space-aware file operations (T010)", () => {
+  it("listFiles sends the shared space identifier", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ folders: [], files: [], nextCursor: null }),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await listFiles("", "shared:share-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files?space=shared%3Ashare-1",
+      expect.anything(),
+    );
+  });
+
+  it("listFiles sends the shared space alongside prefix and cursor", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ folders: [], files: [], nextCursor: null }),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await listFiles("docs", "shared:share-1", "token-2");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files?prefix=docs&cursor=token-2&space=shared%3Ashare-1",
+      expect.anything(),
+    );
+  });
+
+  it("getDownloadUrl serialises a shared space", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ url: "https://s3.example/x" }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await getDownloadUrl("plan.txt", "shared:share-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files/download-url?key=plan.txt&space=shared%3Ashare-1",
+      expect.anything(),
+    );
+  });
+
+  it("postUploadUrl posts the shared space in the body", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ url: "u", key: "k" }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await postUploadUrl("", "notes.txt", false, "shared:share-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files/upload-url",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          folder: "",
+          fileName: "notes.txt",
+          overwrite: false,
+          space: "shared:share-1",
+        }),
+      }),
+    );
+  });
+
+  it("postShareUrl posts the shared space in the body", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ url: "u", expiresAt: "t" }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await postShareUrl("plan.txt", "1h", "shared:share-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files/share-url",
+      expect.objectContaining({
+        body: JSON.stringify({
+          key: "plan.txt",
+          expiresIn: "1h",
+          space: "shared:share-1",
+        }),
+      }),
+    );
+  });
+
+  it("deleteFile sends the shared space as a query parameter", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await deleteFile("plan.txt", "shared:share-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files?key=plan.txt&space=shared%3Ashare-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+});
+
+describe("shares API", () => {
+  it("listShares fetches incoming and outgoing shares", async () => {
+    const body = {
+      incoming: [
+        {
+          id: "s1",
+          folder: "projects/",
+          folderName: "projects",
+          sharer: { id: "u1", username: "alice" },
+        },
+      ],
+      outgoing: [
+        {
+          id: "s2",
+          folder: "docs/",
+          folderName: "docs",
+          recipient: { id: "u2", username: "bob" },
+          createdAt: "2026-08-01T00:00:00.000Z",
+        },
+      ],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await listShares();
+
+    expect(result).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/shares",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("createShare posts the folder and recipient and returns the share", async () => {
+    const share = {
+      id: "s1",
+      folder: "projects/",
+      folderName: "projects",
+      recipient: { id: "u2", username: "bob" },
+      createdAt: "2026-08-01T00:00:00.000Z",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ share }, 201));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await createShare("projects", "bob");
+
+    expect(result).toEqual({ share });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/shares",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ folder: "projects", recipientUsername: "bob" }),
+      }),
+    );
+  });
+
+  it("createShare propagates the already_shared error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(
+            { error: "Already shared", code: "already_shared" },
+            409,
+          ),
+        ),
+    );
+
+    const error = await createShare("projects", "bob").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    const err = error as Error & { code: string; status: number };
+    expect(err.message).toContain("Already shared");
+    expect(err.code).toBe("already_shared");
+    expect(err.status).toBe(409);
+  });
+
+  it("revokeShare sends a DELETE without parsing a body", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await revokeShare("share-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/shares/share-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+});
+
+describe("searchUsers", () => {
+  it("sends the query and returns identity-only users", async () => {
+    const body = { users: [{ id: "u2", username: "bob" }] };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await searchUsers("bo");
+
+    expect(result).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/users?q=bo",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("URL-encodes the query", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ users: [] }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await searchUsers("b ob");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/users?q=b%20ob",
+      expect.anything(),
+    );
+  });
+
+  it("propagates server errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ error: "Not signed in", code: "unauthorized" }, 401),
+        ),
+    );
+
+    const error = await searchUsers("bo").catch((e: unknown) => e);
+    const err = error as Error & { code: string; status: number };
+    expect(err.code).toBe("unauthorized");
+    expect(err.status).toBe(401);
   });
 });

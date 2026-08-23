@@ -245,6 +245,22 @@ const alice = createUser(db, {
 // without a WebAuthn ceremony (sign-in flows are covered by auth.spec;
 // reusing alice there would race the single-use passkey registration).
 createSession(db, alice.id, { token: "browse-session" });
+// A second non-admin user for the folder-sharing specs (US2/US3): bob
+// receives alice's `projects` share and browses/uploads/deletes inside
+// it. Pre-seeded session so the specs can start signed in as bob without
+// a WebAuthn ceremony, mirroring the alice pattern.
+const bob = createUser(db, {
+  username: "bob",
+  bucket: "jivedrive-prod",
+  prefix: "users/bob/",
+});
+createSession(db, bob.id, { token: "bob-session" });
+
+// Bob's space: a root file and a same-named `projects` folder of his own,
+// so the US2 mount ("projects", shared by alice) renders alongside a
+// folder bob already owns (US2 collision scenario).
+seedObject("users/bob/own-note.txt", "bob's own note", 23);
+seedObject("users/bob/projects/bob-local.txt", "bob's local project file", 64);
 
 // Seed an admin who issues invites for the register flow.
 const admin = createUser(db, {
@@ -366,8 +382,10 @@ for (const suffix of ["", "-r1", "-r2"]) {
   });
 }
 
-// Alice's space: three subfolders (docs, photos, empty) and seven root
-// files, more than one page of the e2e page size (5).
+// Alice's space: four subfolders (docs, photos, empty, projects) and
+// seven root files — 11 root entries, more than two pages of the e2e
+// page size (5). projects/ is the folder alice shares with bob in the
+// folder-sharing specs.
 seedObject("users/alice/archive.zip", "zip-bytes", 1258291);
 seedObject("users/alice/budget.xlsx", "spreadsheet-bytes", 831488);
 seedObject("users/alice/data.csv", "a,b,c\n1,2,3", 123);
@@ -389,6 +407,11 @@ seedObject(
   18,
 );
 seedObject("users/alice/photos/pic.jpg", "jpeg-bytes", 4096);
+// A shareable folder for the folder-sharing specs: alice shares
+// projects/ with bob (US1-US3). The nested docs/report.pdf exercises a
+// subfolder inside the mount (US2).
+seedObject("users/alice/projects/plan.txt", "project plan", 512);
+seedObject("users/alice/projects/docs/report.pdf", "%PDF-1.4 report", 2516582);
 // Dedicated objects for the delete e2e spec: each test targets its own
 // object so the tests can run in parallel without racing each other or
 // the other specs. They live in photos/ because upload.spec uploads into

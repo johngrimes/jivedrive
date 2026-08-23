@@ -182,6 +182,7 @@ describe("migrateFromDir", () => {
       "001_init.sql",
       "002_passkey_discoverable.sql",
       "003_session_last_used.sql",
+      "004_shares.sql",
     ]);
 
     // Every table from data-model.md exists.
@@ -191,6 +192,7 @@ describe("migrateFromDir", () => {
       "invites",
       "sessions",
       "schema_migrations",
+      "shares",
     ]) {
       expect(
         db
@@ -300,6 +302,169 @@ describe("migrateFromDir", () => {
       .get() as { createdAt: string; lastUsedAt: string };
     expect(seeded.lastUsedAt).toBe(seeded.createdAt);
     expect(seeded.lastUsedAt).toBe("2026-08-05T10:00:00.000Z");
+  });
+
+  it("004 adds the shares table, foreign keys and indexes (T002)", () => {
+    const db = createDb();
+    const initialSql = readFileSync(
+      join(migrationsDir, "001_init.sql"),
+      "utf8",
+    );
+    const secondSql = readFileSync(
+      join(migrationsDir, "002_passkey_discoverable.sql"),
+      "utf8",
+    );
+    const thirdSql = readFileSync(
+      join(migrationsDir, "003_session_last_used.sql"),
+      "utf8",
+    );
+    const fourthSql = readFileSync(
+      join(migrationsDir, "004_shares.sql"),
+      "utf8",
+    );
+
+    // Apply the first three migrations, then 004 (fresh database).
+    expect(
+      migrate(db, [
+        { name: "001_init.sql", sql: initialSql },
+        { name: "002_passkey_discoverable.sql", sql: secondSql },
+        { name: "003_session_last_used.sql", sql: thirdSql },
+      ]),
+    ).toEqual([
+      "001_init.sql",
+      "002_passkey_discoverable.sql",
+      "003_session_last_used.sql",
+    ]);
+    expect(migrate(db, [{ name: "004_shares.sql", sql: fourthSql }])).toEqual([
+      "004_shares.sql",
+    ]);
+
+    // Table exists with the expected NOT NULL columns.
+    const columns = db.query("PRAGMA table_info(shares)").all() as Array<{
+      name: string;
+      type: string;
+      notnull: number;
+      pk: number;
+    }>;
+    expect(columns.map((c) => c.name)).toEqual([
+      "id",
+      "ownerUserId",
+      "recipientUserId",
+      "folder",
+      "createdAt",
+    ]);
+    // SQLite reports notnull = 0 for a TEXT PRIMARY KEY (see 001_init.sql);
+    // only the four non-PK columns are declared NOT NULL.
+    for (const column of columns) {
+      if (column.name === "id") continue;
+      expect(column.notnull).toBe(1);
+    }
+    expect(columns.find((c) => c.name === "id")?.pk).toBe(1);
+
+    // Both foreign keys reference users and cascade on delete.
+    const foreignKeys = db
+      .query("PRAGMA foreign_key_list(shares)")
+      .all() as Array<{
+      table: string;
+      from: string;
+      to: string;
+      on_delete: string;
+    }>;
+    expect(foreignKeys).toHaveLength(2);
+    for (const foreignKey of foreignKeys) {
+      expect(foreignKey.table).toBe("users");
+      expect(foreignKey.to).toBe("id");
+      expect(foreignKey.on_delete).toBe("CASCADE");
+    }
+    expect(foreignKeys.map((fk) => fk.from).sort()).toEqual([
+      "ownerUserId",
+      "recipientUserId",
+    ]);
+
+    // A unique index enforces one share per owner/recipient/folder.
+    const indexList = db.query("PRAGMA index_list(shares)").all() as Array<{
+      name: string;
+      unique: number;
+    }>;
+    const uniqueIndex = indexList.find((index) => index.unique === 1);
+    expect(uniqueIndex).toBeTruthy();
+    const uniqueColumns = db
+      .query("SELECT * FROM pragma_index_info(?)")
+      .all(uniqueIndex!.name) as Array<{ name: string }>;
+    expect(uniqueColumns.map((c) => c.name)).toEqual([
+      "ownerUserId",
+      "recipientUserId",
+      "folder",
+    ]);
+
+    // Dedicated indexes exist for the owner and recipient lookups.
+    for (const name of [
+      "idx_shares_owner_user_id",
+      "idx_shares_recipient_user_id",
+    ]) {
+      expect(indexList.some((index) => index.name === name)).toBe(true);
+    }
+  });
+
+  it("004 applies cleanly to an existing database (T002)", () => {
+    const db = createDb();
+    const initialSql = readFileSync(
+      join(migrationsDir, "001_init.sql"),
+      "utf8",
+    );
+    const secondSql = readFileSync(
+      join(migrationsDir, "002_passkey_discoverable.sql"),
+      "utf8",
+    );
+    const thirdSql = readFileSync(
+      join(migrationsDir, "003_session_last_used.sql"),
+      "utf8",
+    );
+    const fourthSql = readFileSync(
+      join(migrationsDir, "004_shares.sql"),
+      "utf8",
+    );
+
+    // A database at the pre-004 state with existing users.
+    expect(
+      migrate(db, [
+        { name: "001_init.sql", sql: initialSql },
+        { name: "002_passkey_discoverable.sql", sql: secondSql },
+        { name: "003_session_last_used.sql", sql: thirdSql },
+      ]),
+    ).toEqual([
+      "001_init.sql",
+      "002_passkey_discoverable.sql",
+      "003_session_last_used.sql",
+    ]);
+    db.run(
+      "INSERT INTO users (id, username, bucket, prefix, isAdmin, createdAt) VALUES ('u1', 'alice', 'jivedrive-prod', 'users/alice/', 0, '2026-08-01T00:00:00.000Z')",
+    );
+    db.run(
+      "INSERT INTO users (id, username, bucket, prefix, isAdmin, createdAt) VALUES ('u2', 'bob', 'jivedrive-prod', 'users/bob/', 0, '2026-08-01T00:00:00.000Z')",
+    );
+
+    // Applying 004 must not disturb existing data.
+    expect(migrate(db, [{ name: "004_shares.sql", sql: fourthSql }])).toEqual([
+      "004_shares.sql",
+    ]);
+    expect(
+      db
+        .query(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'shares'",
+        )
+        .get(),
+    ).toBeTruthy();
+    expect(db.query("SELECT COUNT(*) AS n FROM users").get()).toEqual({ n: 2 });
+
+    // The new table is usable and its foreign keys point at existing users.
+    db.run(
+      "INSERT INTO shares (id, ownerUserId, recipientUserId, folder, createdAt) VALUES ('s1', 'u1', 'u2', 'projects/', '2026-08-02T00:00:00.000Z')",
+    );
+    const share = db
+      .query("SELECT folder FROM shares WHERE id = 's1'")
+      .get() as { folder: string };
+    expect(share.folder).toBe("projects/");
   });
 
   it("is idempotent against the real migrations directory", () => {

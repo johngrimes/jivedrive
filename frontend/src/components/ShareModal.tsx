@@ -13,7 +13,7 @@
 import { useEffect, useState } from "react";
 import { CheckIcon, CopyIcon } from "@primer/octicons-react";
 import { postShareUrl } from "../api/client";
-import type { ApiClientError, FileEntry } from "../api/client";
+import type { ApiClientError, FileEntry, Space } from "../api/client";
 
 /** Expiry choices per the contract's expiresIn enum. */
 const EXPIRY_OPTIONS = [
@@ -33,6 +33,12 @@ export type ShareExpiresIn = (typeof EXPIRY_OPTIONS)[number]["value"];
 export interface ShareModalProps {
   /** The file being shared. */
   file: FileEntry;
+  /**
+   * The space the file lives in (R9). Defaults to the caller's own space;
+   * in a shared space the key is mount-relative and the generated link is
+   * a timed anonymous grant of content the recipient can already download.
+   */
+  space?: Space;
   /** Close the modal without further action. */
   onClose: () => void;
 }
@@ -43,7 +49,7 @@ export interface ShareModalProps {
  * @param props - the file being shared and a close callback
  * @returns the share dialog element
  */
-export function ShareModal({ file, onClose }: ShareModalProps) {
+export function ShareModal({ file, space = "own", onClose }: ShareModalProps) {
   const [expiresIn, setExpiresIn] = useState<ShareExpiresIn>("7d");
   /** The generated link and the expiry it was signed for. */
   const [link, setLink] = useState<{
@@ -63,7 +69,7 @@ export function ShareModal({ file, onClose }: ShareModalProps) {
 
   useEffect(() => {
     let cancelled = false;
-    postShareUrl(file.key, expiresIn)
+    postShareUrl(file.key, expiresIn, space)
       .then(({ url, expiresAt }) => {
         if (!cancelled) setLink({ url, expiresIn, expiresAt });
       })
@@ -79,7 +85,7 @@ export function ShareModal({ file, onClose }: ShareModalProps) {
     return () => {
       cancelled = true;
     };
-  }, [file.key, expiresIn, file.name]);
+  }, [file.key, expiresIn, space, file.name]);
 
   /**
    * Copy the generated link to the clipboard.

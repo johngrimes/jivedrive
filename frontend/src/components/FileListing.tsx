@@ -16,6 +16,7 @@ import {
   FileDirectoryFillIcon,
   FileIcon,
   HomeIcon,
+  PeopleIcon,
   ShareAndroidIcon,
   TrashIcon,
 } from "@primer/octicons-react";
@@ -24,18 +25,33 @@ import {
 export interface BreadcrumbsProps {
   /** Relative path segments of the current folder (empty at the root). */
   segments: string[];
+  /**
+   * When set, the trail is a shared-space view: the first segment is the
+   * mount name, Home returns to the caller's own root, and this label
+   * ("Shared by <username>") is shown beside the mount crumb (R12).
+   */
+  sharerLabel?: string;
   /** Called with the prefix to navigate to ("" for the space root). */
   onNavigate: (prefix: string) => void;
+  /** Navigate back to the caller's own space root (Home). */
+  onHome: () => void;
 }
 
 /**
  * Breadcrumb trail for the current folder. The space root is always shown
- * first; every crumb except the current folder navigates up.
+ * first; every crumb except the current folder navigates up. In a shared
+ * view the trail starts at the mount name (the first segment) and Home
+ * leaves the mount entirely.
  *
- * @param props - segments and navigation callback
+ * @param props - segments, optional sharer label and navigation callbacks
  * @returns a breadcrumb navigation element
  */
-export function Breadcrumbs({ segments, onNavigate }: BreadcrumbsProps) {
+export function Breadcrumbs({
+  segments,
+  sharerLabel,
+  onNavigate,
+  onHome,
+}: BreadcrumbsProps) {
   return (
     <nav className="breadcrumbs" aria-label="Breadcrumbs">
       {/* flex-wrap: daisyUI's .breadcrumbs>ul defaults to nowrap with
@@ -50,7 +66,7 @@ export function Breadcrumbs({ segments, onNavigate }: BreadcrumbsProps) {
             href="#"
             onClick={(event) => {
               event.preventDefault();
-              onNavigate("");
+              onHome();
             }}
           >
             <HomeIcon aria-hidden="true" />
@@ -59,23 +75,44 @@ export function Breadcrumbs({ segments, onNavigate }: BreadcrumbsProps) {
         </li>
         {segments.map((segment, index) => {
           const isLast = index === segments.length - 1;
+          const isMountRoot = index === 0 && sharerLabel !== undefined;
           const target = segments.slice(0, index + 1).join("/") + "/";
-          return isLast ? (
+          return (
             <li key={`${segment}-${index}`}>
-              <strong aria-current="page">{segment}</strong>
-            </li>
-          ) : (
-            <li key={`${segment}-${index}`}>
-              <a
-                className="inline-flex items-center"
-                href="#"
-                onClick={(event) => {
-                  event.preventDefault();
-                  onNavigate(target);
-                }}
-              >
-                {segment}
-              </a>
+              {isMountRoot ? (
+                <>
+                  {isLast ? (
+                    <strong aria-current="page">{segment}</strong>
+                  ) : (
+                    <a
+                      className="inline-flex items-center"
+                      href="#"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        onNavigate("");
+                      }}
+                    >
+                      {segment}
+                    </a>
+                  )}
+                  <span className="badge badge-ghost badge-sm ml-1">
+                    {sharerLabel}
+                  </span>
+                </>
+              ) : isLast ? (
+                <strong aria-current="page">{segment}</strong>
+              ) : (
+                <a
+                  className="inline-flex items-center"
+                  href="#"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    onNavigate(target);
+                  }}
+                >
+                  {segment}
+                </a>
+              )}
             </li>
           );
         })}
@@ -131,6 +168,16 @@ export function LoadingSkeleton() {
   );
 }
 
+/** A shared folder mounted at the recipient's space root (FR-008). */
+export interface MountRow {
+  /** The share id, used as `shared:<id>` in the URL. */
+  id: string;
+  /** Base name of the shared folder, shown as the mount row. */
+  folderName: string;
+  /** Username of the sharer, shown in the "Shared by" label. */
+  sharerUsername: string;
+}
+
 /** Props for {@link FileListing}. */
 export interface FileListingProps {
   /** Base names of subfolders in the current folder. */
@@ -152,17 +199,43 @@ export interface FileListingProps {
   onDownload: (file: FileEntry) => void;
   /** Open the share modal for a file. */
   onShare: (file: FileEntry) => void;
-  /** Open the delete confirmation dialog for a file. */
-  onDelete: (file: FileEntry) => void;
+  /**
+   * Open the delete confirmation dialog for a file. Optional: shared
+   * spaces pass no handler this phase, so no delete button renders and
+   * no action can mutate the wrong space (T027 adds it with a space
+   * prop).
+   */
+  onDelete?: (file: FileEntry) => void;
   /** Load the next page. */
   onLoadMore: () => void;
   /** Retry the failed initial load. */
   onRetry: () => void;
+  /**
+   * Open the share dialog for a folder (R13). Optional: received folder
+   * rows pass no handler, so they render no share button (FR-015: a
+   * recipient cannot re-share).
+   */
+  onShareFolder?: (folder: string) => void;
+  /**
+   * Base names of folders with outgoing shares at the space root; those
+   * rows show a visible "Shared" chip (FR-018).
+   */
+  sharedFolders?: string[];
+  /**
+   * Shared folders mounted at the own-space root (FR-008). Each renders
+   * as a folder row labelled "Shared by <username>"; mounts render only
+   * at the own-space root and never carry a share button or "Shared"
+   * chip.
+   */
+  mounts?: MountRow[];
+  /** Open a mounted shared folder at its root (space + "" prefix). */
+  onOpenMount?: (mountId: string) => void;
 }
 
 /**
- * The folder/file listing: folders first (clickable), then files with
- * human-readable sizes and local timestamps, plus a load-more control.
+ * The folder/file listing: folders first (clickable), then mounted shared
+ * folders (at the own root), then files with human-readable sizes and
+ * local timestamps, plus a load-more control.
  *
  * @param props - listing data and callbacks
  * @returns the listing table or its placeholder states
@@ -181,6 +254,10 @@ export function FileListing({
   onDelete,
   onLoadMore,
   onRetry,
+  onShareFolder,
+  sharedFolders,
+  mounts,
+  onOpenMount,
 }: FileListingProps) {
   if (loading) return <LoadingSkeleton />;
 
@@ -195,7 +272,11 @@ export function FileListing({
     );
   }
 
-  if (folders.length === 0 && files.length === 0) {
+  if (
+    folders.length === 0 &&
+    files.length === 0 &&
+    (mounts?.length ?? 0) === 0
+  ) {
     return <EmptyState hasParent={hasParent} />;
   }
 
@@ -203,18 +284,71 @@ export function FileListing({
     <>
       <ul className="list">
         {folders.map((folder) => (
-          <li className="list-row" key={`folder:${folder}`}>
-            <a
-              className="link inline-flex items-center gap-3 font-semibold no-underline"
-              href="#"
-              onClick={(event) => {
-                event.preventDefault();
-                onOpenFolder(folder);
-              }}
-            >
-              <FileDirectoryFillIcon aria-hidden="true" className="shrink-0" />
-              {folder}
-            </a>
+          <li
+            className="list-row flex flex-wrap justify-end md:justify-start md:flex-nowrap gap-3 items-center overflow-hidden"
+            key={`folder:${folder}`}
+          >
+            <div className="flex grow gap-3 items-center">
+              <a
+                className="link inline-flex items-center gap-3 font-semibold no-underline"
+                href="#"
+                onClick={(event) => {
+                  event.preventDefault();
+                  onOpenFolder(folder);
+                }}
+              >
+                <FileDirectoryFillIcon
+                  aria-hidden="true"
+                  className="shrink-0"
+                />
+                {folder}
+                {sharedFolders?.includes(folder) && (
+                  <span className="badge badge-neutral badge-sm">Shared</span>
+                )}
+              </a>
+            </div>
+            {onShareFolder && (
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  className="btn btn-accent btn-sm btn-soft min-h-11"
+                  aria-label={`Share ${folder}`}
+                  onClick={() => onShareFolder(folder)}
+                >
+                  <PeopleIcon aria-hidden="true" />
+                  <span className="hidden sm:inline">Share</span>
+                </button>
+              </div>
+            )}
+          </li>
+        ))}
+        {mounts?.map((mount) => (
+          <li
+            className="list-row flex flex-wrap justify-end md:justify-start md:flex-nowrap gap-3 items-center overflow-hidden"
+            key={`mount:${mount.id}`}
+          >
+            <div className="flex grow gap-3 items-center">
+              <a
+                className="link inline-flex items-center gap-3 font-semibold no-underline"
+                href="#"
+                onClick={(event) => {
+                  event.preventDefault();
+                  onOpenMount?.(mount.id);
+                }}
+              >
+                <FileDirectoryFillIcon
+                  aria-hidden="true"
+                  className="shrink-0"
+                />
+                {mount.folderName}
+                {/* FR-008: the label disambiguates a mount from a
+                    same-named own folder; no share button (FR-015) and
+                    no "Shared" chip on received rows. */}
+                <span className="badge badge-ghost badge-sm">
+                  Shared by {mount.sharerUsername}
+                </span>
+              </a>
+            </div>
           </li>
         ))}
         {files.map((file) => (
@@ -247,15 +381,17 @@ export function FileListing({
                 <ShareAndroidIcon aria-hidden="true" />
                 <span className="hidden sm:inline">Share</span>
               </button>
-              <button
-                type="button"
-                className="btn btn-accent btn-sm btn-soft min-h-11"
-                aria-label="Delete"
-                onClick={() => onDelete(file)}
-              >
-                <TrashIcon aria-hidden="true" />
-                <span className="hidden sm:inline">Delete</span>
-              </button>
+              {onDelete && (
+                <button
+                  type="button"
+                  className="btn btn-accent btn-sm btn-soft min-h-11"
+                  aria-label="Delete"
+                  onClick={() => onDelete(file)}
+                >
+                  <TrashIcon aria-hidden="true" />
+                  <span className="hidden sm:inline">Delete</span>
+                </button>
+              )}
             </div>
           </li>
         ))}
