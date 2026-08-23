@@ -2,8 +2,13 @@
  * File routes: folder listing and download URLs for the signed-in user's
  * space. Implemented per `contracts/openapi.yaml` (T034).
  *
- * Every operation is scoped to the signed-in user's configured bucket and
- * prefix; keys outside that scope are rejected with 400 (constitution IV).
+ * Every operation carries an optional `space` identifier — `own` (default)
+ * or `shared:<shareId>` (R1) — resolved through the generic space resolver
+ * (`src/scope.ts`) to the effective `{ bucket, prefix }` before any S3
+ * call. Every storage operation is scoped to that effective scope; keys
+ * outside it are rejected with 400 (constitution IV). Unknown, foreign
+ * and revoked shares are refused with 404; malformed space values with
+ * 400.
  */
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
@@ -17,6 +22,10 @@ import {
 } from "../s3/client";
 import type { HeadResult } from "../s3/client";
 import type { ServerEnv } from "../server";
+import type { Database } from "bun:sqlite";
+import { parseSpace, resolveSpace } from "../scope";
+import type { ResolvedScope, SpaceRef } from "../scope";
+import type { User } from "../db/repository";
 
 /** Dependencies for {@link filesRoutes}. */
 export interface FileRouteDeps {
@@ -26,6 +35,8 @@ export interface FileRouteDeps {
   requireUser: MiddlewareHandler<ServerEnv>;
   /** Folder listing page size; defaults to 1000 (the S3 protocol limit). */
   listPageSize?: number;
+  /** Database for resolving shared spaces. */
+  db: Database;
 }
 
 /** Lifetime of a download URL in seconds (15 minutes). */
@@ -80,14 +91,59 @@ function isSafeRelativePrefix(prefix: string): boolean {
   return !prefix.split("/").includes("..");
 }
 
+/** The result of resolving a request's space: a scope or an error response. */
+type ScopeResolution = ResolvedScope | Response;
+
+/**
+ * Parse and resolve the `space` request value for the signed-in user.
+ *
+ * Malformed values ("", "foo", "shared:", "shared:..") yield a 400
+ * `bad_request`; unknown, foreign and revoked shares yield a 404
+ * `not_found` (R6/R8: no existence leak). The effective scope returned is
+ * the single authority for every S3 call in the handler.
+ *
+ * @param c - Hono context
+ * @param db - database connection
+ * @param user - the signed-in user
+ * @param raw - raw space value (query param or body field); null when the
+ *   body carried a non-string `space`
+ * @returns the resolved scope, or a JSON error response
+ */
+function resolveRequestSpace(
+  c: Context<ServerEnv>,
+  db: Database,
+  user: User,
+  raw: string | undefined | null,
+): ScopeResolution {
+  const ref: SpaceRef | null = raw === null ? null : parseSpace(raw);
+  if (ref === null) {
+    return jsonError(
+      c,
+      400,
+      'The space must be "own" or "shared:<shareId>"',
+      "bad_request",
+    );
+  }
+  const scope = resolveSpace(db, user, ref);
+  if (scope === null) {
+    return jsonError(
+      c,
+      404,
+      "The shared space does not exist or has been revoked",
+      "not_found",
+    );
+  }
+  return scope;
+}
+
 /**
  * Create the file route module mounted under /api/files.
  *
- * @param deps - S3 client, auth middleware and page size
+ * @param deps - S3 client, auth middleware, database and page size
  * @returns a Hono app with the file routes
  */
 export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
-  const { s3Client, requireUser } = deps;
+  const { s3Client, requireUser, db } = deps;
   const pageSize = deps.listPageSize ?? 1000;
 
   const app = new Hono<ServerEnv>();
@@ -96,6 +152,8 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
 
   app.get("/", async (c) => {
     const user = c.get("user");
+    const scope = resolveRequestSpace(c, db, user, c.req.query("space"));
+    if (scope instanceof Response) return scope;
     const prefix = c.req.query("prefix") ?? "";
     const cursor = c.req.query("cursor") ?? undefined;
 
@@ -110,8 +168,8 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
 
     const result = await listObjects(
       s3Client,
-      user.bucket,
-      user.prefix,
+      scope.bucket,
+      scope.prefix,
       prefix,
       {
         cursor,
@@ -121,7 +179,14 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
     return c.json(
       {
         folders: result.folders,
-        files: result.files,
+        // In a shared space keys are relative to the mount: the sharer's
+        // internal prefix must never leak into the SPA (R2).
+        files: scope.mountRelative
+          ? result.files.map((file) => ({
+              ...file,
+              key: file.key.slice(scope.prefix.length),
+            }))
+          : result.files,
         nextCursor: result.nextCursor,
       },
       200,
@@ -130,20 +195,25 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
 
   app.get("/download-url", async (c) => {
     const user = c.get("user");
+    const scope = resolveRequestSpace(c, db, user, c.req.query("space"));
+    if (scope instanceof Response) return scope;
     const key = c.req.query("key") ?? "";
     if (key === "") {
       return jsonError(c, 400, "A file key is required", "bad_request");
     }
+    // Keys are relative to the mount in a shared space; own-space keys
+    // already carry the user's prefix (R2).
+    const fullKey = scope.mountRelative ? scope.prefix + key : key;
 
     try {
       // Scope enforcement lives here: presignedGetUrl rejects keys outside
-      // the user's prefix, mapped to a 400 below. No head request is made;
-      // the storage provider surfaces missing objects.
+      // the effective scope prefix, mapped to a 400 below. No head request
+      // is made; the storage provider surfaces missing objects.
       const url = await presignedGetUrl(
         s3Client,
-        user.bucket,
-        user.prefix,
-        key,
+        scope.bucket,
+        scope.prefix,
+        fullKey,
         DOWNLOAD_URL_TTL_SECONDS,
       );
       return c.json({ url }, 200);
@@ -168,11 +238,26 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
     } catch {
       return jsonError(c, 400, "Invalid JSON body", "bad_request");
     }
-    const { folder, fileName, overwrite } = (body ?? {}) as {
+    const {
+      space: spaceValue,
+      folder,
+      fileName,
+      overwrite,
+    } = (body ?? {}) as {
+      space?: unknown;
       folder?: unknown;
       fileName?: unknown;
       overwrite?: unknown;
     };
+    const scope = resolveRequestSpace(
+      c,
+      db,
+      user,
+      spaceValue === undefined || typeof spaceValue === "string"
+        ? spaceValue
+        : null,
+    );
+    if (scope instanceof Response) return scope;
     if (
       typeof folder !== "string" ||
       typeof fileName !== "string" ||
@@ -187,8 +272,8 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
     }
 
     // Scope enforcement (constitution IV): the folder must stay inside the
-    // user's space and the file name must be a single base name, so the
-    // derived key can never escape the user's prefix. The existence check
+    // effective scope and the file name must be a single base name, so the
+    // derived key can never escape the scope prefix. The existence check
     // below only ever runs against a key validated to be in scope.
     if (!isSafeRelativePrefix(folder)) {
       return jsonError(
@@ -212,16 +297,17 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
       );
     }
 
-    // Key = user prefix + normalised folder + verbatim file name. The file
-    // name is stored exactly as given (spaces and special characters are
+    // Key = effective scope prefix + normalised folder + verbatim file
+    // name, composed uniformly for own and shared spaces. The file name is
+    // stored exactly as given (spaces and special characters are
     // preserved; the SDK URL-encodes it in the presigned URL).
     const normalizedFolder =
       folder === "" ? "" : folder.replace(/\/+$/, "") + "/";
-    const key = user.prefix + normalizedFolder + fileName;
+    const key = scope.prefix + normalizedFolder + fileName;
 
     let existing: HeadResult | null;
     try {
-      existing = await headObject(s3Client, user.bucket, user.prefix, key);
+      existing = await headObject(s3Client, scope.bucket, scope.prefix, key);
     } catch (error) {
       if (error instanceof RangeError) {
         return jsonError(
@@ -244,12 +330,18 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
 
     const url = await presignedPutUrl(
       s3Client,
-      user.bucket,
-      user.prefix,
+      scope.bucket,
+      scope.prefix,
       key,
       UPLOAD_URL_TTL_SECONDS,
     );
-    return c.json({ url, key }, 200);
+    // The key returned to the client is relative to the space: full key in
+    // the own space (as before), mount-relative in a shared space so the
+    // sharer's internal prefix never leaks into the SPA (R2).
+    return c.json(
+      { url, key: scope.mountRelative ? key.slice(scope.prefix.length) : key },
+      200,
+    );
   });
 
   app.post("/share-url", async (c) => {
@@ -260,10 +352,24 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
     } catch {
       return jsonError(c, 400, "Invalid JSON body", "bad_request");
     }
-    const { key, expiresIn } = (body ?? {}) as {
+    const {
+      space: spaceValue,
+      key,
+      expiresIn,
+    } = (body ?? {}) as {
+      space?: unknown;
       key?: unknown;
       expiresIn?: unknown;
     };
+    const scope = resolveRequestSpace(
+      c,
+      db,
+      user,
+      spaceValue === undefined || typeof spaceValue === "string"
+        ? spaceValue
+        : null,
+    );
+    if (scope instanceof Response) return scope;
     if (typeof key !== "string" || key === "") {
       return jsonError(c, 400, "A file key is required", "bad_request");
     }
@@ -280,17 +386,20 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
       );
     }
 
+    // Keys are relative to the mount in a shared space (R2).
+    const fullKey = scope.mountRelative ? scope.prefix + key : key;
+
     try {
       // Scope enforcement lives here: presignedGetUrl rejects keys outside
-      // the user's prefix, mapped to a 400 below. No head request is made;
-      // a missing object is refused later by the storage provider (US4
-      // scenario 5). Nothing is written to the database (FR-012): the link
-      // is generated, displayed, and expires naturally.
+      // the effective scope prefix, mapped to a 400 below. No head request
+      // is made; a missing object is refused later by the storage provider
+      // (US4 scenario 5). Nothing is written to the database (FR-012): the
+      // link is generated, displayed, and expires naturally.
       const url = await presignedGetUrl(
         s3Client,
-        user.bucket,
-        user.prefix,
-        key,
+        scope.bucket,
+        scope.prefix,
+        fullKey,
         ttlSeconds,
       );
       const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
@@ -308,23 +417,32 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
     }
   });
 
-  // Permanently delete one object within the user's space (US5, T047).
-  // Scope enforcement comes first (constitution IV): headObject rejects
-  // keys outside the user's prefix, mapped to a 400 below. A missing
+  // Permanently delete one object within the space (US5, T047). Scope
+  // enforcement comes first (constitution IV): headObject rejects keys
+  // outside the effective scope prefix, mapped to a 400 below. A missing
   // object is reported as 404; only an object that exists is deleted.
   // Deleting an object in storage touches no database records
   // (data-model.md deletion rules). The delete itself is idempotent at
   // S3, so a concurrently removed object still yields a successful 204.
   app.delete("/", async (c) => {
     const user = c.get("user");
+    const scope = resolveRequestSpace(c, db, user, c.req.query("space"));
+    if (scope instanceof Response) return scope;
     const key = c.req.query("key") ?? "";
     if (key === "") {
       return jsonError(c, 400, "A file key is required", "bad_request");
     }
+    // Keys are relative to the mount in a shared space (R2).
+    const fullKey = scope.mountRelative ? scope.prefix + key : key;
 
     let existing: HeadResult | null;
     try {
-      existing = await headObject(s3Client, user.bucket, user.prefix, key);
+      existing = await headObject(
+        s3Client,
+        scope.bucket,
+        scope.prefix,
+        fullKey,
+      );
     } catch (error) {
       if (error instanceof RangeError) {
         return jsonError(
@@ -340,7 +458,7 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
       return jsonError(c, 404, "The file does not exist", "not_found");
     }
 
-    await deleteObject(s3Client, user.bucket, user.prefix, key);
+    await deleteObject(s3Client, scope.bucket, scope.prefix, fullKey);
     return c.body(null, 204);
   });
 

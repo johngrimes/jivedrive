@@ -21,6 +21,8 @@ import { createChallengeStore } from "./auth/webauthn";
 import { authRoutes } from "./routes/auth";
 import { filesRoutes } from "./routes/files";
 import { adminRoutes } from "./routes/admin";
+import { sharesRoutes } from "./routes/shares";
+import { usersRoutes } from "./routes/users";
 import { createS3Client } from "./s3/client";
 import {
   createRateLimitMiddleware,
@@ -103,6 +105,24 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
       store: rateLimitStore,
     }),
   );
+  // The share and user-search endpoints are file-domain operations, so
+  // they share the files family bucket (R7): one store, same limits.
+  // Their route modules mount with the user stories (Phase 3); the
+  // middleware is registered now so they are limited from day one.
+  app.use(
+    "/api/shares/*",
+    createRateLimitMiddleware(deps.config, "files", {
+      now: deps.rateLimitNow,
+      store: rateLimitStore,
+    }),
+  );
+  app.use(
+    "/api/users",
+    createRateLimitMiddleware(deps.config, "files", {
+      now: deps.rateLimitNow,
+      store: rateLimitStore,
+    }),
+  );
 
   // Auth routes (passkey registration, sign-in, logout, current user),
   // mounted under /auth per the API contract.
@@ -123,6 +143,26 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
       s3Client: deps.s3Client ?? createS3Client(deps.config.s3),
       requireUser: requireUser(deps.db, deps.config.sessionIdleDays),
       listPageSize: deps.listPageSize,
+      db: deps.db,
+    }),
+  );
+
+  // Share routes (create and list persistent user-to-user folder grants)
+  // mounted under /api/shares, and the user search mounted under
+  // /api/users. Both are file-domain operations guarded by requireUser;
+  // the rate-limit middleware for them is registered above (R7).
+  app.route(
+    "/api/shares",
+    sharesRoutes({
+      db: deps.db,
+      requireUser: requireUser(deps.db, deps.config.sessionIdleDays),
+    }),
+  );
+  app.route(
+    "/api/users",
+    usersRoutes({
+      db: deps.db,
+      requireUser: requireUser(deps.db, deps.config.sessionIdleDays),
     }),
   );
 

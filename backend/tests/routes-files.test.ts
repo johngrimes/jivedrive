@@ -8,6 +8,9 @@ import { createSession } from "../src/auth/sessions";
 import { createApp } from "../src/server";
 import { createS3Client } from "../src/s3/client";
 import type { AppConfig } from "../src/config";
+import type { Hono } from "hono";
+import type { ServerEnv } from "../src/server";
+import { createShare, deleteShare } from "../src/db/repository";
 
 const migrationsDir = fileURLToPath(new URL("../migrations", import.meta.url));
 
@@ -72,6 +75,11 @@ function stubS3Client(
 
 /** The session cookie for a signed-in alice. */
 const aliceCookie = "jivedrive_session=session-token-alice";
+/** The session cookie for a signed-in bob (the share recipient). */
+const bobCookie = "jivedrive_session=session-token-bob";
+
+/** A Hono app built by {@link createApp}, the test double under test. */
+type TestApp = Hono<ServerEnv>;
 
 /** A stub recording what commands were sent to S3. */
 interface CallRecord {
@@ -126,6 +134,63 @@ function createFilesApp(
   });
   const app = createApp({ config, db, s3Client: client });
   return { app, db, calls };
+}
+/**
+ * Create an app with three users and two shares: alice shares her
+ * `projects` folder with bob (the recipient under test) and her `media`
+ * folder with carol (a share bob does not belong to, for foreign-share
+ * tests). Both users get sessions, mirroring the aliceCookie pattern.
+ *
+ * @param handler - optional S3 stub handler
+ * @returns app, db, the recorded S3 calls, and the two share ids
+ */
+function createSharedApp(
+  handler?: (commandName: string, input: Record<string, unknown>) => unknown,
+): {
+  app: TestApp;
+  db: Database;
+  calls: CallRecord[];
+  shareId: string;
+  foreignShareId: string;
+} {
+  const db = openDatabase(":memory:");
+  migrateFromDir(db, migrationsDir);
+  databases.push(db);
+  const alice = createUser(db, {
+    username: "alice",
+    bucket,
+    prefix: userPrefix,
+  });
+  const bob = createUser(db, {
+    username: "bob",
+    bucket,
+    prefix: "users/bob/",
+  });
+  const carol = createUser(db, {
+    username: "carol",
+    bucket,
+    prefix: "users/carol/",
+  });
+  createSession(db, alice.id, { token: "session-token-alice" });
+  createSession(db, bob.id, { token: "session-token-bob" });
+  const share = createShare(db, {
+    ownerUserId: alice.id,
+    recipientUserId: bob.id,
+    folder: "projects",
+  });
+  const foreignShare = createShare(db, {
+    ownerUserId: alice.id,
+    recipientUserId: carol.id,
+    folder: "media",
+  });
+  const calls: CallRecord[] = [];
+  const client = stubS3Client((name, input) => {
+    calls.push({ name, input });
+    if (handler) return handler(name, input);
+    return { Contents: [], CommonPrefixes: [], IsTruncated: false };
+  });
+  const app = createApp({ config, db, s3Client: client });
+  return { app, db, calls, shareId: share.id, foreignShareId: foreignShare.id };
 }
 
 describe("GET /api/files", () => {
@@ -862,5 +927,731 @@ describe("DELETE /api/files", () => {
       method: "DELETE",
     });
     expect(res.status).toBe(401);
+  });
+});
+describe("space-aware file operations (T007)", () => {
+  /** An unknown share id: well-formed UUID that resolves to nothing. */
+  const unknownShareId = "11111111-1111-4111-8111-111111111111";
+
+  /** Encode a space value for a query string. */
+  const spaceParam = (space: string) => `space=${encodeURIComponent(space)}`;
+
+  it("treats an absent space exactly as own for the signed-in user", async () => {
+    const { app, calls } = createSharedApp();
+
+    const res = await app.request("/api/files", {
+      headers: { cookie: bobCookie },
+    });
+
+    expect(res.status).toBe(200);
+    // bob's own space: his prefix, not alice's.
+    expect(calls[0]?.input).toMatchObject({
+      Bucket: bucket,
+      Prefix: "users/bob/",
+    });
+  });
+
+  it("accepts an explicit space=own", async () => {
+    const { app, calls } = createSharedApp();
+
+    const res = await app.request("/api/files?space=own", {
+      headers: { cookie: bobCookie },
+    });
+
+    expect(res.status).toBe(200);
+    expect(calls[0]?.input).toMatchObject({ Prefix: "users/bob/" });
+  });
+
+  it("lists the sharer's contents with mount-relative keys, own prefix ignored", async () => {
+    const { app, calls, shareId } = createSharedApp((name) => {
+      expect(name).toBe("ListObjectsV2Command");
+      return {
+        Contents: [
+          {
+            Key: "users/alice/projects/plan.txt",
+            Size: 10,
+            LastModified: new Date("2026-08-12T00:00:00Z"),
+          },
+          {
+            Key: "users/alice/projects/report.pdf",
+            Size: 20,
+            LastModified: new Date("2026-08-13T00:00:00Z"),
+          },
+        ],
+        CommonPrefixes: [{ Prefix: "users/alice/projects/docs/" }],
+        IsTruncated: false,
+      };
+    });
+
+    const res = await app.request(
+      `/api/files?${spaceParam(`shared:${shareId}`)}`,
+      { headers: { cookie: bobCookie } },
+    );
+
+    expect(res.status).toBe(200);
+    // The listing runs against the sharer's effective prefix.
+    expect(calls[0]?.input).toMatchObject({
+      Bucket: bucket,
+      Prefix: "users/alice/projects/",
+      Delimiter: "/",
+    });
+    const body = (await res.json()) as {
+      folders: string[];
+      files: Array<{
+        key: string;
+        name: string;
+        size: number;
+        lastModified: string;
+      }>;
+    };
+    // Keys are relative to the mount: the sharer's prefix never leaks.
+    expect(body.folders).toEqual(["docs"]);
+    expect(body.files).toEqual([
+      {
+        key: "plan.txt",
+        name: "plan.txt",
+        size: 10,
+        lastModified: "2026-08-12T00:00:00.000Z",
+      },
+      {
+        key: "report.pdf",
+        name: "report.pdf",
+        size: 20,
+        lastModified: "2026-08-13T00:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("issues a download URL for the sharer's bucket and key from a mount-relative key", async () => {
+    const { app, calls, shareId } = createSharedApp();
+
+    const res = await app.request(
+      `/api/files/download-url?${spaceParam(
+        `shared:${shareId}`,
+      )}&key=${encodeURIComponent("plan.txt")}`,
+      { headers: { cookie: bobCookie } },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { url: string };
+    // The mount-relative key composes to the sharer's full key.
+    expect(body.url).toContain(
+      "https://s3.gra.io.cloud.ovh.net/jivedrive-prod/users/alice/projects/plan.txt",
+    );
+    expect(body.url).toContain("X-Amz-Expires=900");
+    // Presigning contacts no storage.
+    expect(calls).toHaveLength(0);
+  });
+
+  it("presigns an upload under the sharer's prefix in a shared space", async () => {
+    const { app, calls, shareId } = createSharedApp((name) => {
+      expect(name).toBe("HeadObjectCommand");
+      const err = new Error("Not Found") as Error & { name: string };
+      err.name = "NotFound";
+      throw err;
+    });
+
+    const res = await app.request("/api/files/upload-url", {
+      method: "POST",
+      headers: {
+        cookie: bobCookie,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        space: `shared:${shareId}`,
+        folder: "",
+        fileName: "notes.txt",
+        overwrite: false,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { url: string; key: string };
+    // Mount-relative: the sharer's internal prefix never leaks into the
+    // client (R2), matching the FileEntry key semantics of shared listings.
+    expect(body.key).toBe("notes.txt");
+    expect(body.url).toContain(
+      "https://s3.gra.io.cloud.ovh.net/jivedrive-prod/users/alice/projects/notes.txt",
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.input.Key).toBe("users/alice/projects/notes.txt");
+  });
+
+  it("returns 409 for an existing file in a shared space without overwrite", async () => {
+    const { app, calls, shareId } = createSharedApp((name) => {
+      expect(name).toBe("HeadObjectCommand");
+      return {
+        ContentLength: 2516582,
+        LastModified: new Date("2026-08-12T00:00:00Z"),
+      };
+    });
+
+    const res = await app.request("/api/files/upload-url", {
+      method: "POST",
+      headers: {
+        cookie: bobCookie,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        space: `shared:${shareId}`,
+        folder: "docs",
+        fileName: "report.pdf",
+        overwrite: false,
+      }),
+    });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "already_exists" });
+    expect(calls[0]?.input.Key).toBe("users/alice/projects/docs/report.pdf");
+  });
+
+  it("deletes an object from the sharer's space in a shared space", async () => {
+    const { app, calls, shareId } = createSharedApp((name, input) => {
+      if (name === "DeleteObjectCommand") return {};
+      expect(name).toBe("HeadObjectCommand");
+      expect(String(input.Key)).toBe("users/alice/projects/notes.txt");
+      return {
+        ContentLength: 10,
+        LastModified: new Date("2026-08-12T00:00:00Z"),
+      };
+    });
+
+    const res = await app.request(
+      `/api/files?${spaceParam(`shared:${shareId}`)}&key=${encodeURIComponent(
+        "notes.txt",
+      )}`,
+      {
+        method: "DELETE",
+        headers: { cookie: bobCookie },
+      },
+    );
+
+    expect(res.status).toBe(204);
+    expect(calls.map((c) => c.name)).toEqual([
+      "HeadObjectCommand",
+      "DeleteObjectCommand",
+    ]);
+    expect(calls[1]?.input).toMatchObject({
+      Bucket: bucket,
+      Key: "users/alice/projects/notes.txt",
+    });
+  });
+
+  it("generates a share link for a key in a shared space", async () => {
+    const { app, calls, shareId } = createSharedApp();
+
+    const res = await app.request("/api/files/share-url", {
+      method: "POST",
+      headers: {
+        cookie: bobCookie,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ space: `shared:${shareId}`, key: "plan.txt" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { url: string; expiresAt: string };
+    expect(body.url).toContain(
+      "https://s3.gra.io.cloud.ovh.net/jivedrive-prod/users/alice/projects/plan.txt",
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects a key escaping the shared folder with 400 out_of_scope", async () => {
+    const { app, calls, shareId } = createSharedApp();
+
+    for (const key of ["..", "../x", "a/../../b"]) {
+      const res = await app.request(
+        `/api/files/download-url?${spaceParam(
+          `shared:${shareId}`,
+        )}&key=${encodeURIComponent(key)}`,
+        { headers: { cookie: bobCookie } },
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "out_of_scope" });
+    }
+    // No storage call ever runs against an out-of-scope key.
+    expect(calls).toHaveLength(0);
+  });
+
+  it("returns 404 for an unknown share on every operation", async () => {
+    const { app, calls } = createSharedApp();
+    const space = `shared:${unknownShareId}`;
+
+    let res = await app.request(`/api/files?${spaceParam(space)}`, {
+      headers: { cookie: bobCookie },
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ code: "not_found" });
+
+    res = await app.request(
+      `/api/files/download-url?${spaceParam(space)}&key=${encodeURIComponent(
+        "plan.txt",
+      )}`,
+      { headers: { cookie: bobCookie } },
+    );
+    expect(res.status).toBe(404);
+
+    res = await app.request("/api/files/upload-url", {
+      method: "POST",
+      headers: { cookie: bobCookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        space,
+        folder: "",
+        fileName: "a.txt",
+        overwrite: false,
+      }),
+    });
+    expect(res.status).toBe(404);
+
+    res = await app.request(
+      `/api/files?${spaceParam(space)}&key=${encodeURIComponent("plan.txt")}`,
+      { method: "DELETE", headers: { cookie: bobCookie } },
+    );
+    expect(res.status).toBe(404);
+
+    res = await app.request("/api/files/share-url", {
+      method: "POST",
+      headers: { cookie: bobCookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ space, key: "plan.txt" }),
+    });
+    expect(res.status).toBe(404);
+
+    expect(calls).toHaveLength(0);
+  });
+
+  it("returns 404 for a foreign share on every operation", async () => {
+    const { app, calls, foreignShareId } = createSharedApp();
+    // alice shared this folder with carol; bob is not its recipient.
+    const space = `shared:${foreignShareId}`;
+
+    let res = await app.request(`/api/files?${spaceParam(space)}`, {
+      headers: { cookie: bobCookie },
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ code: "not_found" });
+
+    res = await app.request("/api/files/upload-url", {
+      method: "POST",
+      headers: { cookie: bobCookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        space,
+        folder: "",
+        fileName: "a.txt",
+        overwrite: false,
+      }),
+    });
+    expect(res.status).toBe(404);
+
+    res = await app.request(
+      `/api/files/download-url?${spaceParam(space)}&key=${encodeURIComponent(
+        "plan.txt",
+      )}`,
+      { headers: { cookie: bobCookie } },
+    );
+    expect(res.status).toBe(404);
+
+    res = await app.request(
+      `/api/files?${spaceParam(space)}&key=${encodeURIComponent("plan.txt")}`,
+      { method: "DELETE", headers: { cookie: bobCookie } },
+    );
+    expect(res.status).toBe(404);
+
+    res = await app.request("/api/files/share-url", {
+      method: "POST",
+      headers: { cookie: bobCookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ space, key: "plan.txt" }),
+    });
+    expect(res.status).toBe(404);
+
+    expect(calls).toHaveLength(0);
+  });
+
+  it("returns 404 for a revoked share on every operation", async () => {
+    const { app, db, calls, shareId } = createSharedApp();
+    deleteShare(db, shareId);
+    const space = `shared:${shareId}`;
+
+    let res = await app.request(`/api/files?${spaceParam(space)}`, {
+      headers: { cookie: bobCookie },
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ code: "not_found" });
+
+    res = await app.request(
+      `/api/files/download-url?${spaceParam(space)}&key=${encodeURIComponent(
+        "plan.txt",
+      )}`,
+      { headers: { cookie: bobCookie } },
+    );
+    expect(res.status).toBe(404);
+
+    res = await app.request("/api/files/upload-url", {
+      method: "POST",
+      headers: { cookie: bobCookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        space,
+        folder: "",
+        fileName: "a.txt",
+        overwrite: false,
+      }),
+    });
+    expect(res.status).toBe(404);
+
+    res = await app.request(
+      `/api/files?${spaceParam(space)}&key=${encodeURIComponent("plan.txt")}`,
+      { method: "DELETE", headers: { cookie: bobCookie } },
+    );
+    expect(res.status).toBe(404);
+
+    res = await app.request("/api/files/share-url", {
+      method: "POST",
+      headers: { cookie: bobCookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ space, key: "plan.txt" }),
+    });
+    expect(res.status).toBe(404);
+
+    expect(calls).toHaveLength(0);
+  });
+
+  it("returns 400 for a malformed space value on every operation", async () => {
+    const { app, calls } = createSharedApp();
+
+    for (const space of ["", "foo", "shared:", "shared:.."]) {
+      let res = await app.request(`/api/files?${spaceParam(space)}`, {
+        headers: { cookie: bobCookie },
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "bad_request" });
+
+      res = await app.request(
+        `/api/files/download-url?${spaceParam(space)}&key=${encodeURIComponent(
+          "plan.txt",
+        )}`,
+        { headers: { cookie: bobCookie } },
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "bad_request" });
+
+      res = await app.request(
+        `/api/files?${spaceParam(space)}&key=${encodeURIComponent("plan.txt")}`,
+        { method: "DELETE", headers: { cookie: bobCookie } },
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "bad_request" });
+
+      res = await app.request("/api/files/upload-url", {
+        method: "POST",
+        headers: { cookie: bobCookie, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          space,
+          folder: "",
+          fileName: "a.txt",
+          overwrite: false,
+        }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "bad_request" });
+
+      res = await app.request("/api/files/share-url", {
+        method: "POST",
+        headers: { cookie: bobCookie, "Content-Type": "application/json" },
+        body: JSON.stringify({ space, key: "plan.txt" }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "bad_request" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+});
+describe("shared-space listing and download (T022)", () => {
+  /** Encode a space value for a query string. */
+  const spaceParam = (space: string) => `space=${encodeURIComponent(space)}`;
+
+  it("lists an empty shared folder as an empty page (no error)", async () => {
+    // The default stub returns no Contents and no CommonPrefixes, which
+    // is exactly the empty-folder shape (US2 scenario 3).
+    const { app, calls, shareId } = createSharedApp();
+
+    const res = await app.request(
+      `/api/files?${spaceParam(`shared:${shareId}`)}`,
+      { headers: { cookie: bobCookie } },
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      folders: [],
+      files: [],
+      nextCursor: null,
+    });
+    // The listing still ran against the sharer's folder, not the root.
+    expect(calls[0]?.input).toMatchObject({
+      Bucket: bucket,
+      Prefix: "users/alice/projects/",
+    });
+  });
+
+  it("lists a subfolder inside the mount with a mount-relative prefix", async () => {
+    const { app, calls, shareId } = createSharedApp((name) => {
+      expect(name).toBe("ListObjectsV2Command");
+      return {
+        Contents: [
+          {
+            Key: "users/alice/projects/docs/report.pdf",
+            Size: 20,
+            LastModified: new Date("2026-08-13T00:00:00Z"),
+          },
+        ],
+        CommonPrefixes: [],
+        IsTruncated: false,
+      };
+    });
+
+    const res = await app.request(
+      `/api/files?${spaceParam(`shared:${shareId}`)}&prefix=${encodeURIComponent("docs/")}`,
+      { headers: { cookie: bobCookie } },
+    );
+
+    expect(res.status).toBe(200);
+    // The mount-relative prefix composes onto the sharer's folder
+    // server-side: the client never sends the sharer's internal prefix.
+    expect(calls[0]?.input).toMatchObject({
+      Bucket: bucket,
+      Prefix: "users/alice/projects/docs/",
+      Delimiter: "/",
+    });
+    const body = (await res.json()) as {
+      folders: string[];
+      files: Array<{
+        key: string;
+        name: string;
+        size: number;
+        lastModified: string;
+      }>;
+    };
+    expect(body.folders).toEqual([]);
+    expect(body.files).toEqual([
+      {
+        key: "docs/report.pdf",
+        name: "report.pdf",
+        size: 20,
+        lastModified: "2026-08-13T00:00:00.000Z",
+      },
+    ]);
+    // Keys stay relative to the mount root (contract: "relative to the
+    // shared folder"), matching the own-space convention where keys are
+    // relative to the space root; the SPA downloads them verbatim.
+    expect(body.files[0]?.key).toBe("docs/report.pdf");
+  });
+
+  it("never applies the caller's own prefix to a shared-space listing", async () => {
+    const { app, shareId } = createSharedApp((name, input) => {
+      expect(name).toBe("ListObjectsV2Command");
+      // The listing runs against the sharer's composed prefix; bob's own
+      // space identity must never leak into the S3 call (R2).
+      expect(String(input.Prefix)).toBe("users/alice/projects/");
+      expect(String(input.Prefix).startsWith("users/bob/")).toBe(false);
+      return { Contents: [], CommonPrefixes: [], IsTruncated: false };
+    });
+
+    const res = await app.request(
+      `/api/files?${spaceParam(`shared:${shareId}`)}`,
+      { headers: { cookie: bobCookie } },
+    );
+
+    expect(res.status).toBe(200);
+  });
+
+  it("issues a download URL for a key inside a mount subfolder", async () => {
+    const { app, calls, shareId } = createSharedApp();
+
+    const res = await app.request(
+      `/api/files/download-url?${spaceParam(`shared:${shareId}`)}&key=${encodeURIComponent("docs/report.pdf")}`,
+      { headers: { cookie: bobCookie } },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { url: string };
+    // The mount-relative key composes to the full sharer-side key.
+    expect(body.url).toContain(
+      "https://s3.gra.io.cloud.ovh.net/jivedrive-prod/users/alice/projects/docs/report.pdf",
+    );
+    expect(body.url).toContain("X-Amz-Expires=900");
+    // Presigning contacts no storage.
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("shared-space upload and delete (T026)", () => {
+  /** Encode a space value for a query string. */
+  const spaceParam = (space: string) => `space=${encodeURIComponent(space)}`;
+
+  /** A handler that reports the object as existing with the given size. */
+  function existingHandler(size = 2516582): (name: string) => unknown {
+    return (name) => {
+      expect(name).toBe("HeadObjectCommand");
+      return {
+        ContentLength: size,
+        LastModified: new Date("2026-08-12T00:00:00Z"),
+      };
+    };
+  }
+
+  it("presigns an overwrite PUT for an existing file in a shared space", async () => {
+    const { app, calls, shareId } = createSharedApp(existingHandler());
+
+    const res = await app.request("/api/files/upload-url", {
+      method: "POST",
+      headers: {
+        cookie: bobCookie,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        space: `shared:${shareId}`,
+        folder: "docs",
+        fileName: "report.pdf",
+        overwrite: true,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { url: string; key: string };
+    // Mount-relative key; the presigned PUT targets the sharer's full key.
+    expect(body.key).toBe("docs/report.pdf");
+    expect(body.url).toContain(
+      "https://s3.gra.io.cloud.ovh.net/jivedrive-prod/users/alice/projects/docs/report.pdf",
+    );
+    expect(body.url).toContain("X-Amz-Signature");
+    // Overwrite consent skips the 409: exactly one scoped HEAD ran, on
+    // the sharer's full key (US3 sc.3).
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.input.Key).toBe("users/alice/projects/docs/report.pdf");
+  });
+
+  it("refuses an existing file without overwrite, then presigns the replace once confirmed", async () => {
+    const { app, calls, shareId } = createSharedApp(existingHandler());
+
+    const post = (overwrite: boolean) =>
+      app.request("/api/files/upload-url", {
+        method: "POST",
+        headers: {
+          cookie: bobCookie,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          space: `shared:${shareId}`,
+          folder: "",
+          fileName: "notes.txt",
+          overwrite,
+        }),
+      });
+
+    // Without consent the existing object is refused with 409 (US3 sc.2).
+    const refused = await post(false);
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ code: "already_exists" });
+
+    // With consent the replace is presigned against the sharer's key
+    // (US3 sc.3): the same object, no 409.
+    const confirmed = await post(true);
+    expect(confirmed.status).toBe(200);
+    const body = (await confirmed.json()) as { url: string; key: string };
+    expect(body.key).toBe("notes.txt");
+    expect(body.url).toContain(
+      "https://s3.gra.io.cloud.ovh.net/jivedrive-prod/users/alice/projects/notes.txt",
+    );
+    expect(calls.map((c) => c.name)).toEqual([
+      "HeadObjectCommand",
+      "HeadObjectCommand",
+    ]);
+    expect(calls[1]?.input.Key).toBe("users/alice/projects/notes.txt");
+  });
+
+  it("rejects an upload folder that escapes the shared folder without touching storage", async () => {
+    const { app, calls, shareId } = createSharedApp();
+
+    // The folder composes onto the sharer's prefix server-side; any ".."
+    // segment or absolute path must be refused before a key is formed
+    // (FR-012): parent traversal can never widen the mount's scope.
+    for (const folder of ["..", "../x", "../../x", "a/../../b"]) {
+      const res = await app.request("/api/files/upload-url", {
+        method: "POST",
+        headers: {
+          cookie: bobCookie,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          space: `shared:${shareId}`,
+          folder,
+          fileName: "x.txt",
+          overwrite: false,
+        }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "invalid_folder" });
+    }
+    // The scoped HEAD must never run against an out-of-scope key.
+    expect(calls).toHaveLength(0);
+  });
+
+  it("deletes an object inside the shared folder with the sharer's full key", async () => {
+    const { app, calls, shareId } = createSharedApp((name, input) => {
+      if (name === "DeleteObjectCommand") return {};
+      expect(name).toBe("HeadObjectCommand");
+      expect(String(input.Key)).toBe("users/alice/projects/notes.txt");
+      return {
+        ContentLength: 10,
+        LastModified: new Date("2026-08-12T00:00:00Z"),
+      };
+    });
+
+    const res = await app.request(
+      `/api/files?${spaceParam(`shared:${shareId}`)}&key=${encodeURIComponent(
+        "notes.txt",
+      )}`,
+      {
+        method: "DELETE",
+        headers: { cookie: bobCookie },
+      },
+    );
+
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe("");
+    expect(calls.map((c) => c.name)).toEqual([
+      "HeadObjectCommand",
+      "DeleteObjectCommand",
+    ]);
+    expect(calls[1]?.input).toMatchObject({
+      Bucket: bucket,
+      Key: "users/alice/projects/notes.txt",
+    });
+  });
+
+  it("rejects a delete key that escapes the shared folder", async () => {
+    const { app, calls, shareId } = createSharedApp();
+
+    // The mount-relative key composes onto the sharer's folder server-side
+    // ("users/alice/projects/" + key); assertKeyInScope then refuses the
+    // composed key for parent traversal or a prefix escape (FR-012).
+    for (const key of [
+      "..",
+      "../outside.txt",
+      "../../outside.txt",
+      "a/../../b",
+    ]) {
+      const res = await app.request(
+        `/api/files?${spaceParam(`shared:${shareId}`)}&key=${encodeURIComponent(
+          key,
+        )}`,
+        {
+          method: "DELETE",
+          headers: { cookie: bobCookie },
+        },
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "out_of_scope" });
+    }
+    // No HEAD, no DELETE: the refusal happens before any storage call.
+    expect(calls).toHaveLength(0);
   });
 });

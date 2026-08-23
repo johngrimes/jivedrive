@@ -22,7 +22,8 @@ async function openPhotos(page: Page, context: BrowserContext): Promise<void> {
   await page.goto("/files");
   await expectSignedInAs(page, "alice");
   // photos/ sorts onto the second page of the seeded root listing
-  // (10 items, page size 5), so load the rest before navigating.
+  // (11 items, page size 5), so load the rest before navigating; one
+  // Load more click still brings it into view.
   await page.getByRole("button", { name: "Load more" }).click();
   await page.getByRole("link", { name: /photos/ }).click();
   await expect(

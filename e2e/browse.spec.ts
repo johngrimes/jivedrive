@@ -62,15 +62,19 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
     await expectNoHorizontalOverflow(page);
   }
 
-  // Load more: the first page has 5 rows and a Load more button; the second
-  // page brings the total to 10 and the button disappears.
+  // Load more: the first page has 5 rows and a Load more button; the
+  // second page brings the total to 10 and the button remains; the third
+  // page completes the 11-entry root and the button disappears.
   const loadMore = page.getByRole("button", { name: "Load more" });
   await expect(loadMore).toBeVisible();
   await expect(page.locator("li.list-row")).toHaveCount(5);
   await loadMore.click();
   await expect(page.locator("li.list-row")).toHaveCount(10);
+  await expect(loadMore).toBeVisible();
+  await loadMore.click();
+  await expect(page.locator("li.list-row")).toHaveCount(11);
   await expect(loadMore).toHaveCount(0);
-  await expect(page.getByText("10 items")).toBeVisible();
+  await expect(page.getByText("11 items")).toBeVisible();
   await expect(page.getByRole("link", { name: /photos/ })).toBeVisible();
 
   // Navigate into a folder: the listing updates and breadcrumbs show the

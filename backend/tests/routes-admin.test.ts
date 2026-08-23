@@ -7,10 +7,12 @@ import {
   countAdmins,
   createCredential,
   createInvite,
+  createShare,
   createUser,
   getCredentialById,
   getInviteByToken,
   getSessionByToken,
+  getShareById,
   getUserByUsername,
   listInvites,
   markInviteClaimed,
@@ -1031,5 +1033,141 @@ describe("DELETE /api/admin/invites/:id", () => {
       method: "DELETE",
     });
     expect(unsigned.status).toBe(401);
+  });
+});
+describe("DELETE /api/admin/users removes shares (FR-014, T032)", () => {
+  /** Session cookies for the extra seeded users. */
+  const aliceCookie = "jivedrive_session=alice-session";
+  const bobCookie = "jivedrive_session=bob-session";
+  const carolCookie = "jivedrive_session=carol-session";
+
+  /** The outgoing share shape per the contract `ShareOutgoing` schema. */
+  interface ShareOutgoingBody {
+    id: string;
+    folder: string;
+    folderName: string;
+    recipient: { id: string; username: string };
+    createdAt: string;
+  }
+
+  /** The incoming share shape per the contract `ShareIncoming` schema. */
+  interface ShareIncomingBody {
+    id: string;
+    folder: string;
+    folderName: string;
+    sharer: { id: string; username: string };
+  }
+
+  /** The response of GET /api/shares. */
+  interface ListSharesBody {
+    incoming: ShareIncomingBody[];
+    outgoing: ShareOutgoingBody[];
+  }
+
+  it("removes the deleted user's shares in both directions and leaves other users' shares untouched", async () => {
+    const { app, db } = createAdminApp();
+
+    // alice and bob share with each other in BOTH directions (alice ->
+    // bob on projects, bob -> alice on docs); carol holds an unrelated
+    // share so the cascade is proven scoped to the deleted user.
+    const alice = createUser(db, {
+      username: "alice",
+      bucket,
+      prefix: "users/alice/",
+    });
+    const bob = createUser(db, {
+      username: "bob",
+      bucket,
+      prefix: "users/bob/",
+    });
+    const carol = createUser(db, {
+      username: "carol",
+      bucket,
+      prefix: "users/carol/",
+    });
+    createSession(db, alice.id, { token: "alice-session" });
+    createSession(db, bob.id, { token: "bob-session" });
+    createSession(db, carol.id, { token: "carol-session" });
+
+    const aliceToBob = createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: bob.id,
+      folder: "projects",
+    });
+    const bobToAlice = createShare(db, {
+      ownerUserId: bob.id,
+      recipientUserId: alice.id,
+      folder: "docs",
+    });
+    const carolToAlice = createShare(db, {
+      ownerUserId: carol.id,
+      recipientUserId: alice.id,
+      folder: "media",
+    });
+    const allShares = db.query("SELECT COUNT(*) AS n FROM shares").get() as {
+      n: number;
+    };
+    expect(allShares.n).toBe(3);
+
+    // DELETE the target with the admin cookie (same shape as the
+    // removeUser helper above; that helper is scoped to its own block).
+    const res = await app.request(
+      `/api/admin/users?id=${encodeURIComponent(bob.id)}`,
+      { method: "DELETE", headers: { cookie: adminCookie } },
+    );
+    expect(res.status).toBe(204);
+
+    // FR-014: zero share rows reference bob in either direction — the FK
+    // cascade alone did the cleanup (T033: repository.deleteUser only
+    // deletes the user row).
+    const bobRows = db
+      .query(
+        "SELECT COUNT(*) AS n FROM shares WHERE ownerUserId = ? OR recipientUserId = ?",
+      )
+      .get(bob.id, bob.id) as { n: number };
+    expect(bobRows.n).toBe(0);
+
+    // alice's listing no longer mentions bob in either direction: her
+    // outgoing share of projects (to bob) and her incoming mount (docs,
+    // shared by bob) are both gone.
+    const aliceRes = await app.request("/api/shares", {
+      headers: { cookie: aliceCookie },
+    });
+    expect(aliceRes.status).toBe(200);
+    const aliceBody = (await aliceRes.json()) as ListSharesBody;
+    expect(
+      aliceBody.outgoing.some((share) => share.recipient.username === "bob"),
+    ).toBe(false);
+    expect(
+      aliceBody.incoming.some((share) => share.sharer.username === "bob"),
+    ).toBe(false);
+    expect(aliceBody.outgoing).toHaveLength(0);
+    // Shares not involving bob survive: carol's grant to alice is still
+    // listed, and it is alice's only incoming share.
+    expect(aliceBody.incoming.map((share) => share.id)).toEqual([
+      carolToAlice.id,
+    ]);
+    expect(getShareById(db, aliceToBob.id)).toBeNull();
+    expect(getShareById(db, bobToAlice.id)).toBeNull();
+    expect(getShareById(db, carolToAlice.id)).not.toBeNull();
+
+    // The deletion's cascade also ends bob's session (existing deletion
+    // rules), so his cookie no longer authenticates.
+    expect(getSessionByToken(db, "bob-session")).toBeNull();
+    const bobRes = await app.request("/api/shares", {
+      headers: { cookie: bobCookie },
+    });
+    expect(bobRes.status).toBe(401);
+
+    // carol's shares and listing are untouched by bob's removal.
+    const carolRes = await app.request("/api/shares", {
+      headers: { cookie: carolCookie },
+    });
+    expect(carolRes.status).toBe(200);
+    const carolBody = (await carolRes.json()) as ListSharesBody;
+    expect(
+      carolBody.outgoing.some((share) => share.recipient.username === "alice"),
+    ).toBe(true);
+    expect(carolBody.incoming).toHaveLength(0);
   });
 });

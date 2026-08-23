@@ -49,6 +49,13 @@ export interface ApiClientError extends Error {
   status: number;
 }
 
+/**
+ * A space identifier per the contract: the signed-in user's own space
+ * (`own`, the default) or a folder another user shared with them
+ * (`shared:<shareId>`), where keys are relative to the shared folder.
+ */
+export type Space = "own" | `shared:${string}`;
+
 /** Options for {@link apiFetch}. */
 export interface ApiFetchOptions {
   /** Do not parse the response body as JSON (e.g. 204 responses). */
@@ -216,19 +223,26 @@ export async function postLogout(): Promise<void> {
 }
 
 /**
- * List folders and files under a relative prefix within the user's space.
+ * List folders and files under a relative prefix within a space.
  *
- * @param prefix - relative subfolder within the user's prefix ("" for root)
+ * The space defaults to the caller's own space (`own`); in a shared space
+ * (`shared:<shareId>`) the prefix and the returned file keys are relative
+ * to the shared folder (the mount).
+ *
+ * @param prefix - relative subfolder within the space ("" for the root)
+ * @param space - the space to list; defaults to the caller's own space
  * @param cursor - opaque continuation token from a previous page
  * @returns one page of folders and files
  */
 export function listFiles(
   prefix: string,
+  space: Space = "own",
   cursor?: string,
 ): Promise<ListFilesResponse> {
   const params = new URLSearchParams();
   if (prefix !== "") params.set("prefix", prefix);
   if (cursor) params.set("cursor", cursor);
+  params.set("space", space);
   const query = params.toString();
   return apiFetch<ListFilesResponse>(`/api/files${query ? `?${query}` : ""}`);
 }
@@ -237,16 +251,17 @@ export function listFiles(
 export interface UploadUrlResponse {
   /** Presigned PUT URL the browser uploads to directly. */
   url: string;
-  /** Full object key within the user's space. */
+  /** Full object key within the space. */
   key: string;
 }
 
 /**
  * Obtain a presigned PUT URL for uploading a file into a folder.
  *
- * @param folder - destination folder relative to the user's prefix ("" for root)
+ * @param folder - destination folder relative to the space ("" for root)
  * @param fileName - base file name, stored verbatim
  * @param overwrite - true to replace an existing object with the same key
+ * @param space - the space to upload into; defaults to the caller's own
  * @returns the presigned URL and the full object key
  * @throws {ApiClientError} on failure; a 409 carries code "already_exists"
  */
@@ -254,22 +269,28 @@ export function postUploadUrl(
   folder: string,
   fileName: string,
   overwrite: boolean,
+  space: Space = "own",
 ): Promise<UploadUrlResponse> {
   return apiFetch<UploadUrlResponse>("/api/files/upload-url", {
     method: "POST",
-    body: JSON.stringify({ folder, fileName, overwrite }),
+    body: JSON.stringify({ folder, fileName, overwrite, space }),
   });
 }
 
 /**
  * Obtain a short-lived presigned GET URL that downloads a file.
  *
- * @param key - full object key within the user's space
+ * @param key - object key within the space (full key in the own space,
+ *   relative to the mount in a shared space)
+ * @param space - the space the key lives in; defaults to the caller's own
  * @returns the presigned download URL
  */
-export function getDownloadUrl(key: string): Promise<{ url: string }> {
+export function getDownloadUrl(
+  key: string,
+  space: Space = "own",
+): Promise<{ url: string }> {
   return apiFetch<{ url: string }>(
-    `/api/files/download-url?key=${encodeURIComponent(key)}`,
+    `/api/files/download-url?key=${encodeURIComponent(key)}&space=${encodeURIComponent(space)}`,
   );
 }
 
@@ -290,36 +311,145 @@ export interface ShareUrlResponse {
  * The link is served directly by the storage provider to anyone holding
  * it; JiveDrive never stores it (FR-012).
  *
- * @param key - full object key within the user's space
+ * @param key - object key within the space (full key in the own space,
+ *   relative to the mount in a shared space)
  * @param expiresIn - expiry choice, defaults to 7 days
+ * @param space - the space the key lives in; defaults to the caller's own
  * @returns the presigned URL and its expiry timestamp
  */
 export function postShareUrl(
   key: string,
   expiresIn: ShareExpiresIn = "7d",
+  space: Space = "own",
 ): Promise<ShareUrlResponse> {
   return apiFetch<ShareUrlResponse>("/api/files/share-url", {
     method: "POST",
-    body: JSON.stringify({ key, expiresIn }),
+    body: JSON.stringify({ key, expiresIn, space }),
   });
 }
 
 /**
- * Permanently delete an object within the user's space.
+ * Permanently delete an object within a space.
  *
  * Deletion is immediate and irreversible (FR-010); the route touches no
- * database records. The key is validated server-side against the user's
- * prefix.
+ * database records. The key is validated server-side against the space's
+ * scope.
  *
- * @param key - full object key within the user's space
+ * @param key - object key within the space (full key in the own space,
+ *   relative to the mount in a shared space)
+ * @param space - the space the key lives in; defaults to the caller's own
  * @throws {ApiClientError} on failure; a 404 carries code "not_found"
  */
-export async function deleteFile(key: string): Promise<void> {
+export async function deleteFile(
+  key: string,
+  space: Space = "own",
+): Promise<void> {
   await apiFetch<void>(
-    `/api/files?key=${encodeURIComponent(key)}`,
+    `/api/files?key=${encodeURIComponent(key)}&space=${encodeURIComponent(space)}`,
     { method: "DELETE" },
     { noBody: true },
   );
+}
+
+/** Identity-only view of a user, for the share recipient picker (contract UserSummary). */
+export interface UserSummary {
+  id: string;
+  username: string;
+}
+
+/** A folder another user shared with the caller (contract ShareIncoming). */
+export interface ShareIncoming {
+  id: string;
+  /** Shared folder relative to the sharer's space. */
+  folder: string;
+  /** Base name of the shared folder, shown as the mount. */
+  folderName: string;
+  sharer: UserSummary;
+}
+
+/** A folder the caller shares with another user (contract ShareOutgoing). */
+export interface ShareOutgoing {
+  id: string;
+  folder: string;
+  folderName: string;
+  recipient: UserSummary;
+  /** ISO 8601 timestamp. */
+  createdAt: string;
+}
+
+/** Response of GET /api/shares. */
+export interface ListSharesResponse {
+  incoming: ShareIncoming[];
+  outgoing: ShareOutgoing[];
+}
+
+/**
+ * List the signed-in user's shares in both directions: folders shared
+ * with them (incoming, feeds the root mounts) and folders they share
+ * with others (outgoing, feeds the share dialogs).
+ *
+ * @returns the incoming and outgoing shares
+ */
+export function listShares(): Promise<ListSharesResponse> {
+  return apiFetch<ListSharesResponse>("/api/shares");
+}
+
+/** Response of POST /api/shares. */
+export interface CreateShareResponse {
+  share: ShareOutgoing;
+}
+
+/**
+ * Share one of the caller's subfolders with another user. The recipient
+ * gains full read/write access (browse, download, upload, overwrite,
+ * delete) until the owner revokes.
+ *
+ * @param folder - relative subfolder of the caller's space
+ * @param recipientUsername - username of the recipient, from /api/users
+ * @returns the created share
+ * @throws {ApiClientError} on failure; a 409 carries code
+ *   "already_shared"
+ */
+export function createShare(
+  folder: string,
+  recipientUsername: string,
+): Promise<CreateShareResponse> {
+  return apiFetch<CreateShareResponse>("/api/shares", {
+    method: "POST",
+    body: JSON.stringify({ folder, recipientUsername }),
+  });
+}
+
+/**
+ * Revoke a share (owner only). The record is deleted; the recipient loses
+ * access on their next request.
+ *
+ * @param id - share id
+ * @throws {ApiClientError} on failure; a 404 carries code "not_found"
+ */
+export async function revokeShare(id: string): Promise<void> {
+  await apiFetch<void>(
+    `/api/shares/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    { noBody: true },
+  );
+}
+
+/** Response of GET /api/users. */
+export interface SearchUsersResponse {
+  users: UserSummary[];
+}
+
+/**
+ * Search signed-in users by username (case-insensitive substring) to pick
+ * a share recipient. Excludes the caller; an empty query returns nothing;
+ * at most 20 results.
+ *
+ * @param q - username substring
+ * @returns the matching users
+ */
+export function searchUsers(q: string): Promise<SearchUsersResponse> {
+  return apiFetch<SearchUsersResponse>(`/api/users?q=${encodeURIComponent(q)}`);
 }
 
 /** An invite as returned by the admin API, per the contract `Invite` schema. */

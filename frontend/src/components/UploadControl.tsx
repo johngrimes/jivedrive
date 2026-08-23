@@ -18,12 +18,19 @@ import { useState } from "react";
 import type { ChangeEvent } from "react";
 import { SyncIcon, UploadIcon, XIcon } from "@primer/octicons-react";
 import { postUploadUrl } from "../api/client";
-import type { ApiClientError } from "../api/client";
+import type { ApiClientError, Space } from "../api/client";
 
 /** Props for {@link UploadControl}. */
 export interface UploadControlProps {
-  /** Destination folder relative to the user's prefix ("" for the root). */
+  /** Destination folder relative to the space root ("" for the root). */
   folder: string;
+  /**
+   * The space to upload into: `own` or `shared:<shareId>`. Keys are
+   * mount-relative in a shared space (R2) and the server composes them
+   * against the sharer's prefix; the control just passes the space
+   * through. Defaults to the caller's own space.
+   */
+  space?: Space;
   /** Called after a successful upload so the listing can refresh. */
   onUploaded: () => void;
   /** Called when the session expires mid-upload (re-prompts sign-in). */
@@ -74,11 +81,12 @@ function putFile(
  * Upload control: file picker, progress indicator, success/error feedback
  * and the overwrite confirmation dialog.
  *
- * @param props - folder, refresh callback and optional session-expiry hook
+ * @param props - folder, space, refresh callback and optional session-expiry hook
  * @returns the upload control element
  */
 export function UploadControl({
   folder,
+  space = "own",
   onUploaded,
   onSessionExpired,
 }: UploadControlProps) {
@@ -99,7 +107,7 @@ export function UploadControl({
     setState({ kind: "uploading", fileName: file.name, progress: 0 });
     let url: string;
     try {
-      const response = await postUploadUrl(folder, file.name, overwrite);
+      const response = await postUploadUrl(folder, file.name, overwrite, space);
       url = response.url;
     } catch (error) {
       const apiError = error as ApiClientError;

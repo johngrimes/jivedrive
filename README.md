@@ -12,6 +12,8 @@ accounts. Authentication is WebAuthn passkeys only - no passwords.
   Kubernetes PVC; object storage over the S3 API.
 - Deployable on Kubernetes via the Helm chart in
   [`deploy/helm/jivedrive/`](deploy/helm/jivedrive/).
+- Persistent user-to-user folder sharing: full read/write access to a
+  folder, mounts labelled with the sharer, revocable at any time.
 
 ## Local development
 

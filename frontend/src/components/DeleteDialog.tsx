@@ -13,12 +13,18 @@
 import { useState } from "react";
 import { TrashIcon, XIcon } from "@primer/octicons-react";
 import { deleteFile } from "../api/client";
-import type { ApiClientError, FileEntry } from "../api/client";
+import type { ApiClientError, FileEntry, Space } from "../api/client";
 
 /** Props for {@link DeleteDialog}. */
 export interface DeleteDialogProps {
   /** The file being deleted. */
   file: FileEntry;
+  /**
+   * The space the file lives in: `own` or `shared:<shareId>`. The file
+   * key is mount-relative in a shared space (R2); the server composes the
+   * sharer's full key. Defaults to the caller's own space.
+   */
+  space?: Space;
   /** Called after a successful delete so the listing can refresh. */
   onDeleted: () => void;
   /** Close the dialog without further action. */
@@ -28,10 +34,15 @@ export interface DeleteDialogProps {
 /**
  * Delete confirmation dialog.
  *
- * @param props - the file, plus deleted and close callbacks
+ * @param props - the file, the space it lives in, plus callbacks
  * @returns the delete dialog element
  */
-export function DeleteDialog({ file, onDeleted, onClose }: DeleteDialogProps) {
+export function DeleteDialog({
+  file,
+  space = "own",
+  onDeleted,
+  onClose,
+}: DeleteDialogProps) {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,7 +57,7 @@ export function DeleteDialog({ file, onDeleted, onClose }: DeleteDialogProps) {
     setDeleting(true);
     setError(null);
     try {
-      await deleteFile(file.key);
+      await deleteFile(file.key, space);
       onDeleted();
     } catch (err) {
       const apiError = err as ApiClientError;

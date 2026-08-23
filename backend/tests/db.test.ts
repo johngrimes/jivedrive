@@ -8,6 +8,7 @@ import {
   createCredential,
   createInvite,
   createSession,
+  createShare,
   createUser,
   deleteCredential,
   deleteCredentialsByUser,
@@ -15,16 +16,20 @@ import {
   deleteInvite,
   deleteSessionById,
   deleteSessionsByUser,
+  deleteShare,
   deleteUser,
   getCredentialById,
   getInviteByToken,
   getInviteById,
   getSessionByToken,
+  getShareById,
   getUserById,
   getUserByUsername,
   listCredentialsByUser,
   listDiscoverableCredentialsByUser,
   listInvites,
+  listSharesByOwner,
+  listSharesByRecipient,
   listUsers,
   refreshInvite,
   markInviteClaimed,
@@ -706,5 +711,231 @@ describe("sessions", () => {
     expect(getSessionByToken(db, "tok-alice-1")).toBeNull();
     expect(getSessionByToken(db, "tok-alice-2")).toBeNull();
     expect(getSessionByToken(db, "tok-bob-1")).not.toBeNull();
+  });
+});
+
+describe("shares", () => {
+  it("creates a share with generated id, timestamp and normalised folder", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    const share = createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: bob.id,
+      folder: "projects",
+    });
+
+    expect(share.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(share.ownerUserId).toBe(alice.id);
+    expect(share.recipientUserId).toBe(bob.id);
+    expect(share.folder).toBe("projects/");
+    expect(new Date(share.createdAt).getTime()).not.toBeNaN();
+  });
+
+  it("normalises the folder: adds a trailing slash and collapses extras", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    const share = createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: bob.id,
+      folder: "projects//",
+    });
+
+    expect(share.folder).toBe("projects/");
+  });
+
+  it("refuses to share the space root or an empty folder", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+
+    for (const folder of ["", "/", "//"]) {
+      expect(() =>
+        createShare(db, {
+          ownerUserId: alice.id,
+          recipientUserId: bob.id,
+          folder,
+        }),
+      ).toThrow();
+    }
+  });
+
+  it("refuses unsafe folders: leading slash or .. segments", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+
+    for (const folder of [
+      "/projects",
+      "projects/../x",
+      "../bob",
+      "a/../../b",
+    ]) {
+      expect(() =>
+        createShare(db, {
+          ownerUserId: alice.id,
+          recipientUserId: bob.id,
+          folder,
+        }),
+      ).toThrow();
+    }
+  });
+
+  it("rejects a duplicate share for the same owner, recipient and folder", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: bob.id,
+      folder: "projects/",
+    });
+
+    // Same folder under a different spelling still collides after normalisation.
+    expect(() =>
+      createShare(db, {
+        ownerUserId: alice.id,
+        recipientUserId: bob.id,
+        folder: "projects",
+      }),
+    ).toThrow();
+
+    // A different folder for the same pair is allowed.
+    const other = createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: bob.id,
+      folder: "docs",
+    });
+    expect(other.folder).toBe("docs/");
+  });
+
+  it("lists a recipient's incoming shares ordered by creation time", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    const carol = seedUser(db, { username: "carol" });
+    const first = createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: bob.id,
+      folder: "projects",
+      createdAt: "2026-08-01T00:00:00.000Z",
+    });
+    const second = createShare(db, {
+      ownerUserId: carol.id,
+      recipientUserId: bob.id,
+      folder: "docs",
+      createdAt: "2026-08-02T00:00:00.000Z",
+    });
+    // A share granted to someone else must not appear in bob's list.
+    createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: carol.id,
+      folder: "media",
+      createdAt: "2026-08-03T00:00:00.000Z",
+    });
+
+    const incoming = listSharesByRecipient(db, bob.id);
+    expect(incoming.map((s) => s.id)).toEqual([first.id, second.id]);
+    expect(incoming.map((s) => s.folder)).toEqual(["projects/", "docs/"]);
+  });
+
+  it("lists an owner's outgoing shares ordered by creation time", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    const carol = seedUser(db, { username: "carol" });
+    const first = createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: bob.id,
+      folder: "projects",
+      createdAt: "2026-08-01T00:00:00.000Z",
+    });
+    const second = createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: carol.id,
+      folder: "docs",
+      createdAt: "2026-08-02T00:00:00.000Z",
+    });
+    // A share owned by someone else must not appear in alice's list.
+    createShare(db, {
+      ownerUserId: carol.id,
+      recipientUserId: alice.id,
+      folder: "media",
+      createdAt: "2026-08-03T00:00:00.000Z",
+    });
+
+    const outgoing = listSharesByOwner(db, alice.id);
+    expect(outgoing.map((s) => s.id)).toEqual([first.id, second.id]);
+    expect(outgoing.map((s) => s.folder)).toEqual(["projects/", "docs/"]);
+  });
+
+  it("reads a share by id and returns null when missing", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    const share = createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: bob.id,
+      folder: "projects",
+    });
+
+    expect(getShareById(db, share.id)?.id).toBe(share.id);
+    expect(getShareById(db, share.id)?.folder).toBe("projects/");
+    expect(getShareById(db, "missing")).toBeNull();
+  });
+
+  it("deletes a share", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    const share = createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: bob.id,
+      folder: "projects",
+    });
+
+    deleteShare(db, share.id);
+
+    expect(getShareById(db, share.id)).toBeNull();
+    expect(listSharesByOwner(db, alice.id)).toEqual([]);
+    expect(listSharesByRecipient(db, bob.id)).toEqual([]);
+  });
+
+  it("cascades share deletion when either user is deleted (T003)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    const carol = seedUser(db, { username: "carol" });
+
+    // alice shares projects with bob; bob shares docs with alice; carol's
+    // share with alice involves neither deleted user.
+    const aliceToBob = createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: bob.id,
+      folder: "projects",
+    });
+    const bobToAlice = createShare(db, {
+      ownerUserId: bob.id,
+      recipientUserId: alice.id,
+      folder: "docs",
+    });
+    const carolToAlice = createShare(db, {
+      ownerUserId: carol.id,
+      recipientUserId: alice.id,
+      folder: "media",
+    });
+
+    deleteUser(db, bob.id);
+
+    // bob's outgoing and incoming shares are gone in both directions.
+    expect(getShareById(db, aliceToBob.id)).toBeNull();
+    expect(getShareById(db, bobToAlice.id)).toBeNull();
+    // Shares not involving bob survive.
+    expect(getShareById(db, carolToAlice.id)).not.toBeNull();
+    expect(listSharesByOwner(db, alice.id)).toEqual([]);
+    expect(listSharesByRecipient(db, alice.id).map((s) => s.id)).toEqual([
+      carolToAlice.id,
+    ]);
   });
 });

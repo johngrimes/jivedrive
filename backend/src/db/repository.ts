@@ -66,6 +66,19 @@ export interface Session {
   lastUsedAt: string;
 }
 
+/** A persistent grant of full read/write access to one folder. */
+export interface Share {
+  id: string;
+  /** User whose folder is shared. */
+  ownerUserId: string;
+  /** User who receives access. */
+  recipientUserId: string;
+  /** Relative to the owner's prefix, normalised with a trailing "/". */
+  folder: string;
+  /** ISO 8601 timestamp. */
+  createdAt: string;
+}
+
 /** Input for {@link createUser}. */
 export interface CreateUserInput {
   id?: string;
@@ -116,6 +129,16 @@ export interface CreateSessionInput {
   expiresAt: string;
 }
 
+/** Input for {@link createShare}. */
+export interface CreateShareInput {
+  id?: string;
+  ownerUserId: string;
+  recipientUserId: string;
+  /** Relative subfolder; must not be the space root or contain "..". */
+  folder: string;
+  createdAt?: string;
+}
+
 interface UserRow {
   id: string;
   username: string;
@@ -160,6 +183,14 @@ interface SessionRow {
   lastUsedAt: string | null;
 }
 
+interface ShareRow {
+  id: string;
+  ownerUserId: string;
+  recipientUserId: string;
+  folder: string;
+  createdAt: string;
+}
+
 function mapUserRow(row: UserRow): User {
   return { ...row, isAdmin: row.isAdmin === 1 };
 }
@@ -183,6 +214,10 @@ function mapSessionRow(row: SessionRow): Session {
     // allowance: treat it as createdAt.
     lastUsedAt: row.lastUsedAt ?? row.createdAt,
   };
+}
+
+function mapShareRow(row: ShareRow): Share {
+  return { ...row };
 }
 
 /**
@@ -690,4 +725,124 @@ export function updateSessionLastUsed(
  */
 export function deleteSessionsByUser(db: Database, userId: string): void {
   db.query("DELETE FROM sessions WHERE userId = ?").run(userId);
+}
+/**
+ * Create a share, normalising and validating the folder.
+ *
+ * @param db - database connection
+ * @param input - share fields (id and createdAt default to generated values)
+ * @returns the stored share
+ * @throws {Error} when the folder is the space root or contains a ".."
+ *   segment, or when the (owner, recipient, folder) triple already exists
+ *   (SQLite UNIQUE constraint error, mapped to 409 by the route)
+ */
+export function createShare(db: Database, input: CreateShareInput): Share {
+  const folder = normalizePrefix(input.folder);
+  if (folder === "") {
+    throw new Error("Cannot share the space root: folder must be a subfolder");
+  }
+  const id = input.id ?? randomUUID();
+  const createdAt = input.createdAt ?? new Date().toISOString();
+  db.query(
+    "INSERT INTO shares (id, ownerUserId, recipientUserId, folder, createdAt) VALUES (?, ?, ?, ?, ?)",
+  ).run(id, input.ownerUserId, input.recipientUserId, folder, createdAt);
+  return {
+    id,
+    ownerUserId: input.ownerUserId,
+    recipientUserId: input.recipientUserId,
+    folder,
+    createdAt,
+  };
+}
+
+/**
+ * @param db - database connection
+ * @param recipientUserId - id of the receiving user
+ * @returns all shares granted to the recipient, oldest first
+ */
+export function listSharesByRecipient(
+  db: Database,
+  recipientUserId: string,
+): Share[] {
+  const rows = db
+    .query(
+      "SELECT * FROM shares WHERE recipientUserId = ? ORDER BY createdAt ASC, rowid ASC",
+    )
+    .all(recipientUserId) as ShareRow[];
+  return rows.map(mapShareRow);
+}
+
+/**
+ * @param db - database connection
+ * @param ownerUserId - id of the sharing user
+ * @returns all shares granted by the owner, oldest first
+ */
+export function listSharesByOwner(db: Database, ownerUserId: string): Share[] {
+  const rows = db
+    .query(
+      "SELECT * FROM shares WHERE ownerUserId = ? ORDER BY createdAt ASC, rowid ASC",
+    )
+    .all(ownerUserId) as ShareRow[];
+  return rows.map(mapShareRow);
+}
+
+/**
+ * @param db - database connection
+ * @param id - share id
+ * @returns the share or null
+ */
+export function getShareById(db: Database, id: string): Share | null {
+  const row = db.query("SELECT * FROM shares WHERE id = ?").get(id) as
+    ShareRow | undefined;
+  return row ? mapShareRow(row) : null;
+}
+
+/**
+ * Delete a share (owner-only revocation).
+ *
+ * @param db - database connection
+ * @param id - share id
+ */
+export function deleteShare(db: Database, id: string): void {
+  db.query("DELETE FROM shares WHERE id = ?").run(id);
+}
+
+/** Identity-only view of a user, for the share recipient picker (FR-006). */
+export interface UserSummary {
+  id: string;
+  username: string;
+}
+
+interface UserSummaryRow {
+  id: string;
+  username: string;
+}
+
+/**
+ * Search users by case-insensitive username substring, excluding the
+ * caller, ordered by username and capped at `limit` results (R4).
+ *
+ * `instr(lower(username), lower(?)) > 0` is a plain substring test that
+ * avoids LIKE wildcard escaping entirely; usernames are restricted to
+ * `[a-z0-9._-]` by {@link validateUsername}, so SQLite's ASCII `lower()`
+ * is exact.
+ *
+ * @param db - database connection
+ * @param query - the username substring to match
+ * @param excludeUserId - the caller's id; never returned
+ * @param limit - maximum results, defaults to 20
+ * @returns matching users as identity-only summaries
+ */
+export function searchUsers(
+  db: Database,
+  query: string,
+  excludeUserId: string,
+  limit = 20,
+): UserSummary[] {
+  const rows = db
+    .query(
+      "SELECT id, username FROM users WHERE id != ? AND instr(lower(username), lower(?)) > 0 ORDER BY username ASC LIMIT ?",
+    )
+    .all(excludeUserId, query, limit) as UserSummaryRow[];
+  return rows.map((row) => ({ id: row.id, username: row.username }));
 }
