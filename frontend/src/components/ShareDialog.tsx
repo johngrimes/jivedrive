@@ -174,7 +174,7 @@ export function ShareDialog({
         </h2>
 
         <div className="mt-4">
-          <label className="label" htmlFor="share-recipient-search">
+          <label className="label mb-2" htmlFor="share-recipient-search">
             <span className="label-text">Search users</span>
           </label>
           <input
@@ -226,7 +226,7 @@ export function ShareDialog({
         </div>
 
         <div className="mt-4">
-          <h3 className="label-text font-semibold">Recipients</h3>
+          <h3 className="label-text font-semibold mb-2">Recipients</h3>
           {folderShares.length === 0 ? (
             <p className="text-sm opacity-70" role="status">
               No recipients yet. Search for a user above to share this folder.
@@ -288,7 +288,7 @@ export function ShareDialog({
           </button>
         </div>
 
-        <p className="text-xs opacity-70">
+        <p className="text-xs opacity-70 mt-4">
           Recipients get full read/write access to this folder until you revoke
           it.
         </p>
