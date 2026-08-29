@@ -52,6 +52,10 @@ export interface AppConfig {
   sessionTtlDays: number;
   /** Session idle timeout in days (rolling lastUsedAt clock). */
   sessionIdleDays: number;
+  /** Seconds between background search-index scans of each user's space. */
+  searchScanIntervalSeconds: number;
+  /** Maximum object size, in bytes, eligible for content extraction. */
+  searchIndexMaxBytes: number;
   /** Per-client-identity rate limits by route family. */
   rateLimit: {
     /** Maximum requests per minute for /auth/*. */
@@ -162,6 +166,17 @@ export function loadConfig(
   const sessionIdleDays = parseIntPositive(
     env.JIVEDRIVE_SESSION_IDLE_DAYS ?? "7",
     "JIVEDRIVE_SESSION_IDLE_DAYS",
+    errors,
+  );
+
+  const searchScanIntervalSeconds = parseIntPositive(
+    env.JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS ?? "3600",
+    "JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS",
+    errors,
+  );
+  const searchIndexMaxBytes = parseIntPositive(
+    env.JIVEDRIVE_SEARCH_INDEX_MAX_BYTES ?? "10485760",
+    "JIVEDRIVE_SEARCH_INDEX_MAX_BYTES",
     errors,
   );
 
@@ -317,6 +332,8 @@ export function loadConfig(
       env.JIVEDRIVE_MIGRATIONS_DIR ?? resolve(process.cwd(), "migrations"),
     sessionTtlDays: sessionTtlDays as number,
     sessionIdleDays: sessionIdleDays as number,
+    searchScanIntervalSeconds: searchScanIntervalSeconds as number,
+    searchIndexMaxBytes: searchIndexMaxBytes as number,
     rateLimit: {
       authPerMinute: authPerMinute as number,
       authBurst: authBurst as number,

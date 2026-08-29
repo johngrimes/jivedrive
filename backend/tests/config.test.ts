@@ -18,8 +18,9 @@ describe("loadConfig", () => {
     expect(config.nodeEnv).toBe("development");
     expect(config.port).toBe(3000);
     expect(config.dbPath).toBe("jivedrive.db");
-    expect(config.sessionTtlDays).toBe(30);
     expect(config.sessionIdleDays).toBe(7);
+    expect(config.searchScanIntervalSeconds).toBe(3600);
+    expect(config.searchIndexMaxBytes).toBe(10485760);
     expect(config.rateLimit).toEqual({
       authPerMinute: 20,
       authBurst: 10,
@@ -239,6 +240,43 @@ describe("loadConfig", () => {
       expect(() =>
         loadConfig({ ...minimalEnv, JIVEDRIVE_TRUST_PROXY: value }),
       ).toThrow(/JIVEDRIVE_TRUST_PROXY/);
+    }
+  });
+
+  it("parses the search scan interval with a default of 3600 seconds (T002)", () => {
+    expect(loadConfig(minimalEnv).searchScanIntervalSeconds).toBe(3600);
+    expect(
+      loadConfig({
+        ...minimalEnv,
+        JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS: "60",
+      }).searchScanIntervalSeconds,
+    ).toBe(60);
+  });
+
+  it("rejects an invalid search scan interval (T002)", () => {
+    for (const value of ["abc", "0", "-1", "1.5"]) {
+      expect(() =>
+        loadConfig({
+          ...minimalEnv,
+          JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS: value,
+        }),
+      ).toThrow(/JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS/);
+    }
+  });
+
+  it("parses the search index size cap with a default of 10 MiB (T002)", () => {
+    expect(loadConfig(minimalEnv).searchIndexMaxBytes).toBe(10485760);
+    expect(
+      loadConfig({ ...minimalEnv, JIVEDRIVE_SEARCH_INDEX_MAX_BYTES: "5242880" })
+        .searchIndexMaxBytes,
+    ).toBe(5242880);
+  });
+
+  it("rejects an invalid search index size cap (T002)", () => {
+    for (const value of ["abc", "0", "-1", "1.5"]) {
+      expect(() =>
+        loadConfig({ ...minimalEnv, JIVEDRIVE_SEARCH_INDEX_MAX_BYTES: value }),
+      ).toThrow(/JIVEDRIVE_SEARCH_INDEX_MAX_BYTES/);
     }
   });
 

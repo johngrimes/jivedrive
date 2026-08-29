@@ -54,6 +54,10 @@ jivedrive:
     JIVEDRIVE_RATE_LIMIT_AUTH_BURST: "10"
     JIVEDRIVE_RATE_LIMIT_FILES_PER_MINUTE: "300"
     JIVEDRIVE_RATE_LIMIT_FILES_BURST: "100"
+    # Background search indexing: seconds between per-user space scans and
+    # the maximum object size (bytes) eligible for content extraction.
+    JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS: "3600"
+    JIVEDRIVE_SEARCH_INDEX_MAX_BYTES: "10485760"
     # TLS is terminated in front of the service, which sets X-Forwarded-For;
     # trusting it lets the rate limiter key on the real client address.
     JIVEDRIVE_TRUST_PROXY: "true"

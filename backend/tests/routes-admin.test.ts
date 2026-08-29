@@ -38,6 +38,8 @@ const config: AppConfig = {
   migrationsDir,
   sessionTtlDays: 30,
   sessionIdleDays: 7,
+  searchScanIntervalSeconds: 3600,
+  searchIndexMaxBytes: 10485760,
   rateLimit: {
     authPerMinute: 20,
     authBurst: 10,
