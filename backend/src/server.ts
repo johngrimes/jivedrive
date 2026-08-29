@@ -24,6 +24,8 @@ import { adminRoutes } from "./routes/admin";
 import { sharesRoutes } from "./routes/shares";
 import { usersRoutes } from "./routes/users";
 import { createS3Client } from "./s3/client";
+import { startScanScheduler } from "./search/scheduler";
+import type { ScanSchedulerHandle } from "./search/scheduler";
 import {
   createRateLimitMiddleware,
   createRateLimitStore,
@@ -263,6 +265,30 @@ export function getUser(c: Context<ServerEnv>): User {
 }
 
 /**
+ * Start the background search-index scheduler over every user's space at
+ * the configured interval (FR-007). The S3 client is injectable so tests
+ * and the e2e server can substitute a stub or mock; production builds one
+ * from the config.
+ *
+ * @param config - application configuration (interval + size cap)
+ * @param db - open, migrated database connection
+ * @param client - S3 client; defaults to one built from the config
+ * @returns a handle to stop the scheduler (or observe in-flight scans)
+ */
+export function startSearchIndexer(
+  config: AppConfig,
+  db: Database,
+  client: S3Client = createS3Client(config.s3),
+): ScanSchedulerHandle {
+  return startScanScheduler({
+    client,
+    db,
+    intervalSeconds: config.searchScanIntervalSeconds,
+    maxBytes: config.searchIndexMaxBytes,
+  });
+}
+
+/**
  * Load configuration, open and migrate the database, and start the server.
  * Runs when this module is the entry point.
  */
@@ -276,6 +302,9 @@ export function main(): void {
   sweepExpiredSessions(db, undefined, config.sessionIdleDays);
   const app = createApp({ config, db });
   Bun.serve({ port: config.port, fetch: app.fetch });
+  // FR-007: the background scan loop reconciles every user's search
+  // index; the process lifetime is its lifetime, so nothing stops it.
+  startSearchIndexer(config, db);
   console.log(`JiveDrive listening on http://localhost:${config.port}`);
 }
 

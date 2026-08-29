@@ -364,6 +364,10 @@ export function countAdmins(db: Database): number {
  * @param id - user id
  */
 export function deleteUser(db: Database, id: string): void {
+  // FR-014: the FTS table has no userId column or foreign key, so its
+  // rows must be removed by a rowid join before the cascade deletes the
+  // search_index rows they pair with.
+  deleteSearchIndexByUser(db, id);
   db.query("DELETE FROM users WHERE id = ?").run(id);
 }
 
@@ -845,4 +849,181 @@ export function searchUsers(
     )
     .all(excludeUserId, query, limit) as UserSummaryRow[];
   return rows.map((row) => ({ id: row.id, username: row.username }));
+}
+
+/** One indexed object's bookkeeping row plus its FTS rowid. */
+export interface SearchIndexEntry {
+  userId: string;
+  key: string;
+  etag: string;
+  size: number;
+  /** ISO 8601 timestamp of the last successful extraction pass. */
+  indexedAt: string;
+  /** Implicit rowid shared with the search_docs FTS row. */
+  rowid: number;
+}
+
+/** Input for {@link upsertSearchDoc}. */
+export interface UpsertSearchDocInput {
+  userId: string;
+  key: string;
+  etag: string;
+  size: number;
+  /** Base name of the object (after the last "/"). */
+  fileName: string;
+  /** Extracted text; empty string for name-only files. */
+  body: string;
+}
+
+/** The extracted document of one indexed object. */
+export interface SearchDoc {
+  fileName: string;
+  body: string;
+}
+
+interface SearchIndexRow {
+  rowid: number;
+  userId: string;
+  key: string;
+  etag: string;
+  size: number;
+  indexedAt: string;
+}
+
+function mapSearchIndexRow(row: SearchIndexRow): SearchIndexEntry {
+  return {
+    userId: row.userId,
+    key: row.key,
+    etag: row.etag,
+    size: row.size,
+    indexedAt: row.indexedAt,
+    rowid: row.rowid,
+  };
+}
+
+/**
+ * Insert or replace both rows of one indexed object (007-file-search):
+ * the search_index bookkeeping row and the search_docs FTS row sharing
+ * its rowid. Re-upserting the same (userId, key) replaces the stored
+ * fingerprint (etag, size) and the extracted text together, so a changed
+ * object never leaves stale text behind (FR-007).
+ *
+ * @param db - database connection
+ * @param input - the object's fingerprint and extracted document
+ * @returns the stored index entry including the FTS rowid
+ */
+export function upsertSearchDoc(
+  db: Database,
+  input: UpsertSearchDocInput,
+): SearchIndexEntry {
+  const upsert = db.transaction((): SearchIndexEntry => {
+    removeSearchDoc(db, input.userId, input.key);
+    const indexedAt = new Date().toISOString();
+    const changes = db
+      .query(
+        "INSERT INTO search_index (userId, key, etag, size, indexedAt) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(input.userId, input.key, input.etag, input.size, indexedAt);
+    const rowid = Number(changes.lastInsertRowid);
+    db.query(
+      "INSERT INTO search_docs (rowid, fileName, body) VALUES (?, ?, ?)",
+    ).run(rowid, input.fileName, input.body);
+    return {
+      userId: input.userId,
+      key: input.key,
+      etag: input.etag,
+      size: input.size,
+      indexedAt,
+      rowid,
+    };
+  });
+  return upsert();
+}
+
+/**
+ * Delete both rows of one indexed object: the FTS row (via the shared
+ * rowid) and the search_index bookkeeping row. Removing an absent key is
+ * a no-op.
+ *
+ * @param db - database connection
+ * @param userId - owner of the space the object lives in
+ * @param key - full object key including the user's storage prefix
+ */
+export function removeSearchDoc(
+  db: Database,
+  userId: string,
+  key: string,
+): void {
+  const remove = db.transaction(() => {
+    const row = db
+      .query("SELECT rowid FROM search_index WHERE userId = ? AND key = ?")
+      .get(userId, key) as { rowid: number } | null;
+    if (row) {
+      db.query("DELETE FROM search_docs WHERE rowid = ?").run(row.rowid);
+      db.query("DELETE FROM search_index WHERE rowid = ?").run(row.rowid);
+    }
+  });
+  remove();
+}
+
+/**
+ * Delete every index and FTS row for one user (FR-014). The FTS rows
+ * must be removed by a rowid join *before* the user (or their
+ * search_index rows) disappears, because the FTS table has no userId
+ * column and no foreign key — {@link deleteUser} calls this ahead of the
+ * cascade.
+ *
+ * @param db - database connection
+ * @param userId - id of the user whose index rows are removed
+ */
+export function deleteSearchIndexByUser(db: Database, userId: string): void {
+  const remove = db.transaction(() => {
+    db.query(
+      "DELETE FROM search_docs WHERE rowid IN (SELECT rowid FROM search_index WHERE userId = ?)",
+    ).run(userId);
+    db.query("DELETE FROM search_index WHERE userId = ?").run(userId);
+  });
+  remove();
+}
+
+/**
+ * List every index row of one user's space (the scan's diff input):
+ * key → etag/size fingerprints for change detection (R-004).
+ *
+ * @param db - database connection
+ * @param userId - owner of the space
+ * @returns all index entries for the user, unordered
+ */
+export function listSearchIndex(
+  db: Database,
+  userId: string,
+): SearchIndexEntry[] {
+  const rows = db
+    .query(
+      "SELECT rowid, userId, key, etag, size, indexedAt FROM search_index WHERE userId = ?",
+    )
+    .all(userId) as SearchIndexRow[];
+  return rows.map(mapSearchIndexRow);
+}
+
+/**
+ * Read the extracted document of one indexed object (joined back through
+ * the shared rowid). Null when the object is not indexed.
+ *
+ * @param db - database connection
+ * @param userId - owner of the space the object lives in
+ * @param key - full object key including the user's storage prefix
+ * @returns the document, or null when absent
+ */
+export function getSearchDoc(
+  db: Database,
+  userId: string,
+  key: string,
+): SearchDoc | null {
+  const row = db
+    .query(
+      "SELECT d.fileName AS fileName, d.body AS body FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ? AND i.key = ?",
+    )
+    .get(userId, key) as SearchDoc | null;
+  return row ?? null;
 }

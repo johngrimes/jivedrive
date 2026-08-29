@@ -16,7 +16,7 @@ import type { S3Client } from "@aws-sdk/client-s3";
 import { loadConfig } from "./config";
 import { migrateFromDir, openDatabase } from "./db/migrate";
 import { createInvite, createUser } from "./db/repository";
-import { createApp } from "./server";
+import { createApp, startSearchIndexer } from "./server";
 import { createS3Client } from "./s3/client";
 import { createSession } from "./auth/sessions";
 
@@ -226,6 +226,10 @@ const env: Record<string, string | undefined> = {
     process.env.JIVEDRIVE_RATE_LIMIT_FILES_PER_MINUTE ?? "100000",
   JIVEDRIVE_RATE_LIMIT_FILES_BURST:
     process.env.JIVEDRIVE_RATE_LIMIT_FILES_BURST ?? "10000",
+  // A short scan interval so the e2e specs can poll for indexed search
+  // results deterministically (T007; R-010). Overridable like the rest.
+  JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS:
+    process.env.JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS ?? "2",
 };
 
 const config = loadConfig(env);
@@ -490,6 +494,9 @@ const app = createApp({
 });
 
 Bun.serve({ port: config.port, fetch: app.fetch });
+// T007: run the search-index scan loop against the mock S3 client so
+// seeded and uploaded objects become searchable within one interval.
+startSearchIndexer(config, db, createMockS3Client());
 console.log(
   `E2E JiveDrive listening on http://localhost:${config.port} (db + mock S3 seeded)`,
 );

@@ -1,5 +1,6 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from "bun:test";
 import type { Database } from "bun:sqlite";
+import type { S3Client } from "@aws-sdk/client-s3";
 import { Hono } from "hono";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +9,13 @@ import { fileURLToPath } from "node:url";
 import { migrateFromDir, openDatabase } from "../src/db/migrate";
 import { createUser } from "../src/db/repository";
 import { createSession, sessionCookie } from "../src/auth/sessions";
-import { createApp, errorHandler, getUser, requireUser } from "../src/server";
+import {
+  createApp,
+  errorHandler,
+  getUser,
+  requireUser,
+  startSearchIndexer,
+} from "../src/server";
 import type { ServerEnv } from "../src/server";
 import { createSecurityHeadersMiddleware } from "../src/security/headers";
 import type { AppConfig } from "../src/config";
@@ -408,5 +415,74 @@ describe("strict transport security (US4)", () => {
     expect(res.headers.get("strict-transport-security")).toBe(
       "max-age=31536000; includeSubDomains",
     );
+  });
+});
+
+describe("search scan scheduler (T007)", () => {
+  /** A stub S3 client serving one listing from an in-memory space. */
+  function stubClient(
+    objects: Array<{ key: string; etag: string; size: number }>,
+  ): {
+    client: S3Client;
+    calls: Array<{ name: string; input: Record<string, unknown> }>;
+  } {
+    const calls: Array<{ name: string; input: Record<string, unknown> }> = [];
+    const client = {
+      async send(command: unknown): Promise<unknown> {
+        const name = (command as { constructor: { name: string } }).constructor
+          .name;
+        const input = (command as { input: Record<string, unknown> }).input ??
+          {};
+        calls.push({ name, input });
+        if (name === "ListObjectsV2Command") {
+          const prefix = (input.Prefix as string) ?? "";
+          return {
+            Contents: objects
+              .filter((o) => o.key.startsWith(prefix))
+              .map((o) => ({
+                Key: o.key,
+                ETag: o.etag,
+                Size: o.size,
+                LastModified: new Date(0),
+              })),
+            IsTruncated: false,
+          };
+        }
+        return { Body: "body" };
+      },
+    } as unknown as S3Client;
+    return { client, calls };
+  }
+
+  it("server initialisation registers the scheduler at the configured interval", async () => {
+    const db = createDb();
+    createUser(db, {
+      username: "alice",
+      bucket: "jivedrive-prod",
+      prefix: "users/alice/",
+    });
+    const { client, calls } = stubClient([
+      { key: "users/alice/a.txt", etag: '"a"', size: 4 },
+    ]);
+    const scanConfig: AppConfig = {
+      ...config,
+      searchScanIntervalSeconds: 1,
+    };
+
+    jest.useFakeTimers();
+    try {
+      const scheduler = startSearchIndexer(scanConfig, db, client);
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // The bootstrap scan runs at startup, then again each interval.
+      expect(calls.some((c) => c.name === "ListObjectsV2Command")).toBe(true);
+      const callsAfterBootstrap = calls.length;
+      jest.advanceTimersByTime(1000);
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(calls.length).toBeGreaterThan(callsAfterBootstrap);
+      scheduler.stop();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

@@ -21,6 +21,7 @@ import {
   getCredentialById,
   getInviteByToken,
   getInviteById,
+  getSearchDoc,
   getSessionByToken,
   getShareById,
   getUserById,
@@ -28,14 +29,17 @@ import {
   listCredentialsByUser,
   listDiscoverableCredentialsByUser,
   listInvites,
+  listSearchIndex,
   listSharesByOwner,
   listSharesByRecipient,
   listUsers,
   refreshInvite,
   markInviteClaimed,
   normalizePrefix,
+  removeSearchDoc,
   updateCredentialCounter,
   updateSessionLastUsed,
+  upsertSearchDoc,
 } from "../src/db/repository";
 
 const migrationsDir = fileURLToPath(new URL("../migrations", import.meta.url));
@@ -937,5 +941,227 @@ describe("shares", () => {
     expect(listSharesByRecipient(db, alice.id).map((s) => s.id)).toEqual([
       carolToAlice.id,
     ]);
+  });
+});
+
+describe("search index", () => {
+  /** Read a raw search_docs row (rowid, fileName, body) by rowid. */
+  function rawDoc(db: Database, rowid: number) {
+    return db
+      .query("SELECT rowid, fileName, body FROM search_docs WHERE rowid = ?")
+      .get(rowid) as
+      | { rowid: number; fileName: string; body: string }
+      | null;
+  }
+
+  it("upserts a new document into search_index and search_docs (T004)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+
+    const entry = upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/docs/notes.txt",
+      etag: '"abc123"',
+      size: 64,
+      fileName: "notes.txt",
+      body: "hello from notes",
+    });
+
+    expect(entry.userId).toBe(alice.id);
+    expect(entry.key).toBe("users/alice/docs/notes.txt");
+    expect(entry.etag).toBe('"abc123"');
+    expect(entry.size).toBe(64);
+    expect(new Date(entry.indexedAt).getTime()).not.toBeNaN();
+
+    // The FTS row shares the search_index row's implicit rowid.
+    const doc = rawDoc(db, entry.rowid);
+    expect(doc).toEqual({
+      rowid: entry.rowid,
+      fileName: "notes.txt",
+      body: "hello from notes",
+    });
+  });
+
+  it("replaces both rows on re-upsert of the same key (T004)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/report.pdf",
+      etag: '"v1"',
+      size: 10,
+      fileName: "report.pdf",
+      body: "old text",
+    });
+
+    const second = upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/report.pdf",
+      etag: '"v2"',
+      size: 20,
+      fileName: "report.pdf",
+      body: "new text",
+    });
+
+    // One bookkeeping row with the new fingerprint; the FTS table holds
+    // exactly one row carrying the new text (SQLite may legitimately
+    // reuse the freed rowid, so count rows rather than compare rowids).
+    expect(listSearchIndex(db, alice.id)).toHaveLength(1);
+    expect(second.etag).toBe('"v2"');
+    expect(second.size).toBe(20);
+    expect(
+      db.query("SELECT COUNT(*) AS n FROM search_docs").get() as {
+        n: number;
+      },
+    ).toEqual({ n: 1 });
+    expect(rawDoc(db, second.rowid)).toEqual({
+      rowid: second.rowid,
+      fileName: "report.pdf",
+      body: "new text",
+    });
+  });
+
+  it("upserts a name-only document with an empty body (T004)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+
+    const entry = upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/big.zip",
+      etag: '"big"',
+      size: 99_000_000,
+      fileName: "big.zip",
+      body: "",
+    });
+
+    expect(entry.size).toBe(99_000_000);
+    expect(rawDoc(db, entry.rowid)).toEqual({
+      rowid: entry.rowid,
+      fileName: "big.zip",
+      body: "",
+    });
+  });
+
+  it("lists index rows for a user only (T004)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/a.txt",
+      etag: '"a"',
+      size: 1,
+      fileName: "a.txt",
+      body: "a",
+    });
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/b/c.txt",
+      etag: '"c"',
+      size: 3,
+      fileName: "c.txt",
+      body: "",
+    });
+    upsertSearchDoc(db, {
+      userId: bob.id,
+      key: "users/bob/b.txt",
+      etag: '"b"',
+      size: 2,
+      fileName: "b.txt",
+      body: "b",
+    });
+
+    const rows = listSearchIndex(db, alice.id);
+    expect(rows.map((row) => row.key).sort()).toEqual([
+      "users/alice/a.txt",
+      "users/alice/b/c.txt",
+    ]);
+    expect(rows.every((row) => row.userId === alice.id)).toBe(true);
+    expect(rows.every((row) => "indexedAt" in row)).toBe(true);
+  });
+
+  it("removes both rows by userId and key (T004)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const entry = upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/gone.txt",
+      etag: '"g"',
+      size: 1,
+      fileName: "gone.txt",
+      body: "text",
+    });
+
+    removeSearchDoc(db, alice.id, "users/alice/gone.txt");
+
+    expect(listSearchIndex(db, alice.id)).toEqual([]);
+    expect(rawDoc(db, entry.rowid)).toBeNull();
+    expect(getSearchDoc(db, alice.id, "users/alice/gone.txt")).toBeNull();
+    // Removing an absent key is a no-op.
+    expect(() =>
+      removeSearchDoc(db, alice.id, "users/alice/absent.txt"),
+    ).not.toThrow();
+  });
+
+  it("returns the doc body via getSearchDoc (T004)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/a.txt",
+      etag: '"a"',
+      size: 1,
+      fileName: "a.txt",
+      body: "some words",
+    });
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/name-only.bin",
+      etag: '"n"',
+      size: 2,
+      fileName: "name-only.bin",
+      body: "",
+    });
+
+    expect(getSearchDoc(db, alice.id, "users/alice/a.txt")).toEqual({
+      fileName: "a.txt",
+      body: "some words",
+    });
+    expect(getSearchDoc(db, alice.id, "users/alice/name-only.bin")).toEqual({
+      fileName: "name-only.bin",
+      body: "",
+    });
+    expect(getSearchDoc(db, alice.id, "users/alice/absent.txt")).toBeNull();
+  });
+
+  it("deletes the user's index and FTS rows on account deletion (T004)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    const entry = upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/a.txt",
+      etag: '"a"',
+      size: 1,
+      fileName: "a.txt",
+      body: "text",
+    });
+    upsertSearchDoc(db, {
+      userId: bob.id,
+      key: "users/bob/b.txt",
+      etag: '"b"',
+      size: 2,
+      fileName: "b.txt",
+      body: "bob text",
+    });
+
+    deleteUser(db, alice.id);
+
+    // Cascade removed the bookkeeping row and no FTS orphan remains.
+    expect(rawDoc(db, entry.rowid)).toBeNull();
+    expect(
+      db.query("SELECT COUNT(*) AS n FROM search_docs").get() as { n: number },
+    ).toEqual({ n: 1 });
   });
 });
