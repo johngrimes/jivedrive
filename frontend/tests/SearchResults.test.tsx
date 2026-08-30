@@ -256,6 +256,9 @@ async function renderFilesPage(
       if (searchDelay > 0) await delay(searchDelay);
       return jsonResponse(searchBody);
     }
+    if (url.startsWith("/api/files/download-url")) {
+      return jsonResponse({ url: "https://storage.test/object" });
+    }
     if (url.startsWith("/api/files")) {
       return jsonResponse({
         folders: ["docs"],
@@ -435,5 +438,108 @@ describe("SearchResults snippet rendering (T015)", () => {
 
     expect(container.querySelector("img")).toBeNull();
     expect(container.textContent).toContain('<img src=x onerror=alert(1)>');
+  });
+});
+
+describe("SearchResults shared results (T020)", () => {
+  /** A result from a folder alice shared with the signed-in user. */
+  const sharedResult: SearchResult = {
+    name: "plan.txt",
+    path: "",
+    key: "plan.txt",
+    space: "shared:share-1",
+    sharedBy: "alice",
+    match: "name",
+  };
+
+  /** Submit the Files page search box for `renderFilesPage` output. */
+  async function submitSearch(container: HTMLElement): Promise<void> {
+    const input = container.querySelector(
+      'input[type="search"]',
+    ) as HTMLInputElement;
+    await act(async () => {
+      typeInput(input, "plan");
+    });
+    const form = container.querySelector('form[role="search"]');
+    await act(async () => {
+      form?.dispatchEvent(new Event("submit", { bubbles: true }));
+    });
+    await flush();
+  }
+
+  it("labels results from a shared mount with the sharer's username", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ results: [sharedResult], capped: false }),
+      ),
+    );
+    const container = renderResults();
+    await flush();
+
+    expect(container.textContent).toContain("Shared by alice");
+  });
+
+  it("does not label own-space results", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ results: [nestedResult], capped: false }),
+        ),
+    );
+    const container = renderResults();
+    await flush();
+
+    expect(container.textContent).not.toContain("Shared by");
+  });
+
+  it("issues the download against the result's shared space", async () => {
+    const { container, fetchMock } = await renderFilesPage({
+      results: [sharedResult],
+      capped: false,
+    });
+    await submitSearch(container);
+
+    const row = container.querySelector("li.list-row") as HTMLElement;
+    await act(async () => {
+      (
+        row.querySelector('button[aria-label="Download plan.txt"]') ??
+        row.querySelector("button")
+      )?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "/api/files/download-url?key=plan.txt&space=shared%3Ashare-1",
+      ),
+      expect.anything(),
+    );
+  });
+
+  it("navigates into the shared space from a result click", async () => {
+    const { container, fetchMock } = await renderFilesPage({
+      results: [{ ...sharedResult, path: "projects", key: "docs/report.pdf" }],
+      capped: false,
+    });
+    await submitSearch(container);
+
+    const link = Array.from(container.querySelectorAll("a")).find((a) =>
+      a.textContent?.includes("plan.txt"),
+    );
+    await act(async () => {
+      link?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    // The listing for the shared space's projects folder replaces the
+    // results (contract routing: /files?space=shared:<id>&prefix=<folder>).
+    const listingCall = fetchMock.mock.calls
+      .map((call) => String(call[0]))
+      .find((url) => url.includes("space=shared%3Ashare-1"));
+    expect(listingCall).toBeDefined();
+    expect(listingCall).toContain("prefix=projects%2F");
+    expect(container.textContent).not.toContain("Name match");
   });
 });

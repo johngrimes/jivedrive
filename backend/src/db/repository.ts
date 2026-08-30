@@ -1035,7 +1035,6 @@ export interface FileNameSearchHit {
   /** Base name of the object (after the last "/"). */
   fileName: string;
 }
-
 /**
  * Find one user's indexed objects whose file name contains the query,
  * case-insensitively (007-file-search, FR-002). Queries of 3+ characters
@@ -1049,6 +1048,9 @@ export interface FileNameSearchHit {
  * @param userId - owner of the space to search
  * @param query - the (already trimmed, non-empty) search query
  * @param limit - maximum number of hits to return
+ * @param keyPrefix - when given, only keys under this prefix match
+ *   (shared-scope search, US3): the prefix is the sharer's effective
+ *   mount prefix, and LIKE wildcards in it stay literal
  * @returns hits in relevance order (FTS rank; name order for LIKE)
  */
 export function searchFileNames(
@@ -1056,23 +1058,30 @@ export function searchFileNames(
   userId: string,
   query: string,
   limit = 50,
+  keyPrefix?: string,
 ): FileNameSearchHit[] {
+  // Shared scopes (US3) constrain hits to the mount prefix; the prefix
+  // is folder text the sharer controls, so LIKE wildcards stay literal.
+  const prefixClause = keyPrefix ? " AND i.key LIKE ? ESCAPE '\\'" : "";
+  const prefixArgs = keyPrefix
+    ? [`${keyPrefix.replace(/([\\%_])/g, "\\$1")}%`]
+    : [];
   if (query.length < 3) {
     // Trigram MATCH sees nothing for 1-2 character queries: fall back to
     // a case-insensitive LIKE (ASCII), with wildcards kept literal.
     const pattern = `%${query.replace(/([\\%_])/g, "\\$1")}%`;
     return db
       .query(
-        "SELECT i.key AS key, d.fileName AS fileName FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ? AND d.fileName LIKE ? ESCAPE '\\' ORDER BY d.fileName LIMIT ?",
+        `SELECT i.key AS key, d.fileName AS fileName FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ?${prefixClause} AND d.fileName LIKE ? ESCAPE '\\' ORDER BY d.fileName LIMIT ?`,
       )
-      .all(userId, pattern, limit) as FileNameSearchHit[];
+      .all(userId, ...prefixArgs, pattern, limit) as FileNameSearchHit[];
   }
   const phrase = `fileName : "${query.replace(/"/g, '""')}"`;
   return db
     .query(
-      "SELECT i.key AS key, d.fileName AS fileName FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ? AND search_docs MATCH ? ORDER BY rank LIMIT ?",
+      `SELECT i.key AS key, d.fileName AS fileName FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ?${prefixClause} AND search_docs MATCH ? ORDER BY rank LIMIT ?`,
     )
-    .all(userId, phrase, limit) as FileNameSearchHit[];
+    .all(userId, ...prefixArgs, phrase, limit) as FileNameSearchHit[];
 }
 
 /** One content match of a search query. */
@@ -1102,6 +1111,8 @@ export interface ContentSearchHit {
  * @param userId - owner of the space to search
  * @param query - the (already trimmed, non-empty) search query
  * @param limit - maximum number of hits to return
+ * @param keyPrefix - when given, only keys under this prefix match
+ *   (shared-scope search, US3); LIKE wildcards in it stay literal
  * @returns hits in relevance order (FTS rank)
  */
 export function searchContent(
@@ -1109,14 +1120,19 @@ export function searchContent(
   userId: string,
   query: string,
   limit = 50,
+  keyPrefix?: string,
 ): ContentSearchHit[] {
   if (query.length < 3) {
     return [];
   }
+  const prefixClause = keyPrefix ? " AND i.key LIKE ? ESCAPE '\\'" : "";
+  const prefixArgs = keyPrefix
+    ? [`${keyPrefix.replace(/([\\%_])/g, "\\$1")}%`]
+    : [];
   const phrase = `body : "${query.replace(/"/g, '""')}"`;
   return db
     .query(
-      "SELECT i.key AS key, d.fileName AS fileName, snippet(search_docs, 1, '<mark>', '</mark>', '…', 64) AS snippet FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ? AND search_docs MATCH ? ORDER BY rank LIMIT ?",
+      `SELECT i.key AS key, d.fileName AS fileName, snippet(search_docs, 1, '<mark>', '</mark>', '…', 64) AS snippet FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ?${prefixClause} AND search_docs MATCH ? ORDER BY rank LIMIT ?`,
     )
-    .all(userId, phrase, limit) as ContentSearchHit[];
+    .all(userId, ...prefixArgs, phrase, limit) as ContentSearchHit[];
 }

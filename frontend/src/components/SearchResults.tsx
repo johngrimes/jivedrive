@@ -24,7 +24,7 @@ export interface SearchResultsProps {
   query: string;
   /** Open the containing folder of a result (restores the listing). */
   onOpenResult: (result: SearchResult) => void;
-  /** Start a download for a result (own-space rows this phase). */
+  /** Start a download for a result, issued against its space. */
   onDownload?: (result: SearchResult) => void;
   /** Open the share modal for a result. */
   onShare?: (result: SearchResult) => void;
@@ -194,6 +194,13 @@ export function SearchResults({
                       <span className="badge badge-ghost badge-sm">
                         {MATCH_LABELS[result.match]}
                       </span>
+                      {/* Shared mounts carry the sharer's label (US3,
+                          FR-010); own-space rows show none. */}
+                      {result.sharedBy && (
+                        <span className="badge badge-secondary badge-sm">
+                          Shared by {result.sharedBy}
+                        </span>
+                      )}
                     </a>
                     {/* The containing folder (FR-003): breadcrumb-style
                         path; "Home" for a file at the space root. */}

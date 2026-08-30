@@ -1,8 +1,13 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { expect, test } from "@playwright/test";
-import { expectNoHorizontalOverflow, expectSignedInAs } from "./helpers";
+import type { BrowserContext, Page } from "@playwright/test";
+import {
+  expectNoHorizontalOverflow,
+  expectSignedInAs,
+  readStream,
+} from "./helpers";
 
 /**
  * File search (007-file-search US1). The e2e server seeds alice's space
@@ -24,7 +29,7 @@ const INDEX_TIMEOUT = 20_000;
  * @param page - the signed-in Files page
  * @param query - the query to type and submit
  */
-async function search(page: import("@playwright/test").Page, query: string) {
+async function search(page: Page, query: string) {
   const box = page.getByRole("searchbox", { name: "Search files" });
   await box.fill(query);
   await box.press("Enter");
@@ -176,4 +181,199 @@ test("content search finds uploaded txt/pdf/docx by phrase with snippets, below 
     await expect(row).toContainText("quarterly budget review");
   }
   await expectNoHorizontalOverflow(page);
+});
+/**
+ * The outgoing share shape returned by GET /api/shares (contract
+ * `ShareOutgoing`), as used by the US3 specs below.
+ */
+interface ShareOutgoingBody {
+  id: string;
+  folderName: string;
+  recipient: { username: string };
+}
+
+/** The response of GET /api/shares. */
+interface ListSharesBody {
+  incoming: unknown[];
+  outgoing: ShareOutgoingBody[];
+}
+
+/**
+ * Sign in as the given pre-seeded user by replacing the session cookie
+ * the beforeEach installed, then open the Files page.
+ *
+ * @param page - the page
+ * @param context - the browser context
+ * @param username - expected header username
+ * @param token - the user's pre-seeded session token
+ */
+async function startSignedInAs(
+  page: Page,
+  context: BrowserContext,
+  username: string,
+  token: string,
+) {
+  await context.addCookies([
+    {
+      name: "jivedrive_session",
+      value: token,
+      domain: "localhost",
+      path: "/",
+    },
+  ]);
+  await page.goto("/files");
+  await expectSignedInAs(page, username);
+}
+
+test.describe.configure({ mode: "serial" });
+
+test("US3: a recipient's search shows the shared label and downloads from the shared space", async ({
+  page,
+  context,
+}) => {
+  // alice shares her docs folder with bob via the API (the mount list is
+  // covered by share-folder.spec; search resolves the share live).
+  await startSignedInAs(page, context, "alice", "browse-session");
+  const shareRes = await page.request.post("/api/shares", {
+    data: { folder: "docs/", recipientUsername: "bob" },
+  });
+  expect([201, 409]).toContain(shareRes.status());
+
+  await startSignedInAs(page, context, "bob", "bob-session");
+  await search(page, "notes");
+
+  // The sharer's indexed file appears labelled "Shared by alice" (US3
+  // sc.1) with its mount-relative path.
+  const row = page.locator("li.list-row", { hasText: "notes.txt" });
+  await expect(row).toBeVisible({ timeout: INDEX_TIMEOUT });
+  await expect(row).toContainText("Shared by alice");
+
+  // Download from the result is issued against the shared space and
+  // succeeds (US3 sc.3).
+  const downloadPromise = page.waitForEvent("download");
+  await row.getByRole("button", { name: "Download" }).click();
+  const content = await readStream(await (await downloadPromise).createReadStream());
+  expect(content.toString()).toBe("hello from notes");
+});
+
+test("US3: revoking the share removes its search results immediately", async ({
+  page,
+  context,
+}) => {
+  await startSignedInAs(page, context, "alice", "browse-session");
+  const shareRes = await page.request.post("/api/shares", {
+    data: { folder: "photos/", recipientUsername: "bob" },
+  });
+  expect([201, 409]).toContain(shareRes.status());
+  const sharesBody = (await (
+    await page.request.get("/api/shares")
+  ).json()) as ListSharesBody;
+  const share = sharesBody.outgoing.find(
+    (entry) =>
+      entry.folderName === "photos" && entry.recipient.username === "bob",
+  );
+  expect(share).toBeDefined();
+
+  await startSignedInAs(page, context, "bob", "bob-session");
+  await search(page, "pic");
+  const row = page.locator("li.list-row", { hasText: "pic.jpg" });
+  await expect(row).toBeVisible({ timeout: INDEX_TIMEOUT });
+  await expect(row).toContainText("Shared by alice");
+
+  // alice revokes: the next search drops the mount's results at query
+  // time — no scan runs in between (FR-011, US3 sc.4).
+  await startSignedInAs(page, context, "alice", "browse-session");
+  const revokeRes = await page.request.delete(`/api/shares/${share?.id}`);
+  expect(revokeRes.status()).toBe(204);
+
+  await startSignedInAs(page, context, "bob", "bob-session");
+  await search(page, "pic");
+  await expect(page.getByText(/No files match/)).toBeVisible({
+    timeout: INDEX_TIMEOUT,
+  });
+  await expect(page.locator("li.list-row")).toHaveCount(0);
+});
+
+test("US3: a non-recipient's search never returns the sharer's files", async ({
+  page,
+  context,
+}) => {
+  await startSignedInAs(page, context, "alice", "browse-session");
+  const shareRes = await page.request.post("/api/shares", {
+    data: { folder: "docs/", recipientUsername: "bob" },
+  });
+  expect([201, 409]).toContain(shareRes.status());
+
+  // gina holds no share from alice: nothing from alice's space may
+  // surface, even though it is indexed (FR-012, US3 sc.5).
+  await startSignedInAs(page, context, "gina", "gina-session");
+  await search(page, "notes");
+
+  await expect(page.getByText(/No files match/)).toBeVisible({
+    timeout: INDEX_TIMEOUT,
+  });
+  await expect(page.locator("li.list-row")).toHaveCount(0);
+});
+
+test("US4: an admin reindex makes an upload searchable and a deletion disappear", async ({
+  page,
+  context,
+}) => {
+  const attempt = `${Date.now()}`;
+  const fileName = `reindex-${attempt}.txt`;
+
+  // alice uploads a document containing a unique phrase.
+  await page.goto(`/files?prefix=reindex-${attempt}/`);
+  await expectSignedInAs(page, "alice");
+  await page.locator('input[type="file"]').setInputFiles({
+    name: fileName,
+    mimeType: "text/plain",
+    buffer: Buffer.from(`the xenocryptic ${attempt} phrase`),
+  });
+  await expect(page.getByText(`Uploaded ${fileName}`)).toBeVisible();
+
+  // The admin forces an immediate reindex of alice's space and sees the
+  // reported outcome (FR-017, US4 sc.7).
+  await startSignedInAs(page, context, "admin", "admin-session");
+  await page.goto("/admin");
+  await expect(
+    page.getByRole("heading", { name: "User management" }),
+  ).toBeVisible();
+  const aliceRow = page
+    .getByRole("table", { name: "Users" })
+    .locator("tbody tr", {
+      has: page.getByRole("cell").getByText("alice", { exact: true }),
+    });
+  await aliceRow.getByRole("button", { name: "Rebuild search index" }).click();
+  await expect(page.locator("p.alert-success")).toContainText(
+    `Search index rebuilt for "alice" (`,
+  );
+
+  // The reindexed content is searchable right away.
+  await startSignedInAs(page, context, "alice", "browse-session");
+  await page.goto("/files");
+  await search(page, "xenocryptic");
+  const row = page.locator("li.list-row", { hasText: fileName });
+  await expect(row).toBeVisible({ timeout: INDEX_TIMEOUT });
+  await expect(row.locator("mark").first()).toHaveText("xenocryptic");
+
+  // alice deletes the file; a second admin reindex drops it from the
+  // index without waiting for the next scheduled scan (US4 sc.3).
+  await row.getByRole("button", { name: "Delete" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await startSignedInAs(page, context, "admin", "admin-session");
+  await page.goto("/admin");
+  await aliceRow.getByRole("button", { name: "Rebuild search index" }).click();
+  await expect(page.locator("p.alert-success")).toContainText(
+    `Search index rebuilt for "alice" (`,
+  );
+
+  await startSignedInAs(page, context, "alice", "browse-session");
+  await page.goto("/files");
+  await search(page, "xenocryptic");
+  await expect(page.getByText(/No files match/)).toBeVisible({
+    timeout: INDEX_TIMEOUT,
+  });
 });

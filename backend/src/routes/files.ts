@@ -22,10 +22,19 @@ import {
 } from "../s3/client";
 import type { HeadResult } from "../s3/client";
 import type { ServerEnv } from "../server";
+import {
+  getUserById,
+  listSharesByRecipient,
+  searchContent,
+  searchFileNames,
+} from "../db/repository";
+import type {
+  ContentSearchHit,
+  FileNameSearchHit,
+} from "../db/repository";
 import type { Database } from "bun:sqlite";
 import { parseSpace, resolveSpace } from "../scope";
 import type { ResolvedScope, SpaceRef } from "../scope";
-import { searchContent, searchFileNames } from "../db/repository";
 import type { User } from "../db/repository";
 
 /** Dependencies for {@link filesRoutes}. */
@@ -100,14 +109,15 @@ function isSafeRelativePrefix(prefix: string): boolean {
 
 /**
  * One entry of the search result list, per the contract's `SearchResult`
- * schema (own-space entries; `sharedBy` and shared spaces arrive with
- * US3). `snippet` is present only on content matches.
+ * schema. `snippet` is present only on content matches; `sharedBy` only
+ * on results from a shared mount (US3).
  */
 interface SearchRouteResult {
   name: string;
   path: string;
   key: string;
-  space: "own";
+  space: string;
+  sharedBy?: string;
   match: "name" | "content";
   snippet?: string;
 }
@@ -134,6 +144,47 @@ function ownSpaceResult(user: User, key: string, fileName: string) {
     key,
     space: "own" as const,
   };
+}
+
+/**
+ * Build the search-result fields for a file in a shared scope (US3,
+ * FR-010): key and path are relative to the mount — identical to what
+ * the listing endpoints return in a shared space, so row actions work
+ * with the result's space and key — plus the `shared:<shareId>` space
+ * and the sharer's username.
+ *
+ * @param scope - the resolved shared scope (mount prefix carries the
+ *   sharer's storage prefix plus the shared folder)
+ * @param sharedBy - the sharer's username
+ * @param key - full object key in the sharer's space
+ * @param fileName - base name of the object
+ * @returns name, mount-relative path and key, space and sharedBy
+ */
+function sharedSpaceResult(
+  scope: ResolvedScope,
+  sharedBy: string,
+  key: string,
+  fileName: string,
+) {
+  const relative = key.slice(scope.prefix.length);
+  const lastSlash = relative.lastIndexOf("/");
+  return {
+    name: fileName,
+    path: lastSlash === -1 ? "" : relative.slice(0, lastSlash),
+    key: relative,
+    space: `shared:${scope.shareId}`,
+    sharedBy,
+  };
+}
+
+/** One searchable scope for the caller, with the identity search needs. */
+interface SearchScope {
+  /** Owner of the indexed space (the caller, or the sharer). */
+  ownerId: string;
+  /** Resolved storage scope; mountRelative marks a shared mount. */
+  scope: ResolvedScope;
+  /** Sharer's username; absent for the caller's own space. */
+  sharedBy?: string;
 }
 
 /** The result of resolving a request's space: a scope or an error response. */
@@ -238,13 +289,19 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
     );
   });
 
-  // Search (007-file-search US1 T010 + US2 T016): one flat result list
-  // over the caller's whole own space. Name matches rank above content
-  // matches (R-008); content matching needs at least 3 characters of
-  // query (trigram index, FR-016). The query is trimmed; an
-  // empty-after-trim or over-long query is a 400. Shared scopes arrive
-  // with US3. Rate limiting needs no registration here: the /api/files/*
-  // family middleware covers this route.
+  // Search (007-file-search US1 T010, US2 T016, US3 T021): one flat
+  // result list over the caller's effective scopes — their own space
+  // plus every live incoming share (FR-010). Name matches rank above
+  // content matches (R-008), relevance order inside each group; the
+  // cap spans all scopes. Shared scopes are filtered to the mount
+  // prefix and their keys are reported mount-relative, exactly as the
+  // listing endpoints return them. Resolution happens per request, so
+  // a revoked share drops out of search immediately, without a scan
+  // (FR-011, constitution IV). Content matching needs at least 3
+  // characters of query (trigram index, FR-016). The query is trimmed;
+  // an empty-after-trim or over-long query is a 400. Rate limiting
+  // needs no registration here: the /api/files/* family middleware
+  // covers this route.
   app.get("/search", (c) => {
     const user = c.get("user");
     const q = c.req.query("q")?.trim() ?? "";
@@ -255,36 +312,95 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
       return jsonError(c, 400, "The search query is too long", "bad_request");
     }
 
-    // One extra hit decides whether the name group alone exhausts the
-    // cap, in which case content is not queried at all.
-    const nameHits = searchFileNames(db, user.id, q, SEARCH_RESULT_CAP + 1);
+    // The caller's effective scopes: own space first, then every live
+    // incoming share (oldest first). resolveSpace is the single scope
+    // authority: it refuses shares that no longer resolve (defensive
+    // rows: orphaned owner, root folder).
+    const scopes: SearchScope[] = [];
+    const own = resolveSpace(db, user, { kind: "own" });
+    if (own !== null) scopes.push({ ownerId: user.id, scope: own });
+    for (const share of listSharesByRecipient(db, user.id)) {
+      const scope = resolveSpace(db, user, {
+        kind: "shared",
+        shareId: share.id,
+      });
+      if (scope === null) continue;
+      const owner = getUserById(db, share.ownerUserId);
+      if (owner === null) continue;
+      scopes.push({ ownerId: owner.id, scope, sharedBy: owner.username });
+    }
+    const resultOf = (entry: SearchScope, hit: FileNameSearchHit) =>
+      entry.scope.mountRelative
+        ? sharedSpaceResult(
+            entry.scope,
+            entry.sharedBy ?? "",
+            hit.key,
+            hit.fileName,
+          )
+        : ownSpaceResult(user, hit.key, hit.fileName);
+
+    // Name pass: one extra hit per scope decides whether the name group
+    // alone exhausts the cap, in which case content is not queried.
+    const nameHits: Array<{ entry: SearchScope; hit: FileNameSearchHit }> = [];
+    const seenKeys = new Set<string>();
+    for (const entry of scopes) {
+      const hits = searchFileNames(
+        db,
+        entry.ownerId,
+        q,
+        SEARCH_RESULT_CAP + 1,
+        entry.scope.mountRelative ? entry.scope.prefix : undefined,
+      );
+      for (const hit of hits) {
+        // Nested shares of the same folder would surface one file twice;
+        // the first (oldest) share wins.
+        if (seenKeys.has(hit.key)) continue;
+        seenKeys.add(hit.key);
+        nameHits.push({ entry, hit });
+      }
+    }
     const nameCapped = nameHits.length > SEARCH_RESULT_CAP;
-    const seenKeys = new Set(nameHits.map((hit) => hit.key));
     const results: SearchRouteResult[] = (
       nameCapped ? nameHits.slice(0, SEARCH_RESULT_CAP) : nameHits
-    ).map((hit) => ({
-      ...ownSpaceResult(user, hit.key, hit.fileName),
+    ).map(({ entry, hit }) => ({
+      ...resultOf(entry, hit),
       match: "name" as const,
     }));
 
     let capped = nameCapped;
     if (!nameCapped && q.length >= 3) {
-      // One extra hit decides the capped flag without a second query.
-      const contentHits = searchContent(db, user.id, q, SEARCH_RESULT_CAP + 1);
-      // A file matching both name and content ranks as a name match:
-      // the duplicate content hit is dropped, not counted against the cap.
-      const uniqueContentHits = contentHits.filter(
-        (hit) => !seenKeys.has(hit.key),
-      );
-      if (uniqueContentHits.length > SEARCH_RESULT_CAP - results.length) {
+      // One extra hit per scope decides the capped flag without a
+      // second query.
+      const contentHits: Array<{
+        entry: SearchScope;
+        hit: ContentSearchHit;
+      }> = [];
+      for (const entry of scopes) {
+        const hits = searchContent(
+          db,
+          entry.ownerId,
+          q,
+          SEARCH_RESULT_CAP + 1,
+          entry.scope.mountRelative ? entry.scope.prefix : undefined,
+        );
+        for (const hit of hits) {
+          // A file matching both name and content ranks as a name
+          // match; the duplicate is dropped, not counted against the
+          // cap.
+          if (seenKeys.has(hit.key)) continue;
+          seenKeys.add(hit.key);
+          contentHits.push({ entry, hit });
+        }
+      }
+      if (contentHits.length > SEARCH_RESULT_CAP - results.length) {
         capped = true;
       }
-      for (const hit of uniqueContentHits.slice(
+      for (const { entry, hit } of contentHits.slice(
         0,
         SEARCH_RESULT_CAP - results.length,
       )) {
         results.push({
-          ...ownSpaceResult(user, hit.key, hit.fileName),
+          ...resultOf(entry, hit),
           match: "content" as const,
           snippet: hit.snippet,
         });

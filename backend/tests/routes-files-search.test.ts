@@ -1,17 +1,23 @@
 /**
- * Route tests for `GET /api/files/search` (007-file-search, US1 T008 and
- * US2 T014): filename substring search and extracted-content search with
- * snippets across the caller's own space. Follows the fake-S3/client
- * conventions of `routes-files.test.ts`: a real Hono app over a fresh
- * in-memory database with a stubbed S3 client (search never touches S3 —
- * it queries the seeded index).
+ * Route tests for `GET /api/files/search` (007-file-search, US1 T008,
+ * US2 T014 and US3 T019): filename substring search and extracted-content
+ * search with snippets across the caller's own space, plus shared-scope
+ * search. Follows the fake-S3/client conventions of
+ * `routes-files.test.ts`: a real Hono app over a fresh in-memory database
+ * with a stubbed S3 client (search never touches S3 — it queries the
+ * seeded index).
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import type { S3Client } from "@aws-sdk/client-s3";
 import { fileURLToPath } from "node:url";
 import { migrateFromDir, openDatabase } from "../src/db/migrate";
-import { createUser, upsertSearchDoc } from "../src/db/repository";
+import {
+  createShare,
+  createUser,
+  deleteShare,
+  upsertSearchDoc,
+} from "../src/db/repository";
 import type { User } from "../src/db/repository";
 import { createSession } from "../src/auth/sessions";
 import { createApp } from "../src/server";
@@ -62,20 +68,25 @@ const config: AppConfig = {
 };
 
 const aliceCookie = "jivedrive_session=session-token-alice";
+const bobCookie = "jivedrive_session=session-token-bob";
+const carolCookie = "jivedrive_session=session-token-carol";
 
 /** A Hono app built by {@link createApp}, the test double under test. */
 type TestApp = Hono<ServerEnv>;
 
 /**
- * Create an app over a fresh in-memory database with a seeded user and a
- * never-called S3 stub (search is index-only).
+ * Create an app over a fresh in-memory database with three seeded users
+ * (alice the sharer, bob the recipient, carol an unrelated third user)
+ * and a never-called S3 stub (search is index-only).
  *
- * @returns app, db and alice's row (for seeding her index)
+ * @returns app, db and the three user rows (for seeding their indexes)
  */
 function createSearchApp(): {
   app: TestApp;
   db: Database;
   alice: User;
+  bob: User;
+  carol: User;
 } {
   const db = openDatabase(":memory:");
   migrateFromDir(db, migrationsDir);
@@ -86,12 +97,24 @@ function createSearchApp(): {
     prefix: "users/alice/",
   });
   createSession(db, alice.id, { token: "session-token-alice" });
+  const bob = createUser(db, {
+    username: "bob",
+    bucket: "jivedrive-prod",
+    prefix: "users/bob/",
+  });
+  createSession(db, bob.id, { token: "session-token-bob" });
+  const carol = createUser(db, {
+    username: "carol",
+    bucket: "jivedrive-prod",
+    prefix: "users/carol/",
+  });
+  createSession(db, carol.id, { token: "session-token-carol" });
   const client = createS3Client(config.s3);
   client.send = (async () => {
     throw new Error("search must never touch S3");
   }) as unknown as S3Client["send"];
   const app = createApp({ config, db, s3Client: client });
-  return { app, db, alice };
+  return { app, db, alice, bob, carol };
 }
 
 /**
@@ -120,16 +143,25 @@ function seedDoc(
   });
 }
 
+/** Issue a signed search request as the given user's session cookie. */
+async function searchAs(
+  app: TestApp,
+  cookie: string,
+  q: string,
+): Promise<Response> {
+  return app.request(`/api/files/search?q=${encodeURIComponent(q)}`, {
+    headers: { cookie },
+  });
+}
+
 /** Issue a signed search request as alice. */
 async function search(app: TestApp, q: string): Promise<Response> {
-  return app.request(`/api/files/search?q=${encodeURIComponent(q)}`, {
-    headers: { cookie: aliceCookie },
-  });
+  return searchAs(app, aliceCookie, q);
 }
 
 describe("GET /api/files/search (US1)", () => {
   it("finds filename substring matches case-insensitively across the own space (T008)", async () => {
-    const { app, db, alice } = createSearchApp();
+    const { app, db, alice, carol } = createSearchApp();
     seedDoc(
       db,
       alice.id,
@@ -145,16 +177,7 @@ describe("GET /api/files/search (US1)", () => {
     seedDoc(db, alice.id, "users/alice/readme.md", "readme.md");
     // Another user's matching file must never leak (constitution IV).
 
-    seedDoc(
-      db,
-      createUser(db, {
-        username: "carol",
-        bucket: "jivedrive-prod",
-        prefix: "users/carol/",
-      }).id,
-      "users/carol/report.txt",
-      "report.txt",
-    );
+    seedDoc(db, carol.id, "users/carol/report.txt", "report.txt");
     const res = await search(app, "report");
 
     const body = (await res.json()) as {
@@ -541,5 +564,166 @@ describe("GET /api/files/search (US2)", () => {
     const contentResults = body.results.filter((r) => r.match === "content");
     expect(contentResults).toHaveLength(1);
     expect(contentResults[0]?.snippet).toContain("<mark>needle</mark>");
+  });
+});
+
+describe("GET /api/files/search (US3)", () => {
+  /**
+   * Share one of alice's folders with bob and return the stored share.
+   *
+   * @param db - database connection
+   * @param alice - the sharing user
+   * @param bob - the recipient
+   * @param folder - relative folder in alice's space (normalised)
+   */
+  function shareWithBob(db: Database, alice: User, bob: User, folder: string) {
+    return createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: bob.id,
+      folder,
+    });
+  }
+
+  it("returns the recipient's own matches and the sharer's matches within the shared prefix only (T019)", async () => {
+    const { app, db, alice, bob } = createSearchApp();
+    // Inside the shared mount: one name match and one content match,
+    // the content one nested a folder deeper to prove the mount-relative
+    // path mapping.
+    seedDoc(db, alice.id, "users/alice/projects/plan.txt", "plan.txt");
+    seedDoc(
+      db,
+      alice.id,
+      "users/alice/projects/docs/report.pdf",
+      "report.pdf",
+      "the plan lives here",
+    );
+    // Outside the shared mount: must never appear for bob (FR-012).
+    seedDoc(
+      db,
+      alice.id,
+      "users/alice/private/secret-plan.txt",
+      "secret-plan.txt",
+    );
+    const share = shareWithBob(db, alice, bob, "projects");
+
+    const res = await searchAs(app, bobCookie, "plan");
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      results: Array<Record<string, unknown>>;
+      capped: boolean;
+    };
+    expect(body.capped).toBe(false);
+    // Name match first; keys and paths are mount-relative — identical to
+    // what the listing endpoints return in a shared space — and the rows
+    // carry the shared space and the sharer's username (FR-010).
+    expect(body.results).toEqual([
+      {
+        name: "plan.txt",
+        path: "",
+        key: "plan.txt",
+        space: `shared:${share.id}`,
+        sharedBy: "alice",
+        match: "name",
+      },
+      {
+        name: "report.pdf",
+        path: "docs",
+        key: "docs/report.pdf",
+        space: `shared:${share.id}`,
+        sharedBy: "alice",
+        match: "content",
+        snippet: expect.stringContaining("<mark>plan</mark>"),
+      },
+    ]);
+  });
+
+  it("keeps own-space results unchanged (full key, no sharedBy) alongside shared ones (T019)", async () => {
+    const { app, db, alice, bob } = createSearchApp();
+    seedDoc(db, bob.id, "users/bob/own plan.txt", "own plan.txt");
+    seedDoc(db, alice.id, "users/alice/projects/plan.txt", "plan.txt");
+    const share = shareWithBob(db, alice, bob, "projects");
+
+    const res = await searchAs(app, bobCookie, "plan");
+
+    const body = (await res.json()) as {
+      results: Array<Record<string, unknown>>;
+    };
+    expect(body.results).toEqual([
+      {
+        name: "own plan.txt",
+        path: "",
+        key: "users/bob/own plan.txt",
+        space: "own",
+        match: "name",
+      },
+      {
+        name: "plan.txt",
+        path: "",
+        key: "plan.txt",
+        space: `shared:${share.id}`,
+        sharedBy: "alice",
+        match: "name",
+      },
+    ]);
+  });
+  it("gives a non-recipient nothing from the sharer's space (T019)", async () => {
+    const { app, db, alice, bob } = createSearchApp();
+    seedDoc(db, alice.id, "users/alice/projects/plan.txt", "plan.txt");
+    shareWithBob(db, alice, bob, "projects");
+
+    const res = await searchAs(app, carolCookie, "plan");
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { results: unknown[] };
+    expect(body.results).toEqual([]);
+  });
+
+  it("drops a revoked share's results immediately, without a scan (T019)", async () => {
+    const { app, db, alice, bob } = createSearchApp();
+    seedDoc(db, alice.id, "users/alice/projects/plan.txt", "plan.txt");
+    const share = shareWithBob(db, alice, bob, "projects");
+
+    const live = await searchAs(app, bobCookie, "plan");
+    const liveBody = (await live.json()) as { results: unknown[] };
+    expect(liveBody.results).toHaveLength(1);
+
+    // Revocation removes the scope at query time: no reindex happens
+    // between the two searches (FR-011).
+    deleteShare(db, share.id);
+    const revoked = await searchAs(app, bobCookie, "plan");
+    const revokedBody = (await revoked.json()) as { results: unknown[] };
+    expect(revokedBody.results).toEqual([]);
+  });
+
+  it("caps the merged own + shared list at 50 across all scopes (T019)", async () => {
+    const { app, db, alice, bob } = createSearchApp();
+    for (let i = 0; i < 30; i++) {
+      seedDoc(
+        db,
+        bob.id,
+        `users/bob/match-${String(i).padStart(2, "0")}.txt`,
+        `match-${String(i).padStart(2, "0")}.txt`,
+      );
+      seedDoc(
+        db,
+        alice.id,
+        `users/alice/projects/match-${String(i).padStart(2, "0")}.txt`,
+        `match-${String(i).padStart(2, "0")}.txt`,
+      );
+    }
+    shareWithBob(db, alice, bob, "projects");
+    const res = await searchAs(app, bobCookie, "match-");
+
+    const body = (await res.json()) as {
+      results: Array<{ space: string; match: string }>;
+      capped: boolean;
+    };
+    expect(body.results).toHaveLength(50);
+    expect(body.capped).toBe(true);
+    // Every name match outranks every content match; all 50 are name
+    // matches here (30 own + 20 shared).
+    expect(body.results.every((r) => r.match === "name")).toBe(true);
+    expect(body.results.filter((r) => r.space === "own")).toHaveLength(30);
   });
 });
