@@ -629,3 +629,30 @@ export function resetUserPasskeys(id: string): Promise<InviteResponse> {
     method: "DELETE",
   });
 }
+
+/** The counts reported by the admin reindex endpoint (007-file-search). */
+export interface ReindexCounts {
+  /** Objects newly added to the index. */
+  indexed: number;
+  /** Objects re-downloaded and re-extracted (changed etag/size). */
+  reindexed: number;
+  /** Index rows removed for vanished objects. */
+  removed: number;
+}
+
+/**
+ * Force an immediate search-index reconciliation of a user's space
+ * (admin only, FR-017): runs synchronously server-side and reports what
+ * was indexed, re-extracted and removed. The caller's own space may be
+ * reindexed the same way.
+ *
+ * @param id - user id
+ * @returns the reconciliation counts
+ * @throws {ApiClientError} on failure; a 404 carries code "not_found" and
+ *   a 403 carries code "forbidden"
+ */
+export function reindexUser(id: string): Promise<ReindexCounts> {
+  return apiFetch<ReindexCounts>(`/api/admin/users/${id}/reindex`, {
+    method: "POST",
+  });
+}

@@ -40,11 +40,43 @@ type SearchState =
   | { status: "done"; results: SearchResult[]; capped: boolean }
   | { status: "error"; message: string };
 
-/** Human-readable label per match type (content arrives with US2). */
+/** Human-readable label per match type. */
 const MATCH_LABELS: Record<SearchResult["match"], string> = {
   name: "Name match",
   content: "Content match",
 };
+
+/**
+ * Render one content-match snippet (007-file-search US2, T017): the
+ * server marks the matched text with literal `<mark>`/`</mark>` markers;
+ * they are split out and re-emitted as real `<mark>` elements, while the
+ * document text between them renders as plain text — never HTML — so a
+ * hostile document cannot inject markup (FR-005).
+ *
+ * @param props - the server-provided snippet
+ * @returns the snippet's inline elements
+ */
+function Snippet({ snippet }: { snippet: string }) {
+  const parts = snippet.split(/(<\/?mark>)/);
+  const nodes = [];
+  let marked = false;
+  for (const part of parts) {
+    if (part === "<mark>") {
+      marked = true;
+    } else if (part === "</mark>") {
+      marked = false;
+    } else if (part !== "") {
+      nodes.push(
+        marked ? (
+          <mark key={nodes.length}>{part}</mark>
+        ) : (
+          <span key={nodes.length}>{part}</span>
+        ),
+      );
+    }
+  }
+  return nodes;
+}
 
 /**
  * Fetch and render the results of one file search (FR-002, FR-006).
@@ -170,6 +202,13 @@ export function SearchResults({
                         ? "Home"
                         : result.path.split("/").join(" / ")}
                     </p>
+                    {/* Content match snippet (FR-005): the document
+                        text around the match, matched text marked. */}
+                    {result.match === "content" && result.snippet && (
+                      <p className="text-sm break-words text-base-content/80">
+                        <Snippet snippet={result.snippet} />
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="flex gap-3">

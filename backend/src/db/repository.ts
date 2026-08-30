@@ -1074,3 +1074,49 @@ export function searchFileNames(
     )
     .all(userId, phrase, limit) as FileNameSearchHit[];
 }
+
+/** One content match of a search query. */
+export interface ContentSearchHit {
+  /** Full object key including the owning user's storage prefix. */
+  key: string;
+  /** Base name of the object (after the last "/"). */
+  fileName: string;
+  /**
+   * Snippet of the document around the first match, with the matched
+   * text wrapped in literal <mark>...</mark> markers.
+   */
+  snippet: string;
+}
+
+/**
+ * Find one user's indexed documents whose extracted body contains the
+ * query, case-insensitively (007-file-search, FR-004). The query is
+ * phrase-quoted and restricted to the `body` column, so FTS operators
+ * and quotes stay literal and filename text never produces a content
+ * hit; the returned snippet quotes the document around the match with
+ * `<mark>`/`</mark>` markers (FR-005). Queries under 3 characters cannot
+ * produce trigrams and match nothing (FR-016). Rows outside the owner's
+ * space are never returned (constitution IV).
+ *
+ * @param db - database connection
+ * @param userId - owner of the space to search
+ * @param query - the (already trimmed, non-empty) search query
+ * @param limit - maximum number of hits to return
+ * @returns hits in relevance order (FTS rank)
+ */
+export function searchContent(
+  db: Database,
+  userId: string,
+  query: string,
+  limit = 50,
+): ContentSearchHit[] {
+  if (query.length < 3) {
+    return [];
+  }
+  const phrase = `body : "${query.replace(/"/g, '""')}"`;
+  return db
+    .query(
+      "SELECT i.key AS key, d.fileName AS fileName, snippet(search_docs, 1, '<mark>', '</mark>', '…', 64) AS snippet FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ? AND search_docs MATCH ? ORDER BY rank LIMIT ?",
+    )
+    .all(userId, phrase, limit) as ContentSearchHit[];
+}

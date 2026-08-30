@@ -137,12 +137,14 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
     }),
   );
 
-  // File routes (folder listing, download URLs) mounted under /api/files.
-  // The S3 client is injectable so tests can substitute a stub or mock.
+  // The S3 client is injectable so tests can substitute a stub or mock;
+  // the file routes use it for listing/URLs and the admin reindex
+  // endpoint (US4) for synchronous scans.
+  const s3Client = deps.s3Client ?? createS3Client(deps.config.s3);
   app.route(
     "/api/files",
     filesRoutes({
-      s3Client: deps.s3Client ?? createS3Client(deps.config.s3),
+      s3Client,
       requireUser: requireUser(deps.db, deps.config.sessionIdleDays),
       listPageSize: deps.listPageSize,
       db: deps.db,
@@ -170,13 +172,14 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
 
   // Admin routes (user and invite management) mounted under /api/admin.
   // The requireUser middleware plus an admin check guards every route
-  // (FR-015); the admin routes have no S3 dependency (FR-014).
+  // (FR-015); the reindex endpoint (US4) is the one S3 dependency.
   app.route(
     "/api/admin",
     adminRoutes({
       config: deps.config,
       db: deps.db,
       requireUser: requireUser(deps.db, deps.config.sessionIdleDays),
+      s3Client,
     }),
   );
 

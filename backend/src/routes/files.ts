@@ -25,7 +25,7 @@ import type { ServerEnv } from "../server";
 import type { Database } from "bun:sqlite";
 import { parseSpace, resolveSpace } from "../scope";
 import type { ResolvedScope, SpaceRef } from "../scope";
-import { searchFileNames } from "../db/repository";
+import { searchContent, searchFileNames } from "../db/repository";
 import type { User } from "../db/repository";
 
 /** Dependencies for {@link filesRoutes}. */
@@ -96,6 +96,44 @@ function jsonError(
 function isSafeRelativePrefix(prefix: string): boolean {
   if (prefix.startsWith("/")) return false;
   return !prefix.split("/").includes("..");
+}
+
+/**
+ * One entry of the search result list, per the contract's `SearchResult`
+ * schema (own-space entries; `sharedBy` and shared spaces arrive with
+ * US3). `snippet` is present only on content matches.
+ */
+interface SearchRouteResult {
+  name: string;
+  path: string;
+  key: string;
+  space: "own";
+  match: "name" | "content";
+  snippet?: string;
+}
+
+/**
+ * Build the search-result fields shared by both match types for a file
+ * in the caller's own space (007-file-search): the path is relative to
+ * the space root — the storage prefix and base name stripped — and a
+ * root file has no folder.
+ *
+ * @param user - the signed-in user (storage prefix owner)
+ * @param key - full object key including the user's storage prefix
+ * @param fileName - base name of the object
+ * @returns name, path, key and space per the contract
+ */
+function ownSpaceResult(user: User, key: string, fileName: string) {
+  const relative = key.startsWith(user.prefix)
+    ? key.slice(user.prefix.length)
+    : key;
+  const lastSlash = relative.lastIndexOf("/");
+  return {
+    name: fileName,
+    path: lastSlash === -1 ? "" : relative.slice(0, lastSlash),
+    key,
+    space: "own" as const,
+  };
 }
 
 /** The result of resolving a request's space: a scope or an error response. */
@@ -200,13 +238,13 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
     );
   });
 
-  // Filename search (007-file-search US1, T010): one flat result list
-  // over the caller's whole own space, ranked by the index. The query is
-  // trimmed; an empty-after-trim or over-long query is a 400. Shared
-  // scopes arrive with US3; the result shape already carries every field
-  // the contract defines (snippet/sharedBy are set by later phases).
-  // Rate limiting needs no registration here: the /api/files/* family
-  // middleware covers this route.
+  // Search (007-file-search US1 T010 + US2 T016): one flat result list
+  // over the caller's whole own space. Name matches rank above content
+  // matches (R-008); content matching needs at least 3 characters of
+  // query (trigram index, FR-016). The query is trimmed; an
+  // empty-after-trim or over-long query is a 400. Shared scopes arrive
+  // with US3. Rate limiting needs no registration here: the /api/files/*
+  // family middleware covers this route.
   app.get("/search", (c) => {
     const user = c.get("user");
     const q = c.req.query("q")?.trim() ?? "";
@@ -217,27 +255,41 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
       return jsonError(c, 400, "The search query is too long", "bad_request");
     }
 
-    // One extra hit decides the capped flag without a second query.
-    const hits = searchFileNames(db, user.id, q, SEARCH_RESULT_CAP + 1);
-    const capped = hits.length > SEARCH_RESULT_CAP;
-    const results = (capped ? hits.slice(0, SEARCH_RESULT_CAP) : hits).map(
-      (hit) => {
-        // The path is relative to the space root: strip the user's
-        // storage prefix and the base name; a root file has no folder.
-        const relative = hit.key.startsWith(user.prefix)
-          ? hit.key.slice(user.prefix.length)
-          : hit.key;
-        const lastSlash = relative.lastIndexOf("/");
-        const path = lastSlash === -1 ? "" : relative.slice(0, lastSlash);
-        return {
-          name: hit.fileName,
-          path,
-          key: hit.key,
-          space: "own" as const,
-          match: "name" as const,
-        };
-      },
-    );
+    // One extra hit decides whether the name group alone exhausts the
+    // cap, in which case content is not queried at all.
+    const nameHits = searchFileNames(db, user.id, q, SEARCH_RESULT_CAP + 1);
+    const nameCapped = nameHits.length > SEARCH_RESULT_CAP;
+    const seenKeys = new Set(nameHits.map((hit) => hit.key));
+    const results: SearchRouteResult[] = (
+      nameCapped ? nameHits.slice(0, SEARCH_RESULT_CAP) : nameHits
+    ).map((hit) => ({
+      ...ownSpaceResult(user, hit.key, hit.fileName),
+      match: "name" as const,
+    }));
+
+    let capped = nameCapped;
+    if (!nameCapped && q.length >= 3) {
+      // One extra hit decides the capped flag without a second query.
+      const contentHits = searchContent(db, user.id, q, SEARCH_RESULT_CAP + 1);
+      // A file matching both name and content ranks as a name match:
+      // the duplicate content hit is dropped, not counted against the cap.
+      const uniqueContentHits = contentHits.filter(
+        (hit) => !seenKeys.has(hit.key),
+      );
+      if (uniqueContentHits.length > SEARCH_RESULT_CAP - results.length) {
+        capped = true;
+      }
+      for (const hit of uniqueContentHits.slice(
+        0,
+        SEARCH_RESULT_CAP - results.length,
+      )) {
+        results.push({
+          ...ownSpaceResult(user, hit.key, hit.fileName),
+          match: "content" as const,
+          snippet: hit.snippet,
+        });
+      }
+    }
     return c.json({ results, capped }, 200);
   });
 

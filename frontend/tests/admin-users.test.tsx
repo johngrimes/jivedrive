@@ -41,15 +41,28 @@ interface StubRoute {
 }
 
 /**
- * Stub global fetch to serve the admin API: the initial user/invite lists
- * and the passkey-reset response. Routes are keyed by "METHOD url" and
- * each call gets a fresh Response so repeated GETs (initial load plus the
- * reload after the reset) are not blocked by a consumed body.
+ * A dynamic route handler, used when a test must control the response
+ * timing (e.g. a deferred promise for in-flight assertions).
+ */
+type RouteHandler = (
+  url: string,
+  init?: RequestInit,
+) => Response | Promise<Response>;
+
+/**
+ * Stub global fetch to serve the admin API: the initial user/invite
+ * lists and the passkey-reset response, plus any test-supplied route
+ * overrides. Routes are keyed by "METHOD url" and each call gets a
+ * fresh Response so repeated GETs (initial load plus the reload after
+ * an action) are not blocked by a consumed body.
  *
+ * @param overrides - extra or replacing route entries
  * @returns the fetch mock for assertions
  */
-function stubAdminApi(): Mock {
-  const routes: Record<string, StubRoute> = {
+function stubAdminApi(
+  overrides: Record<string, StubRoute | RouteHandler> = {},
+): Mock {
+  const routes: Record<string, StubRoute | RouteHandler> = {
     "GET /api/admin/users": {
       status: 200,
       body: {
@@ -90,6 +103,7 @@ function stubAdminApi(): Mock {
       },
     },
   };
+  Object.assign(routes, overrides);
 
   const fetchMock = vi
     .fn()
@@ -101,6 +115,9 @@ function stubAdminApi(): Mock {
           return Promise.reject(
             new Error(`Unhandled request: ${method} ${url}`),
           );
+        }
+        if (typeof route === "function") {
+          return Promise.resolve(route(url, init));
         }
         return Promise.resolve(jsonResponse(route.body, route.status));
       },
@@ -189,5 +206,111 @@ describe("AdminUsersPage", () => {
         (init as RequestInit | undefined)?.method === "DELETE",
     );
     expect(deleteCalls).toHaveLength(1);
+  });
+
+  it("rebuilds a user's search index and reports the counts (T026)", async () => {
+    const fetchMock = stubAdminApi({
+      "POST /api/admin/users/target-1/reindex": {
+        status: 200,
+        body: { indexed: 2, reindexed: 1, removed: 3 },
+      },
+    });
+    const container = await renderAdminUsers();
+
+    const kateRow = Array.from(
+      container.querySelectorAll('table[aria-label="Users"] tbody tr'),
+    ).find((row) => row.textContent?.includes("kate"));
+    expect(kateRow).toBeDefined();
+    const rebuildButton = kateRow?.querySelector(
+      'button[aria-label="Rebuild search index"]',
+    ) as HTMLButtonElement | null;
+    expect(rebuildButton).not.toBeNull();
+    expect(rebuildButton?.disabled).toBe(false);
+
+    await act(async () => {
+      rebuildButton?.click();
+    });
+
+    // An explicit success notice carries the counts from the response
+    // (constitution V: no silent success).
+    expect(container.textContent).toContain(
+      'Search index rebuilt for "kate" (2 indexed, 1 re-extracted, 3 removed)',
+    );
+    expect(
+      (kateRow?.querySelector(
+        'button[aria-label="Rebuild search index"]',
+      ) as HTMLButtonElement | null)?.disabled,
+    ).toBe(false);
+
+    const postCalls = fetchMock.mock.calls.filter(
+      ([url, init]) =>
+        url === "/api/admin/users/target-1/reindex" &&
+        (init as RequestInit | undefined)?.method === "POST",
+    );
+    expect(postCalls).toHaveLength(1);
+  });
+
+  it("disables the row action while the rebuild is in flight (T026)", async () => {
+    let resolveReindex: (res: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      resolveReindex = resolve;
+    });
+    const fetchMock = stubAdminApi({
+      "POST /api/admin/users/target-1/reindex": () => pending,
+    });
+    const container = await renderAdminUsers();
+    const kateRow = Array.from(
+      container.querySelectorAll('table[aria-label="Users"] tbody tr'),
+    ).find((row) => row.textContent?.includes("kate"));
+    const rebuildButton = kateRow?.querySelector(
+      'button[aria-label="Rebuild search index"]',
+    ) as HTMLButtonElement | null;
+    expect(rebuildButton).not.toBeNull();
+
+    await act(async () => {
+      rebuildButton?.click();
+    });
+
+    const inFlight = kateRow?.querySelector(
+      'button[aria-label="Rebuild search index"]',
+    ) as HTMLButtonElement | null;
+    expect(inFlight?.disabled).toBe(true);
+    expect(inFlight?.textContent).toContain("Rebuilding...");
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+
+    await act(async () => {
+      resolveReindex(
+        jsonResponse({ indexed: 0, reindexed: 0, removed: 0 }),
+      );
+    });
+
+    expect(container.textContent).toContain(
+      'Search index rebuilt for "kate" (0 indexed, 0 re-extracted, 0 removed)',
+    );
+  });
+
+  it("surfaces an explicit error when the rebuild fails (T026)", async () => {
+    stubAdminApi({
+      "POST /api/admin/users/target-1/reindex": {
+        status: 500,
+        body: { error: "Reconciliation failed", code: "internal" },
+      },
+    });
+    const container = await renderAdminUsers();
+    const kateRow = Array.from(
+      container.querySelectorAll('table[aria-label="Users"] tbody tr'),
+    ).find((row) => row.textContent?.includes("kate"));
+    const rebuildButton = kateRow?.querySelector(
+      'button[aria-label="Rebuild search index"]',
+    ) as HTMLButtonElement | null;
+    expect(rebuildButton).not.toBeNull();
+
+    await act(async () => {
+      rebuildButton?.click();
+    });
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("Reconciliation failed");
+    expect(container.textContent).not.toContain("Search index rebuilt");
   });
 });

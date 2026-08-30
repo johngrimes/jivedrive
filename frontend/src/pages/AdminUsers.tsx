@@ -29,6 +29,7 @@ import { Link, Navigate } from "react-router-dom";
 import {
   KeyIcon,
   PaperAirplaneIcon,
+  SyncIcon,
   TrashIcon,
   XIcon,
 } from "@primer/octicons-react";
@@ -37,6 +38,7 @@ import {
   createAdminInvite,
   listAdminInvites,
   listAdminUsers,
+  reindexUser,
   removeAdminUser,
   resendAdminInvite,
   resetUserPasskeys,
@@ -69,6 +71,11 @@ interface PendingReset {
 
 /** The invite currently being re-sent (busy state). */
 interface ResendingInvite {
+  id: string;
+}
+
+/** The user whose search index is currently being rebuilt (busy state). */
+interface ReindexingUser {
   id: string;
 }
 
@@ -127,6 +134,8 @@ export function AdminUsersPage() {
   const [reset, setReset] = useState<PendingReset | null>(null);
   const [resetting, setResetting] = useState(false);
   const [resending, setResending] = useState<ResendingInvite | null>(null);
+  /** The user pending a search-index rebuild (busy state). */
+  const [reindexing, setReindexing] = useState<ReindexingUser | null>(null);
 
   /**
    * Load both admin tables.
@@ -345,6 +354,32 @@ export function AdminUsersPage() {
     }
   }
 
+
+  /**
+   * Force an immediate search-index rebuild for a user (007-file-search,
+   * US4, FR-017). The endpoint runs synchronously and reports the
+   * counts, so the notice can state exactly what happened (constitution
+   * V: no silent success or failure).
+   *
+   * @param target - the user whose index is being rebuilt
+   */
+  async function handleReindex(target: AdminUser): Promise<void> {
+    if (reindexing) return;
+    setReindexing({ id: target.id });
+    setError(null);
+    setNotice(null);
+    try {
+      const counts = await reindexUser(target.id);
+      setNotice(
+        `Search index rebuilt for "${target.username}" (${counts.indexed} indexed, ${counts.reindexed} re-extracted, ${counts.removed} removed)`,
+      );
+    } catch (err) {
+      const apiError = err as ApiClientError;
+      setError(apiError?.message ?? "Could not rebuild the search index.");
+    } finally {
+      setReindexing(null);
+    }
+  }
   return (
     <div className="flex w-full max-w-5xl flex-col gap-4 pt-2">
       <main className="min-w-0 flex-1 rounded-box bg-base-200 p-4 md:p-6">
@@ -658,6 +693,20 @@ export function AdminUsersPage() {
                         {formatDate(entry.createdAt)}
                       </td>
                       <td className="whitespace-nowrap pr-0 text-right">
+                        <button
+                          className="btn btn-ghost min-h-11"
+                          type="button"
+                          aria-label="Rebuild search index"
+                          onClick={() => void handleReindex(entry)}
+                          disabled={reindexing !== null}
+                        >
+                          <SyncIcon aria-hidden="true" />
+                          <span className="hidden sm:inline">
+                            {reindexing?.id === entry.id
+                              ? "Rebuilding..."
+                              : "Rebuild index"}
+                          </span>
+                        </button>
                         <button
                           className="btn btn-ghost min-h-11"
                           type="button"

@@ -20,9 +20,14 @@ import { createApp, startSearchIndexer } from "./server";
 import { createS3Client } from "./s3/client";
 import { createSession } from "./auth/sessions";
 
-/** An object stored in the mock S3. */
+/**
+ * An object stored in the mock S3. The body is binary-safe: browser
+ * uploads are stored as raw bytes, because a UTF-8 round-trip would
+ * corrupt PDF/DOCX payloads before the search-index scan extracts them
+ * (007-file-search US2, T018).
+ */
 interface MockObject {
-  body: string;
+  body: string | Uint8Array<ArrayBuffer>;
   /** Displayed size, which may differ from the body length. */
   size: number;
   /** ISO 8601 timestamp. */
@@ -442,10 +447,12 @@ seedObject("users/alice/empty/", "", 0);
 // accepts browser uploads (PUT) into the in-memory store.
 const mockS3 = new Hono();
 
-// The browser uploads cross-origin from localhost:5173, so the mock must
-// answer the CORS preflight and tag responses with the page origin.
+// The browser uploads cross-origin from the SPA's page (5173, or a
+// scratch port for local config overrides), so the mock answers the CORS
+// preflight and echoes the requesting origin back.
 mockS3.use("*", async (c, next) => {
-  c.header("Access-Control-Allow-Origin", "http://localhost:5173");
+  const origin = c.req.header("Origin");
+  if (origin) c.header("Access-Control-Allow-Origin", origin);
   c.header("Access-Control-Allow-Methods", "GET, PUT, OPTIONS");
   c.header("Access-Control-Allow-Headers", "Content-Type");
   if (c.req.method === "OPTIONS") return c.body(null, 204);
@@ -477,10 +484,10 @@ mockS3.put("/:bucket/*", async (c) => {
     return c.json({ error: "mock rejection" }, 500);
   }
   await Bun.sleep(UPLOAD_DELAY_MS);
-  const body = new TextDecoder().decode(await c.req.arrayBuffer());
+  const bytes = new Uint8Array(await c.req.arrayBuffer());
   objectStore.set(key, {
-    body,
-    size: Buffer.byteLength(body),
+    body: bytes,
+    size: bytes.byteLength,
     lastModified: new Date().toISOString(),
   });
   return c.body(null, 200);

@@ -1,9 +1,10 @@
 /**
- * Route tests for `GET /api/files/search` (007-file-search, US1, T008):
- * filename substring search across the caller's own space. Follows the
- * fake-S3/client conventions of `routes-files.test.ts`: a real Hono app
- * over a fresh in-memory database with a stubbed S3 client (search never
- * touches S3 — it queries the seeded index).
+ * Route tests for `GET /api/files/search` (007-file-search, US1 T008 and
+ * US2 T014): filename substring search and extracted-content search with
+ * snippets across the caller's own space. Follows the fake-S3/client
+ * conventions of `routes-files.test.ts`: a real Hono app over a fresh
+ * in-memory database with a stubbed S3 client (search never touches S3 —
+ * it queries the seeded index).
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
@@ -205,9 +206,9 @@ describe("GET /api/files/search (US1)", () => {
     ]);
   });
 
-  it("matches only filenames, not indexed content (T008)", async () => {
+  it("finds indexed content with a marked snippet when the name does not match (T014)", async () => {
     const { app, db, alice } = createSearchApp();
-    // The name does not contain the query; the body does.
+    // The name does not contain the query; the body does (US2).
     seedDoc(
       db,
       alice.id,
@@ -219,8 +220,11 @@ describe("GET /api/files/search (US1)", () => {
     const res = await search(app, "report");
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { results: unknown[] };
-    expect(body.results).toEqual([]);
+    const body = (await res.json()) as {
+      results: Array<{ match: string; snippet?: string }>;
+    };
+    expect(body.results[0]?.match).toBe("content");
+    expect(body.results[0]?.snippet).toContain("<mark>report</mark>");
   });
 
   it("answers 400 for a missing or empty-after-trim query (T008)", async () => {
@@ -314,5 +318,228 @@ describe("GET /api/files/search (US1)", () => {
     const body = (await res.json()) as { results: unknown[]; capped: boolean };
     expect(body.results).toHaveLength(1);
     expect(body.capped).toBe(false);
+  });
+});
+
+describe("GET /api/files/search (US2)", () => {
+  /** A phrase unique to the US2 fixtures. */
+  const PHRASE = "quarterly budget review zephyrquill";
+
+  it("finds a phrase inside an indexed text file with a marked snippet (T014)", async () => {
+    const { app, db, alice } = createSearchApp();
+    seedDoc(
+      db,
+      alice.id,
+      "users/alice/notes/meeting.txt",
+      "meeting.txt",
+      `attendees confirmed the ${PHRASE} before noon`,
+    );
+
+    const res = await search(app, "budget review");
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      results: Array<Record<string, unknown>>;
+    };
+    expect(body.results).toHaveLength(1);
+    expect(body.results[0]).toMatchObject({
+      name: "meeting.txt",
+      path: "notes",
+      key: "users/alice/notes/meeting.txt",
+      space: "own",
+      match: "content",
+    });
+    // The snippet quotes the document around the match, with the matched
+    // phrase wrapped in <mark>...</mark> (FR-005).
+    const snippet = String(body.results[0]?.snippet ?? "");
+    expect(snippet).toContain("<mark>budget review</mark>");
+    expect(snippet.replaceAll(/<\/?mark>/g, "")).toContain(PHRASE);
+  });
+
+  it("finds the phrase inside PDF and DOCX documents (T014)", async () => {
+    const { app, db, alice } = createSearchApp();
+    // Route-level fixtures: the extracted text the scan would have
+    // stored (extraction itself is covered by search-extract.test.ts).
+    seedDoc(
+      db,
+      alice.id,
+      "users/alice/docs/sample.pdf",
+      "sample.pdf",
+      PHRASE,
+    );
+    seedDoc(
+      db,
+      alice.id,
+      "users/alice/docs/sample.docx",
+      "sample.docx",
+      PHRASE,
+    );
+
+    const res = await search(app, "zephyrquill");
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      results: Array<{ match: string; snippet?: string }>;
+    };
+    expect(body.results).toHaveLength(2);
+    for (const result of body.results) {
+      expect(result.match).toBe("content");
+      expect(result.snippet).toContain("<mark>zephyrquill</mark>");
+    }
+  });
+
+  it("ranks filename matches above content matches (T014)", async () => {
+    const { app, db, alice } = createSearchApp();
+    seedDoc(db, alice.id, "users/alice/budget.xlsx", "budget.xlsx");
+    seedDoc(
+      db,
+      alice.id,
+      "users/alice/a/notes.txt",
+      "notes.txt",
+      "the budget numbers live here",
+    );
+    seedDoc(
+      db,
+      alice.id,
+      "users/alice/b/summary.txt",
+      "summary.txt",
+      "budget again",
+    );
+
+    const res = await search(app, "budget");
+
+    const body = (await res.json()) as {
+      results: Array<{ name: string; match: string }>;
+    };
+    expect(body.results[0]).toMatchObject({ name: "budget.xlsx", match: "name" });
+    // Within the content group the FTS relevance order decides.
+    expect(body.results.slice(1).map((r) => r.match)).toEqual([
+      "content",
+      "content",
+    ]);
+  });
+
+  it("falls back to filename-only matching for a 1-2 character query (T014)", async () => {
+    const { app, db, alice } = createSearchApp();
+    seedDoc(db, alice.id, "users/alice/ab-tools.txt", "ab-tools.txt", "no help");
+    seedDoc(
+      db,
+      alice.id,
+      "users/alice/other.txt",
+      "other.txt",
+      "mentions ab in the body only",
+    );
+
+    const res = await search(app, "ab");
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { results: Array<Record<string, unknown>> };
+    // Only the filename match comes back; the body hit is invisible.
+    expect(body.results).toEqual([
+      {
+        name: "ab-tools.txt",
+        path: "",
+        key: "users/alice/ab-tools.txt",
+        space: "own",
+        match: "name",
+      },
+    ]);
+  });
+
+  it("keeps an oversized (name-only) file name-matchable but never content-matches it (T014)", async () => {
+    const { app, db, alice } = createSearchApp();
+    // Oversized files are indexed by name only (empty body), one byte
+    // over the configured cap; at query time an empty body can never
+    // produce a content match.
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/huge report.pdf",
+      etag: '"etag"',
+      size: 10_485_761,
+      fileName: "huge report.pdf",
+      body: "",
+    });
+
+    const res = await search(app, "report");
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      results: Array<Record<string, unknown>>;
+    };
+    expect(body.results).toEqual([
+      {
+        name: "huge report.pdf",
+        path: "",
+        key: "users/alice/huge report.pdf",
+        space: "own",
+        match: "name",
+      },
+    ]);
+  });
+
+  it("returns one name result for a file matching both name and content (T014)", async () => {
+    const { app, db, alice } = createSearchApp();
+    seedDoc(
+      db,
+      alice.id,
+      "users/alice/report.pdf",
+      "report.pdf",
+      "%PDF-1.4 hello report",
+    );
+
+    const res = await search(app, "report");
+
+    const body = (await res.json()) as { results: Array<Record<string, unknown>> };
+    // The file ranks as a name match, once — no duplicate content row.
+    expect(body.results).toEqual([
+      {
+        name: "report.pdf",
+        path: "",
+        key: "users/alice/report.pdf",
+        space: "own",
+        match: "name",
+      },
+    ]);
+  });
+
+  it("caps the merged list at 50 across both match types (T014)", async () => {
+    const { app, db, alice } = createSearchApp();
+    for (let i = 0; i < 49; i++) {
+      seedDoc(
+        db,
+        alice.id,
+        `users/alice/docs/needle-${String(i).padStart(2, "0")}.txt`,
+        `needle-${String(i).padStart(2, "0")}.txt`,
+      );
+    }
+    seedDoc(
+      db,
+      alice.id,
+      "users/alice/a/unrelated1.txt",
+      "unrelated1.txt",
+      "the needle is hidden in here",
+    );
+    seedDoc(
+      db,
+      alice.id,
+      "users/alice/b/unrelated2.txt",
+      "unrelated2.txt",
+      "another needle lives here",
+    );
+
+    const res = await search(app, "needle");
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      results: Array<{ match: string; snippet?: string }>;
+      capped: boolean;
+    };
+    expect(body.capped).toBe(true);
+    expect(body.results).toHaveLength(50);
+    // Every name match outranks every content match; the second content
+    // match is the one dropped by the cap.
+    const contentResults = body.results.filter((r) => r.match === "content");
+    expect(contentResults).toHaveLength(1);
+    expect(contentResults[0]?.snippet).toContain("<mark>needle</mark>");
   });
 });

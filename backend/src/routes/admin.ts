@@ -12,6 +12,8 @@
  * never claimed, otherwise `pending` (data-model.md state transitions).
  */
 import { randomBytes } from "node:crypto";
+import type { S3Client } from "@aws-sdk/client-s3";
+import { scanUserSpace } from "../search/indexer";
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import type { Database } from "bun:sqlite";
@@ -46,6 +48,8 @@ export interface AdminRouteDeps {
   db: Database;
   /** Middleware that requires a signed-in user and sets `c.get("user")`. */
   requireUser: MiddlewareHandler<ServerEnv>;
+  /** S3 client used by the reindex endpoint's synchronous scan (US4). */
+  s3Client: S3Client;
 }
 
 /** The user shape in the admin list: contract `User` plus createdAt. */
@@ -269,6 +273,27 @@ export function adminRoutes(deps: AdminRouteDeps): Hono<ServerEnv> {
       },
       200,
     );
+  });
+
+  // Force an immediate search-index reconciliation of one user's space
+  // (007-file-search, US4, FR-017): synchronously list the target's
+  // objects, index new/changed ones (extracting text within the size
+  // cap) and remove index rows for vanished objects. The response
+  // reports what happened so the admin page can show an explicit
+  // result. The caller's own space may be reindexed the same way; an
+  // unknown user is refused with 404 and nothing is scanned.
+  app.post("/users/:id/reindex", async (c) => {
+    const target = getUserById(db, c.req.param("id"));
+    if (!target) {
+      return jsonError(c, 404, "User not found", "not_found");
+    }
+    const counts = await scanUserSpace(
+      deps.s3Client,
+      db,
+      target,
+      config.searchIndexMaxBytes,
+    );
+    return c.json(counts, 200);
   });
 
   // List pending, claimed and expired invites with derived status.

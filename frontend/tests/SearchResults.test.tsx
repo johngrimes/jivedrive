@@ -368,3 +368,72 @@ describe("Files page search wiring (T009/T012)", () => {
     ).toContain("projects");
   });
 });
+
+describe("SearchResults snippet rendering (T015)", () => {
+  /** A content match carrying the contract's marked snippet. */
+  const contentResult: SearchResult = {
+    name: "meeting.txt",
+    path: "notes",
+    key: "users/alice/notes/meeting.txt",
+    space: "own",
+    match: "content",
+    snippet: "…confirmed the <mark>budget review</mark> before noon…",
+  };
+
+  it("renders a content match with a marked snippet and a Content match badge", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ results: [contentResult], capped: false }),
+      ),
+    );
+    const container = renderResults();
+    await flush();
+
+    expect(container.textContent).toContain("Content match");
+    // The matched text renders inside a real <mark> element.
+    const mark = container.querySelector("mark");
+    expect(mark?.textContent).toBe("budget review");
+    // The surrounding document text is visible too (FR-005).
+    expect(container.textContent).toContain("before noon");
+  });
+
+  it("renders no snippet for name matches", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ results: [nestedResult], capped: false }),
+        ),
+    );
+    const container = renderResults();
+    await flush();
+
+    expect(container.textContent).toContain("Name match");
+    expect(container.querySelector("mark")).toBeNull();
+  });
+
+  it("renders snippet document text as text, never as HTML", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          results: [
+            {
+              ...contentResult,
+              // A hostile document's text must not become markup.
+              snippet: "<mark>needle</mark> <img src=x onerror=alert(1)>",
+            },
+          ],
+          capped: false,
+        }),
+      ),
+    );
+    const container = renderResults();
+    await flush();
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toContain('<img src=x onerror=alert(1)>');
+  });
+});
