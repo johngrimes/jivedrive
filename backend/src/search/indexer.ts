@@ -214,10 +214,16 @@ export async function scanUserSpace(
   // etag, which makes the next cycle's diff re-pend it — transient
   // failures self-heal, and a permanent one costs one failed GET per
   // cycle.
+  // Cheapest-first: the bootstrap cycle over a large space fills the
+  // index with fast, small documents immediately, while the handful of
+  // heavy documents (the only items whose extraction both saturates
+  // CPU and risks memory) trickle in last, when the loop is otherwise
+  // quiet. Largest-first had the opposite profile and starved the
+  // server's event loop for the whole bootstrap (prod, 2026-08-31).
   pending.sort(
     (a, b) =>
-      downloadCharge(baseName(b.object.key), b.object.size) -
-      downloadCharge(baseName(a.object.key), a.object.size),
+      downloadCharge(baseName(a.object.key), a.object.size) -
+      downloadCharge(baseName(b.object.key), b.object.size),
   );
   const budget = cap * SCAN_BUDGET_CAPS;
   let charged = 0;

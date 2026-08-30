@@ -148,7 +148,7 @@ All values live under the `jivedrive` top-level key. Values are grouped as
 | `jivedrive.resources.requests.memory` | Memory request for the server container | `256Mi` |
 | `jivedrive.resources.requests.cpu` | CPU request for the server container | `100m` |
 | `jivedrive.resources.limits.memory` | Memory limit for the server container | `1Gi` |
-| `jivedrive.resources.limits.cpu` | CPU limit for the server container | `500m` |
+| `jivedrive.resources.limits.cpu` | CPU limit for the server container | `2` |
 | `jivedrive.nodeSelector` | Node selector for pod scheduling | `{}` |
 | `jivedrive.tolerations` | Tolerations for pod scheduling | `[]` |
 | `jivedrive.affinity` | Affinity rules for pod scheduling | `{}` |
@@ -215,7 +215,7 @@ The deployment renders a hardened container by default (asserted in CI by
 - The pod-level `securityContext` keeps `runAsNonRoot: true` and
   `fsGroup: 1000`, so the pod still runs as the non-root `bun` user.
 - Default resource requests (`100m` CPU, `256Mi` memory) and limits
-  (`500m` CPU, `1Gi` memory); override via `jivedrive.resources`.
+  (`2` CPU, `1Gi` memory); override via `jivedrive.resources`.
 
 ### Passkey reset
 

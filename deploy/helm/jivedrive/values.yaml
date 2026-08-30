@@ -21,14 +21,17 @@ jivedrive:
   # Resource requests and limits for the server container. The memory
   # limit must cover the search scan's weighted download budget (5x the
   # extraction cap of charged in-flight bytes) plus the app baseline;
-  # 512Mi OOM-killed the first full index of a large space. Tune per
-  # deployment.
+  # 512Mi OOM-killed the first full index of a large space. The CPU
+  # limit must leave headroom above the extraction worker's demand:
+  # under 0.5 cores its PDF/DOCX parsing CFS-throttled the main thread
+  # until /healthcheck timed out and the kubelet killed the pod
+  # mid-bootstrap (prod, 2026-08-31). Tune per deployment.
   resources:
     requests:
       cpu: "100m"
       memory: "256Mi"
     limits:
-      cpu: "500m"
+      cpu: "2"
       memory: "1Gi"
 
   # Pod scheduling. All optional, all unset by default.
