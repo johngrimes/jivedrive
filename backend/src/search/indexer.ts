@@ -15,19 +15,55 @@ import {
   upsertSearchDoc,
 } from "../db/repository";
 import type { User } from "../db/repository";
-import { extractable, extractText } from "./extract";
+import { extractable, extractText, extensionOf } from "./extract";
 
 /** Default page size for listings, matching the S3 protocol limit. */
 const MAX_KEYS = 1000;
 
 /**
- * How many objects one scan downloads and extracts concurrently. The
- * per-object work is I/O-bound (one S3 GET plus extraction), while the
- * SQLite writes stay serialized — bun:sqlite is synchronous and
+ * How many downloads one scan runs at once, regardless of budget room.
+ * A hard ceiling keeps the fixed per-download overhead (SDK streams,
+ * extraction setup) bounded even for a space of nothing but tiny files.
+ * The per-object work is I/O-bound (one S3 GET plus extraction), while
+ * the SQLite writes stay serialized — bun:sqlite is synchronous and
  * single-connection — so the pool only bounds in-flight bodies and
  * extraction CPU, never the database.
  */
-const SCAN_CONCURRENCY = 12;
+const SCAN_CONCURRENCY = 6;
+
+/**
+ * The scan's download budget, in charged bytes: 5x the extraction cap.
+ * Each in-flight download charges `size x weight` (weights below), so
+ * the worst-case mix of in-flight extractions stays a fraction of the
+ * budget instead of stacking a dozen worst-case documents.
+ */
+const SCAN_BUDGET_CAPS = 5;
+
+/**
+ * Charge multiplier for text-like files: decoded extraction peaks at
+ * roughly 1.5x the raw bytes.
+ */
+const TEXT_WEIGHT = 1.5;
+
+/**
+ * Charge multiplier for PDFs and DOCX: parsing peaks at several times
+ * the file size (pdf.js builds page structures, mammoth unzips the
+ * document), so these dominate the budget and serialize when large.
+ */
+const HEAVY_WEIGHT = 4;
+
+/**
+ * The charged bytes an in-flight download holds: object size times a
+ * per-type weight approximating extraction's peak memory multiple.
+ * Budget admission and release both use this number, so a scan's
+ * in-flight extraction footprint — not its object count — is what is
+ * bounded.
+ */
+function downloadCharge(fileName: string, size: number): number {
+  const ext = extensionOf(fileName);
+  const weight = ext === "pdf" || ext === "docx" ? HEAVY_WEIGHT : TEXT_WEIGHT;
+  return size * weight;
+}
 
 /** The outcome of one {@link scanUserSpace} run. */
 export interface ScanCounts {
@@ -172,26 +208,46 @@ export async function scanUserSpace(
     pending.push({ object, existing: existing !== undefined });
   }
 
-  // Download and extract with bounded concurrency, writing each result
-  // as it settles. A per-object download failure never aborts the scan
-  // (FR-008): the object is indexed name-only with a blank etag, which
-  // makes the next cycle's diff re-pend it — transient failures
-  // self-heal, and a permanent one costs one failed GET per cycle.
-  let cursor = 0;
+  // Download and extract under a charged byte budget, writing each
+  // result as it settles. A per-object download failure never aborts
+  // the scan (FR-008): the object is indexed name-only with a blank
+  // etag, which makes the next cycle's diff re-pend it — transient
+  // failures self-heal, and a permanent one costs one failed GET per
+  // cycle.
+  pending.sort(
+    (a, b) =>
+      downloadCharge(baseName(b.object.key), b.object.size) -
+      downloadCharge(baseName(a.object.key), a.object.size),
+  );
+  const budget = cap * SCAN_BUDGET_CAPS;
+  let charged = 0;
+  let running = 0;
+  const deferred: Array<{ object: ListedObject; existing: boolean }> = [];
+  const inFlight: Array<Promise<void>> = [];
+
   const fetchBody = async (object: ListedObject): Promise<string> => {
     if (object.size > cap || !extractable(baseName(object.key))) return "";
     const output = (await client.send(
       new GetObjectCommand({ Bucket: user.bucket, Key: object.key }),
     )) as { Body?: unknown };
     const bytes = await readObjectBody(output.Body);
+    if (bytes.length > cap) {
+      // The object changed between listing and download; buffering it
+      // whole would blow the budget. Degrade to name-only like any
+      // other failed download — the blank etag re-attempts next cycle.
+      throw new Error(
+        `object body ${bytes.length}B exceeds listed size ${object.size}B and cap ${cap}B`,
+      );
+    }
     return (await extractText(bytes, baseName(object.key))) ?? "";
   };
-  const worker = async (): Promise<void> => {
-    while (cursor < pending.length) {
-      const index = cursor++;
-      const next = pending[index];
-      if (!next) return;
-      const { object, existing } = next;
+
+  const run = async (
+    item: { object: ListedObject; existing: boolean },
+    charge: number,
+  ): Promise<void> => {
+    const { object, existing } = item;
+    try {
       let body: string | null = null;
       try {
         body = await fetchBody(object);
@@ -216,11 +272,51 @@ export async function scanUserSpace(
       } else {
         counts.indexed++;
       }
+    } finally {
+      charged -= charge;
+      running--;
+      // A release unblocks deferred heavyweights: admit what now fits,
+      // first-fit over the deferred queue. With nothing running the
+      // exclusive branch below admits the largest one unconditionally.
+      for (let i = 0; i < deferred.length; ) {
+        const next = deferred[i];
+        if (!next) break;
+        const nextCharge = downloadCharge(
+          baseName(next.object.key),
+          next.object.size,
+        );
+        if (running < SCAN_CONCURRENCY && charged + nextCharge <= budget) {
+          deferred.splice(i, 1);
+          charged += nextCharge;
+          running++;
+          inFlight.push(run(next, nextCharge));
+        } else {
+          i++;
+        }
+      }
     }
   };
-  await Promise.all(
-    Array.from({ length: Math.min(SCAN_CONCURRENCY, pending.length) }, worker),
-  );
+
+  const launch = (item: { object: ListedObject; existing: boolean }): void => {
+    const charge = downloadCharge(baseName(item.object.key), item.object.size);
+    if (running >= SCAN_CONCURRENCY) return;
+    if (charged + charge > budget && running > 0) return;
+    // Nothing else is running: admit even a budget-busting item —
+    // deferring it forever would starve the scan.
+    charged = running === 0 ? charge : charged + charge;
+    running++;
+    inFlight.push(run(item, charge));
+  };
+
+  for (const item of pending) {
+    const before = running;
+    launch(item);
+    if (running === before) deferred.push(item);
+  }
+  while (inFlight.length > 0) {
+    const batch = inFlight.splice(0);
+    await Promise.all(batch);
+  }
 
   return counts;
 }

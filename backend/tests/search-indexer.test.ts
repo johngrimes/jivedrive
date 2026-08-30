@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { migrateFromDir, openDatabase } from "../src/db/migrate";
-import { createUser, getSearchDoc } from "../src/db/repository";
+import { createUser, getSearchDoc, listSearchIndex } from "../src/db/repository";
 import type { User } from "../src/db/repository";
 import { scanUserSpace } from "../src/search/indexer";
 import { startScanScheduler } from "../src/search/scheduler";
@@ -380,6 +380,126 @@ describe("scanUserSpace", () => {
     expect(counts).toEqual({ indexed: 1, reindexed: 0, removed: 0 });
     expect(getSearchDoc(db, alice.id, "users/alice/real.txt")).not.toBeNull();
     expect(getSearchDoc(db, alice.id, "users/bob/other.txt")).toBeNull();
+  });
+
+  /** Drain microtasks and timers so gated downloads and admissions settle. */
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+    await new Promise<void>((r) => setTimeout(r, 0));
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+  }
+
+  it("bounds concurrent downloads by a byte budget, not object count", async () => {
+    const db = createDb();
+    const alice = seedUser(db);
+    // Text weight 1.5 x 550 B = 825 charged per object; the 5x-cap budget
+    // (5000 charged bytes at CAP=1000) admits six, defers the rest.
+    let inflight = 0;
+    let peak = 0;
+    const gates: Array<() => void> = [];
+    const tracked = (bytes: Uint8Array): FakeObject => ({
+      etag: '"t"',
+      size: bytes.length,
+      body: async () => {
+        inflight++;
+        peak = Math.max(peak, inflight);
+        await new Promise<void>((r) => gates.push(r));
+        inflight--;
+        return bytes;
+      },
+    });
+    const store: FakeStore = new Map(
+      Array.from({ length: 10 }, (_, i) => [
+        `users/alice/f${i}.txt`,
+        tracked(new TextEncoder().encode("x".repeat(550))),
+      ] as const),
+    );
+    const { client } = fakeClient(store);
+
+    const scanning = scanUserSpace(client, db, alice, CAP);
+    await flush();
+    expect(inflight).toBe(6);
+
+    while (gates.length) {
+      gates.shift()!();
+      await flush();
+    }
+    const counts = await scanning;
+
+    expect(counts).toEqual({ indexed: 10, reindexed: 0, removed: 0 });
+    expect(peak).toBe(6);
+  });
+
+  it("runs an extraction-weighted heavyweight object exclusively", async () => {
+    const db = createDb();
+    const alice = seedUser(db);
+    // PDF weight 4 x 990 B = 3960 charged; two would exceed the 5x-cap
+    // budget (5000), so each heavyweight runs alone and the others wait.
+    let inflight = 0;
+    let peak = 0;
+    const gates: Array<() => void> = [];
+    const store: FakeStore = new Map(
+      [0, 1, 2].map((i) => [
+        `users/alice/heavy${i}.pdf`,
+        {
+          etag: `"p${i}"`,
+          size: 990,
+          body: async () => {
+            inflight++;
+            peak = Math.max(peak, inflight);
+            await new Promise<void>((r) => gates.push(r));
+            inflight--;
+            return new Uint8Array(990);
+          },
+        } satisfies FakeObject,
+      ] as const),
+    );
+    const { client } = fakeClient(store);
+
+    const scanning = scanUserSpace(client, db, alice, CAP);
+    await flush();
+    expect(inflight).toBe(1);
+
+    while (gates.length) {
+      gates.shift()!();
+      await flush();
+    }
+    const counts = await scanning;
+
+    expect(counts).toEqual({ indexed: 3, reindexed: 0, removed: 0 });
+    expect(peak).toBe(1);
+  });
+
+  it("degrades to name-only when the downloaded body exceeds the cap", async () => {
+    const db = createDb();
+    const alice = seedUser(db);
+    let downloads = 0;
+    const store: FakeStore = new Map([
+      [
+        "users/alice/lied.txt",
+        {
+          etag: '"l1"',
+          size: 100, // listed within the cap...
+          body: async () => {
+            downloads++;
+            return new TextEncoder().encode("y".repeat(2000)); // ...but 2x over
+          },
+        } satisfies FakeObject,
+      ],
+    ]);
+    const { client } = fakeClient(store);
+
+    const counts = await scanUserSpace(client, db, alice, CAP);
+
+    expect(counts).toEqual({ indexed: 1, reindexed: 0, removed: 0 });
+    expect(getSearchDoc(db, alice.id, "users/alice/lied.txt")?.body).toBe("");
+    // Blank etag marks "never extracted": the next scan re-attempts it.
+    const row = listSearchIndex(db, alice.id).find(
+      (r) => r.key === "users/alice/lied.txt",
+    );
+    expect(row?.etag).toBe("");
+    await scanUserSpace(client, db, alice, CAP);
+    expect(downloads).toBe(2);
   });
 });
 

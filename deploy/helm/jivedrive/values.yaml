@@ -18,15 +18,18 @@ jivedrive:
   # this at 1.
   replicas: 1
 
-  # Resource requests and limits for the server container. The defaults keep
-  # the pod within sane bounds on a small cluster; tune per deployment.
+  # Resource requests and limits for the server container. The memory
+  # limit must cover the search scan's weighted download budget (5x the
+  # extraction cap of charged in-flight bytes) plus the app baseline;
+  # 512Mi OOM-killed the first full index of a large space. Tune per
+  # deployment.
   resources:
     requests:
       cpu: "100m"
-      memory: "128Mi"
+      memory: "256Mi"
     limits:
       cpu: "500m"
-      memory: "512Mi"
+      memory: "1Gi"
 
   # Pod scheduling. All optional, all unset by default.
   nodeSelector: {}
@@ -115,6 +118,8 @@ jivedrive:
   # ephemeral and lost when the pod is recreated. Enable for production.
   persistence:
     enabled: false
-    size: "1Gi"
+    # 1Gi filled up partway through the first full search index of a
+    # large space (~21 KiB of database per indexed document).
+    size: "5Gi"
     mountPath: "/data"
     # storageClassName: ""  # set when your cluster requires a specific class

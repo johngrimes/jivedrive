@@ -90,7 +90,7 @@ const TEXT_EXTENSIONS = new Set([
 ]);
 
 /** The lowercased extension of a file name ("" when it has none). */
-function extensionOf(fileName: string): string {
+export function extensionOf(fileName: string): string {
   const dot = fileName.lastIndexOf(".");
   if (dot <= 0 || dot === fileName.length - 1) return "";
   return fileName.slice(dot + 1).toLowerCase();
