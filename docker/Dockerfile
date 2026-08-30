@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 
-# Stage 1: install dependencies, build the SPA, and bundle the backend.
+# Stage 1: install dependencies and build the SPA (the backend runs
+# from source in the runtime stage).
 FROM oven/bun:1.3.14 AS build
 
 WORKDIR /app
@@ -17,11 +18,11 @@ RUN bun install --frozen-lockfile
 COPY frontend ./frontend
 RUN bun run --cwd frontend build
 
-# Bundle the backend into a single file. Runtime dependencies (including
-# any native modules) are externalised, so node_modules is copied into the
-# runtime image as well.
+# The backend runs from source (bun executes TypeScript natively) so
+# that worker entry files referenced via new URL(..., import.meta.url)
+# — the search scan and extraction workers — resolve at runtime; a
+# single-file bundle cannot resolve them.
 COPY backend ./backend
-RUN cd backend && bun build ./src/server.ts --target=bun --outfile=/app/server.js
 
 # Stage 2: runtime - the Hono server serves the built SPA.
 FROM oven/bun:1.3.14 AS runtime
@@ -30,7 +31,7 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY --from=build /app/server.js ./server.js
+COPY --from=build /app/backend/src ./backend/src
 COPY --from=build /app/frontend/dist ./frontend/dist
 # SQL migrations are read from disk at startup.
 COPY --from=build /app/backend/migrations ./migrations
@@ -41,4 +42,4 @@ EXPOSE 3000
 
 USER bun
 
-CMD ["bun", "run", "./server.js"]
+CMD ["bun", "run", "./backend/src/server.ts"]

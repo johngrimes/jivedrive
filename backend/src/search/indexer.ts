@@ -178,6 +178,16 @@ export async function scanUserSpace(
   db: Database,
   user: User,
   cap: number,
+  /**
+   * Text extractor for downloaded bodies; defaults to the main-thread
+   * worker-backed {@link extractText}. The scan worker passes the pure
+   * in-thread extractor instead — it already runs off the server's
+   * main thread, so a nested worker would only add failure modes.
+   */
+  extract: (
+    buffer: Uint8Array,
+    fileName: string,
+  ) => Promise<string | null> = extractText,
 ): Promise<ScanCounts> {
   const counts: ScanCounts = { indexed: 0, reindexed: 0, removed: 0 };
 
@@ -245,7 +255,7 @@ export async function scanUserSpace(
         `object body ${bytes.length}B exceeds listed size ${object.size}B and cap ${cap}B`,
       );
     }
-    return (await extractText(bytes, baseName(object.key))) ?? "";
+    return (await extract(bytes, baseName(object.key))) ?? "";
   };
 
   const run = async (

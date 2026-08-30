@@ -22,6 +22,13 @@ export interface Migration {
 export function openDatabase(path: string): Database {
   const db = new Database(path);
   db.run("PRAGMA foreign_keys = ON;");
+  // WAL lets a scan worker's write connection and this connection
+  // proceed without blocking each other (the scan reconciles tens of
+  // thousands of rows while the server serves reads); busy_timeout
+  // turns the residual writer-writer contention into a wait instead of
+  // an immediate SQLITE_BUSY.
+  db.run("PRAGMA journal_mode = WAL;");
+  db.run("PRAGMA busy_timeout = 5000;");
   return db;
 }
 

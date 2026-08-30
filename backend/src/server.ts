@@ -24,8 +24,11 @@ import { adminRoutes } from "./routes/admin";
 import { sharesRoutes } from "./routes/shares";
 import { usersRoutes } from "./routes/users";
 import { createS3Client } from "./s3/client";
+import type { ScanCounts } from "./search/indexer";
 import { startScanScheduler } from "./search/scheduler";
 import type { ScanSchedulerHandle } from "./search/scheduler";
+import { startScanWorkerHost } from "./search/scan-host";
+import type { ScanWorkerHost } from "./search/scan-host";
 import { createScanStatusRegistry } from "./search/status";
 import type { ScanStatusRegistry } from "./search/status";
 import {
@@ -62,6 +65,12 @@ export interface ServerDeps {
    * admin view covers the background scheduler's scans too.
    */
   scanStatus?: ScanStatusRegistry;
+  /**
+   * Replacement runner for the admin reindex endpoint's scan
+   * (production: the scan worker host). When absent the reindex scan
+   * runs in-process against the S3 client.
+   */
+  submitScan?: (user: User) => Promise<ScanCounts>;
 }
 
 /**
@@ -190,6 +199,7 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
       requireUser: requireUser(deps.db, deps.config.sessionIdleDays),
       s3Client,
       scanStatus,
+      submitScan: deps.submitScan,
     }),
   );
 
@@ -281,12 +291,14 @@ export function getUser(c: Context<ServerEnv>): User {
  * Start the background search-index scheduler over every user's space at
  * the configured interval (FR-007). The S3 client is injectable so tests
  * and the e2e server can substitute a stub or mock; production builds one
- * from the config.
+ * from the config and passes `scanHost` so scans run in the worker.
  *
  * @param config - application configuration (interval + size cap)
  * @param db - open, migrated database connection
  * @param client - S3 client; defaults to one built from the config
  * @param scanStatus - shared scan status registry for admin reporting
+ * @param scanHost - optional scan worker host (production); when given
+ *   scans run off the main thread instead of in-process
  * @returns a handle to stop the scheduler (or observe in-flight scans)
  */
 export function startSearchIndexer(
@@ -294,6 +306,7 @@ export function startSearchIndexer(
   db: Database,
   client: S3Client = createS3Client(config.s3),
   scanStatus?: ScanStatusRegistry,
+  scanHost?: ScanWorkerHost,
 ): ScanSchedulerHandle {
   return startScanScheduler({
     client,
@@ -301,12 +314,10 @@ export function startSearchIndexer(
     intervalSeconds: config.searchScanIntervalSeconds,
     maxBytes: config.searchIndexMaxBytes,
     status: scanStatus,
+    runScan: scanHost ? (user) => scanHost.scan(user) : undefined,
   });
 }
-/**
- * Load configuration, open and migrate the database, and start the server.
- * Runs when this module is the entry point.
- */
+
 export function main(): void {
   const config = loadConfig();
   const db = openDatabase(config.dbPath);
@@ -318,11 +329,23 @@ export function main(): void {
   // One shared registry: the admin scan-status route reads what the
   // background scheduler and the reindex endpoint record.
   const scanStatus = createScanStatusRegistry();
-  const app = createApp({ config, db, scanStatus });
+  // Production runs scans in a dedicated worker: the bootstrap scan of
+  // a large space must never contend with the server's event loop.
+  const scanHost = startScanWorkerHost({
+    dbPath: config.dbPath,
+    s3: config.s3,
+    cap: config.searchIndexMaxBytes,
+  });
+  const app = createApp({
+    config,
+    db,
+    scanStatus,
+    submitScan: (user) => scanHost.scan(user),
+  });
   Bun.serve({ port: config.port, fetch: app.fetch });
   // FR-007: the background scan loop reconciles every user's search
   // index; the process lifetime is its lifetime, so nothing stops it.
-  startSearchIndexer(config, db, undefined, scanStatus);
+  startSearchIndexer(config, db, undefined, scanStatus, scanHost);
   console.log(`JiveDrive listening on http://localhost:${config.port}`);
 }
 

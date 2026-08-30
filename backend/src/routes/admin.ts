@@ -54,9 +54,13 @@ export interface AdminRouteDeps {
   s3Client: S3Client;
   /** Shared scan status registry the reindex scan reports into. */
   scanStatus: ScanStatusRegistry;
+  /**
+   * Replacement runner for the reindex scan (production: the scan
+   * worker host). When absent the scan runs in-process against
+   * {@link s3Client}.
+   */
+  submitScan?: (user: User) => Promise<ScanCounts>;
 }
-
-/** One user's scan status in the admin scan-status list. */
 interface AdminScanStatusResponse {
   userId: string;
   username: string;
@@ -308,7 +312,14 @@ export function adminRoutes(deps: AdminRouteDeps): Hono<ServerEnv> {
       return jsonError(c, 404, "User not found", "not_found");
     }
     const run = deps.scanStatus.recordStart(target.id);
-    void scanUserSpace(deps.s3Client, db, target, config.searchIndexMaxBytes)
+    // Production routes the scan through the worker host (the scan
+    // must never run on the server's main thread); the e2e server and
+    // tests scan in-process.
+    const runner =
+      deps.submitScan ??
+      ((user: User) =>
+        scanUserSpace(deps.s3Client, db, user, config.searchIndexMaxBytes));
+    void runner(target)
       .then((counts) => {
         deps.scanStatus.recordSuccess(run, counts);
       })

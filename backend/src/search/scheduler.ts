@@ -53,6 +53,13 @@ export interface ScanSchedulerOptions {
    * reflects both this scheduler and manual reindex scans.
    */
   status?: ScanStatusRegistry;
+  /**
+   * Optional replacement for the in-process scan: production passes
+   * the scan worker host so listing, extraction and SQLite writes run
+   * off the server's main thread. When absent the scan runs in-process
+   * against `client`/`db` (tests, e2e server with its mock S3).
+   */
+  runScan?: (user: User) => Promise<ScanCounts>;
 }
 
 /**
@@ -70,7 +77,8 @@ export interface ScanSchedulerOptions {
 export function startScanScheduler(
   options: ScanSchedulerOptions,
 ): ScanSchedulerHandle {
-  const { client, db, intervalSeconds, maxBytes, onCycle, status } = options;
+  const { client, db, intervalSeconds, maxBytes, onCycle, status, runScan } =
+    options;
   const running = new Set<string>();
 
   async function scanUser(user: User): Promise<void> {
@@ -78,7 +86,11 @@ export function startScanScheduler(
     running.add(user.id);
     const run = status?.recordStart(user.id);
     try {
-      const counts = await scanUserSpace(client, db, user, maxBytes);
+      // A runScan override (the production scan worker) replaces the
+      // in-process scan; tests and the e2e server scan in-process.
+      const counts = await (runScan
+        ? runScan(user)
+        : scanUserSpace(client, db, user, maxBytes));
       if (run) status?.recordSuccess(run, counts);
       onCycle?.({ userId: user.id, counts });
     } catch (error) {
