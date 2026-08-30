@@ -145,9 +145,9 @@ All values live under the `jivedrive` top-level key. Values are grouped as
 | `jivedrive.image.pullPolicy` | Image pull policy | `Always` |
 | `jivedrive.image.pullSecret` | Name of an existing `kubernetes.io/dockerconfigjson` Secret for pulling the image from a private registry; empty means no `imagePullSecrets` | `""` (none) |
 | `jivedrive.replicas` | Number of replicas; keep at `1` (SQLite, single-writer) | `1` |
-| `jivedrive.resources.requests.memory` | Memory request for the server container | `128Mi` |
+| `jivedrive.resources.requests.memory` | Memory request for the server container | `256Mi` |
 | `jivedrive.resources.requests.cpu` | CPU request for the server container | `100m` |
-| `jivedrive.resources.limits.memory` | Memory limit for the server container | `512Mi` |
+| `jivedrive.resources.limits.memory` | Memory limit for the server container | `1Gi` |
 | `jivedrive.resources.limits.cpu` | CPU limit for the server container | `500m` |
 | `jivedrive.nodeSelector` | Node selector for pod scheduling | `{}` |
 | `jivedrive.tolerations` | Tolerations for pod scheduling | `[]` |
@@ -157,7 +157,7 @@ All values live under the `jivedrive` top-level key. Values are grouped as
 | `jivedrive.service.type` | Kubernetes Service type | `ClusterIP` |
 | `jivedrive.service.port` | Service port | `80` |
 | `jivedrive.persistence.enabled` | Mount a PVC for the SQLite database | `false` |
-| `jivedrive.persistence.size` | PVC size when enabled | `1Gi` |
+| `jivedrive.persistence.size` | PVC size when enabled | `5Gi` |
 | `jivedrive.persistence.mountPath` | Mount path for the database volume | `/data` |
 | `jivedrive.persistence.storageClassName` | Storage class for the PVC | unset (cluster default) |
 
@@ -214,8 +214,8 @@ The deployment renders a hardened container by default (asserted in CI by
   (`capabilities.drop: [ALL]`), and seccomp `RuntimeDefault`.
 - The pod-level `securityContext` keeps `runAsNonRoot: true` and
   `fsGroup: 1000`, so the pod still runs as the non-root `bun` user.
-- Default resource requests (`100m` CPU, `128Mi` memory) and limits
-  (`500m` CPU, `512Mi` memory); override via `jivedrive.resources`.
+- Default resource requests (`100m` CPU, `256Mi` memory) and limits
+  (`500m` CPU, `1Gi` memory); override via `jivedrive.resources`.
 
 ### Passkey reset
 
