@@ -692,7 +692,7 @@ export function AdminUsersPage() {
                       <td className="hidden md:table-cell">
                         {formatDate(entry.createdAt)}
                       </td>
-                      <td className="whitespace-nowrap pr-0 text-right">
+                      <td className="pr-0 text-right">
                         <button
                           className="btn btn-ghost min-h-11"
                           type="button"

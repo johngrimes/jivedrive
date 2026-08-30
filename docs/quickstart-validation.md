@@ -560,3 +560,167 @@ Not validated here (same environment limits as spec 005):
   bucket with no code change (the resolver only composes bucket/prefix).
 - A Kubernetes deployment: unchanged from spec 005; this feature adds no
   runtime configuration.
+
+## Feature 007 - File search (T032)
+
+Spec [`007-file-search/quickstart.md`](../.local/specs/007-file-search/quickstart.md)
+adds a whole-space file search: filename matches (FR-002) and content
+matches with snippets for text/PDF/DOCX (FR-004/FR-005), scoped to the
+caller's own space plus every live incoming share (FR-010/FR-011), with an
+admin per-user "Rebuild search index" action (US4) and a periodic scan
+scheduler (T007).
+
+Environment and method:
+
+- Live server: the e2e server (`backend/src/e2eServer.ts`) on scratch port
+  **5174/5176** (`JIVEDRIVE_PORT` + `JIVEDRIVE_DB_PATH` to a file-backed DB)
+  because the user's vite dev server holds 5173. It serves the freshly built
+  SPA (`frontend/dist`) and the API with the in-memory mock S3 (port 5299)
+  and the 2-second search scan interval.
+- Users: the seeded accounts were used (`alice`, `bob`, `admin`, `gina`).
+  Sign-in was via the seeded session cookies (`browse-session`,
+  `bob-session`, `admin-session`, `gina-session`); passkey enrollment is
+  covered by the e2e suite, not repeated here.
+- Method: the four scenarios were driven through the **real UI in a headless
+  Chromium browser** (uploads, search, navigation, downloads, admin reindex),
+  with the API (curl) used only where the browser tooling could not drive a
+  flow (share creation with a synthetic-input limitation in the dialog's
+  debounced user search, and the reindex-count races below). Scenario 3's
+  unprivileged third user is `gina` — no `carol` account exists, only a
+  seeded invite.
+
+All checks ran on 2026-08-30.
+
+### Scenario 1 - Find a file by name - PASS
+
+- Uploaded `Quarterly Report.pdf` into `projects` through the Files page
+  upload control (progress bar, then the row appeared).
+- Triggered "Rebuild index" for `alice` from the admin users page; the page
+  reported `index rebuilt for "alice" (0 indexed, 0 re-extracted, 0 removed)`
+  — 0s because the 2-second scheduler had already indexed everything.
+- Searched `quarterly` in the Files search box: a result row
+  `Quarterly Report.pdf`, labelled **Name match**, path `projects` (the
+  seeded `summary.txt` under `docs/reports/2026/q1/quarterly/` also matched
+  on content, as expected).
+- Clicking the result navigated to `files?prefix=projects%2F`; the row's
+  Download action fired a 200 GET against the presigned mock-S3 URL
+  `users/alice/projects/Quarterly%20Report.pdf`.
+
+### Scenario 2 - Find a document by its contents - PASS (one nuance)
+
+- Uploaded through the UI into the root: `zendesk-notes.txt`,
+  `zendesk-notes.pdf`, `zendesk-notes.docx`, a 27.6 MB
+  `oversized-zendesk.txt` (over the 10 MB index cap) and
+  `zendesk-migration.docx` — all containing `zendesk migration 2026 notes`.
+- Searched `zendesk migration`: the txt, pdf and docx were returned as
+  **Content match** with snippets showing the phrase; the oversized file was
+  absent. `zendesk-migration.docx` was returned but as a *content* match
+  (ranked third), not a filename match ranked first: the trigram filename
+  index requires the literal substring `zendesk migration`, which
+  `zendesk-migration.docx` (hyphen) does not contain. The file is still
+  found via its body; recorded as a nuance vs the quickstart wording, not a
+  functional failure.
+- Searched the 2-character query `ze`: 5 results, all **Name match**
+  (filename-only fallback, including the oversized file by name).
+
+### Scenario 3 - Search covers shared folders and respects scope - PASS
+
+- Uploaded `projects/deep/notes.txt` (`alpine retreat`) as alice via the
+  upload API; it appeared in her own search within one scan interval.
+- Alice shared `projects` with bob (`POST /api/shares`; the share dialog
+  flow itself is covered by `e2e/share-folder.spec.ts`).
+- Bob searched `alpine retreat` in the UI: one result, `notes.txt`,
+  **Content match** with snippet `alpine retreat`, labelled
+  **"Shared by alice"**, mount-relative path `deep`.
+- Clicking the result navigated into the shared mount
+  (`files?space=shared:<id>&prefix=deep%2F`, breadcrumbs
+  "projects / Shared by alice / deep") and the row Download fired a 200 GET
+  for `users/alice/projects/deep/notes.txt`.
+- Alice revoked (`DELETE /api/shares/<id>`, 204); bob's next search returned
+  **0 results** immediately, without a scan. Gina (no share) searching the
+  same phrase also returned 0 results.
+
+### Scenario 4 - The index reconciles with reality - PASS
+
+- Baseline: `zendesk migration` returned 4 files. Then, through the app UI
+  as alice: deleted `zendesk-notes.txt` (confirm dialog), uploaded a new
+  `fresh.txt` containing the phrase, and overwrote `zendesk-notes.pdf`
+  (409 confirm dialog → Replace) with content no longer containing it.
+- Admin reindex reports indexed/reindexed/removed counts. Because the
+  2-second scheduler reconciles changes almost immediately, non-zero counts
+  were captured by racing a change with an immediate `POST /api/admin/users/
+  <alice-id>/reindex`: a brand-new external file reported
+  `{"indexed":1,...}`, a changed one `{"reindexed":1,...}` and an app
+  deletion `{"removed":1,...}`; a no-change reindex reports all zeros.
+- Searching `zendesk migration` again: the deleted `zendesk-notes.txt` is
+  gone; `fresh.txt` appears; the overwritten `zendesk-notes.pdf` no longer
+  matches (its body no longer contains the phrase).
+- External upload: `PUT` of two files straight into the mock bucket
+  (`users/alice/external-report.txt`, `external-fresh-*.txt`) with curl,
+  then reindex — both are found by the search (content match), proving
+  out-of-band S3 writes get indexed.
+
+### Not validated here
+
+- Real OVHcloud Object Storage behaviour (mock S3 in-memory store) and a
+  Kubernetes deployment (no cluster; see the spec 005 section).
+- Passkey enrollment/sign-in ceremonies (covered by `e2e/auth.spec.ts`
+  with the CDP virtual authenticator; not repeated here).
+
+### T033 - Full verification stack (2026-08-30)
+
+Commands and results on the worktree (`feature/007-file-search`):
+
+```text
+bun run test:backend   -> 463 pass, 0 fail (after fixing migrate.test.ts,
+                          see below); ~3.4 s
+bun run test:frontend  -> 10 files, 93 tests pass; ~4.9 s
+bun run typecheck      -> clean (backend + frontend); ~7.3 s
+bun run lint           -> clean after fixing 3 search-feature lint errors
+                          (SearchResults.tsx ref-write-in-render and
+                          setState-in-effect; unused `context` fixture in
+                          e2e/search.spec.ts)
+```
+
+Two search-feature-caused failures were fixed (everything else pre-existing):
+
+1. `backend/tests/migrate.test.ts` ("applies the real initial schema") still
+   expected migrations 001-004; T004 added `005_search_index.sql`. The
+   expected list now includes it.
+2. The admin users page's new "Rebuild index" button made the row-actions
+   cell (`whitespace-nowrap`, previously two buttons) overflow horizontally
+   at 375px and 768px, failing `admin.spec.ts:112` and
+   `responsive.spec.ts:673` (`expectNoHorizontalOverflow`). The users-table
+   actions cell now drops `whitespace-nowrap` so the three buttons wrap
+   (`frontend/src/pages/AdminUsers.tsx`).
+
+Playwright suite: 71 tests total. Because the user's vite dev server holds
+port 5173, the suite ran on scratch port 5175 via a temporary copy of
+`e2e/playwright.config.ts` (port + `JIVEDRIVE_WEBAUTHN_ORIGIN` override; the
+temp config was removed after the run, and `e2eServer.ts` now honours a
+`JIVEDRIVE_WEBAUTHN_ORIGIN` env override instead of hardcoding 5173).
+Result: **60 passed / 6 failed / 4 did not run (worker interruption mid-run)**.
+All 6 failures are pre-existing environmental artifacts of running on a
+scratch port, not search regressions:
+
+- `admin.spec.ts:266`, `admin.spec.ts:149` (partially), `share.spec.ts:46`,
+  `share-folder.spec.ts:205`: invite/share **links are generated with the
+  server's configured origin**; on the scratch port they point at
+  `localhost:5173`, where the user's vite dev server (not the test backend)
+  answers, so the "follow the link in a fresh context" steps fail. On the
+  standard port 5173 (CI / normal runs) these pass — they were green in the
+  spec 006 full pass (62 passed, 2026-08-23) and the affected tests passed
+  individually in this session once the origin override was honoured.
+- `admin.spec.ts:149` / `responsive.spec.ts:640` / `responsive.spec.ts:783`:
+  same link-redirect class plus clipboard-permission flakiness
+  (`navigator.clipboard.readText`) under the parallel scratch-port run; the
+  underlying flows (re-send, remove) were exercised and pass in isolation.
+
+`scripts/verify-*.sh` were not re-run: no new verification script is
+warranted for search (the quickstart scenarios above cover it live), and the
+existing scripts boot their own e2e servers on fixed ports.
+
+T032 is recorded as done; T033 is **not** ticked because the full e2e suite
+could not be run end-to-end green in this environment (5173 occupied; the
+remaining 6 failures are the pre-existing scratch-port artifacts documented
+above, plus two suite interruptions attributed to parallel-worker restarts).

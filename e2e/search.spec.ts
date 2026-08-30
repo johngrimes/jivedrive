@@ -121,7 +121,6 @@ test("the search UI is fully usable at mobile width", async ({ page }) => {
 
 test("content search finds uploaded txt/pdf/docx by phrase with snippets, below name matches", async ({
   page,
-  context,
 }) => {
   // A per-attempt folder and names keep CI retries independent: the e2e
   // server keeps one in-memory database for the whole run, so a retried

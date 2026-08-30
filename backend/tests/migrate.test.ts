@@ -183,6 +183,7 @@ describe("migrateFromDir", () => {
       "002_passkey_discoverable.sql",
       "003_session_last_used.sql",
       "004_shares.sql",
+      "005_search_index.sql",
     ]);
 
     // Every table from data-model.md exists.

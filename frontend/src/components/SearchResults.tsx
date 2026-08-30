@@ -34,11 +34,19 @@ export interface SearchResultsProps {
   onSessionExpired?: () => void;
 }
 
-/** What the results area is currently showing. */
+/** What the results area is currently showing. Done and error states are
+ * tagged with the query and retry key they belong to, so a newer query or
+ * a retry renders as loading without a setState call inside the effect. */
 type SearchState =
   | { status: "loading" }
-  | { status: "done"; results: SearchResult[]; capped: boolean }
-  | { status: "error"; message: string };
+  | {
+      status: "done";
+      query: string;
+      retry: number;
+      results: SearchResult[];
+      capped: boolean;
+    }
+  | { status: "error"; query: string; retry: number; message: string };
 
 /** Human-readable label per match type. */
 const MATCH_LABELS: Record<SearchResult["match"], string> = {
@@ -94,21 +102,31 @@ export function SearchResults({
   onDelete,
   onSessionExpired,
 }: SearchResultsProps) {
-  const [state, setState] = useState<SearchState>({ status: "loading" });
+  const [fetched, setFetched] = useState<SearchState>({ status: "loading" });
   const [retryKey, setRetryKey] = useState(0);
   // The session-expiry callback lives in a ref: a fresh inline callback
   // from the parent must never retrigger the effect (and a new request).
   const sessionExpiredRef = useRef(onSessionExpired);
-  sessionExpiredRef.current = onSessionExpired;
+  useEffect(() => {
+    sessionExpiredRef.current = onSessionExpired;
+  }, [onSessionExpired]);
+  // What the area shows: the fetch result, or loading while it belongs
+  // to an older query/retry than the one currently requested.
+  const state =
+    fetched.status !== "loading" &&
+    (fetched.query !== query || fetched.retry !== retryKey)
+      ? ({ status: "loading" } as const)
+      : fetched;
 
   useEffect(() => {
     let cancelled = false;
-    setState({ status: "loading" });
     searchFiles(query)
       .then((body) => {
         if (!cancelled) {
-          setState({
+          setFetched({
             status: "done",
+            query,
+            retry: retryKey,
             results: body.results,
             capped: body.capped,
           });
@@ -123,8 +141,10 @@ export function SearchResults({
           sessionExpiredRef.current?.();
           return;
         }
-        setState({
+        setFetched({
           status: "error",
+          query,
+          retry: retryKey,
           message: apiError?.message ?? "Something went wrong. Try again.",
         });
       });

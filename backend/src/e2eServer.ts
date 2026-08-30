@@ -221,7 +221,8 @@ const env: Record<string, string | undefined> = {
   JIVEDRIVE_S3_SECRET_ACCESS_KEY:
     process.env.JIVEDRIVE_S3_SECRET_ACCESS_KEY ?? "test",
   JIVEDRIVE_WEBAUTHN_RP_ID: "localhost",
-  JIVEDRIVE_WEBAUTHN_ORIGIN: "http://localhost:5173",
+  JIVEDRIVE_WEBAUTHN_ORIGIN:
+    process.env.JIVEDRIVE_WEBAUTHN_ORIGIN ?? "http://localhost:5173",
   // This test-only server serves every Playwright spec from one client
   // identity (127.0.0.1) in seconds, so the production defaults (auth
   // 20/min) would 429 mid-run. Override with generous values, keeping
