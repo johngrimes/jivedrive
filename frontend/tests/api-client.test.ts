@@ -22,6 +22,7 @@ import {
   removeAdminUser,
   resendAdminInvite,
   resetUserPasskeys,
+  searchFiles,
   revokeShare,
   searchUsers,
 } from "../src/api/client";
@@ -758,5 +759,65 @@ describe("searchUsers", () => {
     const err = error as Error & { code: string; status: number };
     expect(err.code).toBe("unauthorized");
     expect(err.status).toBe(401);
+  });
+});
+
+describe("searchFiles (T009)", () => {
+  it("requests the search endpoint and returns the result body", async () => {
+    const body = {
+      results: [
+        {
+          name: "Q3-Report.pdf",
+          path: "projects",
+          key: "users/alice/projects/Q3-Report.pdf",
+          space: "own",
+          match: "name",
+        },
+      ],
+      capped: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await searchFiles("report");
+
+    expect(result).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files/search?q=report",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("URL-encodes the query", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ results: [], capped: false }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await searchFiles("report ideas 2");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files/search?q=report%20ideas%202",
+      expect.anything(),
+    );
+  });
+
+  it("propagates server errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(
+            { error: "A search query is required", code: "bad_request" },
+            400,
+          ),
+        ),
+    );
+
+    const error = await searchFiles("").catch((e: unknown) => e);
+    const err = error as Error & { code: string; status: number };
+    expect(err.code).toBe("bad_request");
+    expect(err.status).toBe(400);
   });
 });

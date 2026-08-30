@@ -37,6 +37,7 @@ import {
   markInviteClaimed,
   normalizePrefix,
   removeSearchDoc,
+  searchFileNames,
   updateCredentialCounter,
   updateSessionLastUsed,
   upsertSearchDoc,
@@ -949,9 +950,7 @@ describe("search index", () => {
   function rawDoc(db: Database, rowid: number) {
     return db
       .query("SELECT rowid, fileName, body FROM search_docs WHERE rowid = ?")
-      .get(rowid) as
-      | { rowid: number; fileName: string; body: string }
-      | null;
+      .get(rowid) as { rowid: number; fileName: string; body: string } | null;
   }
 
   it("upserts a new document into search_index and search_docs (T004)", () => {
@@ -1163,5 +1162,118 @@ describe("search index", () => {
     expect(
       db.query("SELECT COUNT(*) AS n FROM search_docs").get() as { n: number },
     ).toEqual({ n: 1 });
+  });
+});
+
+describe("searchFileNames (T010)", () => {
+  it("finds filename substring matches case-insensitively for one user only", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/projects/Q3-Report.pdf",
+      etag: '"r"',
+      size: 1,
+      fileName: "Q3-Report.pdf",
+      body: "",
+    });
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/notes/report ideas.txt",
+      etag: '"i"',
+      size: 2,
+      fileName: "report ideas.txt",
+      body: "",
+    });
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/readme.md",
+      etag: '"m"',
+      size: 3,
+      fileName: "readme.md",
+      body: "",
+    });
+    upsertSearchDoc(db, {
+      userId: bob.id,
+      key: "users/bob/report.txt",
+      etag: '"b"',
+      size: 4,
+      fileName: "report.txt",
+      body: "",
+    });
+
+    const hits = searchFileNames(db, alice.id, "report");
+
+    expect(hits.map((hit) => hit.key).sort()).toEqual([
+      "users/alice/notes/report ideas.txt",
+      "users/alice/projects/Q3-Report.pdf",
+    ]);
+    expect(hits[0]?.fileName).toBeDefined();
+  });
+
+  it("does not match a file whose body contains the query but name does not", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/budget.xlsx",
+      etag: '"x"',
+      size: 5,
+      fileName: "budget.xlsx",
+      body: "the quarterly report numbers",
+    });
+
+    expect(searchFileNames(db, alice.id, "report")).toEqual([]);
+  });
+
+  it("honours the limit so the route can compute the capped flag", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    for (let i = 0; i < 4; i++) {
+      upsertSearchDoc(db, {
+        userId: alice.id,
+        key: `users/alice/match-${i}.txt`,
+        etag: `"${i}"`,
+        size: i,
+        fileName: `match-${i}.txt`,
+        body: "",
+      });
+    }
+
+    expect(searchFileNames(db, alice.id, "match-", 2)).toHaveLength(2);
+    expect(searchFileNames(db, alice.id, "match-")).toHaveLength(4);
+  });
+
+  it("falls back to a LIKE filename query for 1-2 character queries", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/Q3-Report.pdf",
+      etag: '"r"',
+      size: 1,
+      fileName: "Q3-Report.pdf",
+      body: "",
+    });
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/notes.txt",
+      etag: '"n"',
+      size: 2,
+      fileName: "notes.txt",
+      body: "",
+    });
+
+    // Trigram MATCH cannot see a 2-character query; the LIKE fallback can.
+    expect(searchFileNames(db, alice.id, "q3").map((h) => h.key)).toEqual([
+      "users/alice/Q3-Report.pdf",
+    ]);
+    expect(searchFileNames(db, alice.id, "3-").map((h) => h.key)).toEqual([
+      "users/alice/Q3-Report.pdf",
+    ]);
+    // LIKE wildcards in the query stay literal.
+    expect(searchFileNames(db, alice.id, "%")).toEqual([]);
+    expect(searchFileNames(db, alice.id, "_")).toEqual([]);
   });
 });

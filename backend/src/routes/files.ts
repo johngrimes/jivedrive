@@ -25,6 +25,7 @@ import type { ServerEnv } from "../server";
 import type { Database } from "bun:sqlite";
 import { parseSpace, resolveSpace } from "../scope";
 import type { ResolvedScope, SpaceRef } from "../scope";
+import { searchFileNames } from "../db/repository";
 import type { User } from "../db/repository";
 
 /** Dependencies for {@link filesRoutes}. */
@@ -41,6 +42,12 @@ export interface FileRouteDeps {
 
 /** Lifetime of a download URL in seconds (15 minutes). */
 const DOWNLOAD_URL_TTL_SECONDS = 15 * 60;
+
+/** Maximum number of search results returned per query (contract cap). */
+const SEARCH_RESULT_CAP = 50;
+
+/** Maximum search query length in characters (contract `q` parameter). */
+const SEARCH_QUERY_MAX_LENGTH = 200;
 
 /** Lifetime of an upload (presigned PUT) URL in seconds (15 minutes). */
 const UPLOAD_URL_TTL_SECONDS = 15 * 60;
@@ -191,6 +198,47 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
       },
       200,
     );
+  });
+
+  // Filename search (007-file-search US1, T010): one flat result list
+  // over the caller's whole own space, ranked by the index. The query is
+  // trimmed; an empty-after-trim or over-long query is a 400. Shared
+  // scopes arrive with US3; the result shape already carries every field
+  // the contract defines (snippet/sharedBy are set by later phases).
+  // Rate limiting needs no registration here: the /api/files/* family
+  // middleware covers this route.
+  app.get("/search", (c) => {
+    const user = c.get("user");
+    const q = c.req.query("q")?.trim() ?? "";
+    if (q === "") {
+      return jsonError(c, 400, "A search query is required", "bad_request");
+    }
+    if (q.length > SEARCH_QUERY_MAX_LENGTH) {
+      return jsonError(c, 400, "The search query is too long", "bad_request");
+    }
+
+    // One extra hit decides the capped flag without a second query.
+    const hits = searchFileNames(db, user.id, q, SEARCH_RESULT_CAP + 1);
+    const capped = hits.length > SEARCH_RESULT_CAP;
+    const results = (capped ? hits.slice(0, SEARCH_RESULT_CAP) : hits).map(
+      (hit) => {
+        // The path is relative to the space root: strip the user's
+        // storage prefix and the base name; a root file has no folder.
+        const relative = hit.key.startsWith(user.prefix)
+          ? hit.key.slice(user.prefix.length)
+          : hit.key;
+        const lastSlash = relative.lastIndexOf("/");
+        const path = lastSlash === -1 ? "" : relative.slice(0, lastSlash);
+        return {
+          name: hit.fileName,
+          path,
+          key: hit.key,
+          space: "own" as const,
+          match: "name" as const,
+        };
+      },
+    );
+    return c.json({ results, capped }, 200);
   });
 
   app.get("/download-url", async (c) => {

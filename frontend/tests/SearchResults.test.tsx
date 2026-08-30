@@ -1,0 +1,370 @@
+/**
+ * Frontend tests for file search (007-file-search, US1, T009): the
+ * SearchResults component and the Files page wiring (submit swaps the
+ * folder listing for results, clearing restores it, a result click
+ * navigates to the containing folder). Follows the existing component
+ * test conventions: createRoot into jsdom, act, stubbed global fetch.
+ */
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Mock } from "vitest";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { MemoryRouter } from "react-router-dom";
+import { SessionContext } from "../src/auth/sessionContext";
+import type { SessionValue } from "../src/auth/sessionContext";
+import { SearchResults } from "../src/components/SearchResults";
+import type { SearchResult } from "../src/api/client";
+import { FilesPage } from "../src/pages/Files";
+
+/** A search result fixture at a nested path. */
+const nestedResult: SearchResult = {
+  name: "Q3-Report.pdf",
+  path: "projects",
+  key: "users/alice/projects/Q3-Report.pdf",
+  space: "own",
+  match: "name",
+};
+/** A search result fixture at the space root. */
+const rootResult: SearchResult = {
+  name: "report ideas.txt",
+  path: "",
+  key: "users/alice/report ideas.txt",
+  space: "own",
+  match: "name",
+};
+
+const session: SessionValue = {
+  user: {
+    id: "u1",
+    username: "alice",
+    bucket: "jivedrive-prod",
+    prefix: "users/alice/",
+    isAdmin: false,
+  },
+  loading: false,
+  refresh: async () => {},
+  signOut: async () => {},
+};
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+/** Flush pending microtasks and timers inside act. */
+async function flush(): Promise<void> {
+  await act(async () => {
+    await delay(0);
+  });
+}
+
+/** A promise that never settles (an eternally in-flight request). */
+function never<T>(): Promise<T> {
+  const { promise } = Promise.withResolvers<T>();
+  return promise;
+}
+
+/** Wait for `ms` milliseconds. */
+function delay(ms: number): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, ms);
+  return promise;
+}
+
+/**
+ * Set a controlled input's value the way a real keystroke would: React
+ * deduplicates plain `.value` writes, so the native setter must be used
+ * before dispatching the input event.
+ *
+ * @param input - the controlled input
+ * @param value - the value to type
+ */
+function typeInput(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  document.body.innerHTML = "";
+});
+
+/** Render the SearchResults component for a query. */
+function renderResults(
+  props: Partial<Parameters<typeof SearchResults>[0]> = {},
+): HTMLElement {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => {
+    root.render(
+      <SearchResults query="report" onOpenResult={() => {}} {...props} />,
+    );
+  });
+  return container;
+}
+
+describe("SearchResults (T009)", () => {
+  it("renders name, path and match badge for each result", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          results: [nestedResult, rootResult],
+          capped: false,
+        }),
+      ),
+    );
+    const container = renderResults();
+    await flush();
+
+    const rows = container.querySelectorAll("li.list-row");
+    expect(rows).toHaveLength(2);
+    expect(container.textContent).toContain("Q3-Report.pdf");
+    expect(container.textContent).toContain("report ideas.txt");
+    // Path breadcrumb: nested shows the folder trail, root shows Home.
+    expect(container.textContent).toContain("projects");
+    // Match-type badge.
+    expect(container.textContent).toContain("Name match");
+  });
+
+  it("shows a searching state while the request is in flight", () => {
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(never<Response>()));
+    const container = renderResults();
+
+    expect(container.querySelector('[role="status"]')).not.toBeNull();
+    expect(container.querySelectorAll("li.list-row")).toHaveLength(0);
+  });
+
+  it("shows a no-results empty state without an error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({ results: [], capped: false })),
+    );
+    const container = renderResults();
+    await flush();
+
+    expect(container.textContent).toContain("No files match");
+    expect(container.querySelector(".alert-error")).toBeNull();
+  });
+
+  it("shows a refine hint when the result list is capped", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ results: [nestedResult], capped: true }),
+        ),
+    );
+    const container = renderResults();
+    await flush();
+
+    expect(container.textContent).toMatch(/refine your query/i);
+  });
+
+  it("calls onOpenResult with the clicked result", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ results: [nestedResult], capped: false }),
+        ),
+    );
+    const onOpenResult = vi.fn();
+    const container = renderResults({ onOpenResult });
+    await flush();
+
+    const link = Array.from(container.querySelectorAll("a")).find((a) =>
+      a.textContent?.includes("Q3-Report.pdf"),
+    );
+    expect(link).not.toBeNull();
+    await act(async () => {
+      link?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(onOpenResult).toHaveBeenCalledWith(nestedResult);
+  });
+
+  it("surfaces a failed search as an error with Retry", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ error: "boom", code: "internal_error" }, 500),
+      )
+      .mockResolvedValue(
+        jsonResponse({ results: [nestedResult], capped: false }),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as Mock);
+    const container = renderResults();
+    await flush();
+
+    expect(container.querySelector(".alert-error")).not.toBeNull();
+
+    const retry = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Retry",
+    );
+    await act(async () => {
+      retry?.click();
+    });
+    await flush();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(".alert-error")).toBeNull();
+    expect(container.querySelectorAll("li.list-row")).toHaveLength(1);
+  });
+
+  it("refreshes the session on 401 instead of showing an error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ error: "Not signed in", code: "unauthorized" }, 401),
+        ),
+    );
+    const onSessionExpired = vi.fn();
+    const container = renderResults({ onSessionExpired });
+    await flush();
+
+    expect(onSessionExpired).toHaveBeenCalled();
+    expect(container.querySelector(".alert-error")).toBeNull();
+  });
+});
+
+/**
+ * Render the Files page with a session and a fetch router: folder
+ * listings and shares come back as fixtures, searches as `searchBody`.
+ *
+ * @param searchBody - response for /api/files/search
+ * @param searchDelay - optional delay applied to the search response
+ * @returns fetch mock and container
+ */
+async function renderFilesPage(
+  searchBody: unknown,
+  searchDelay = 0,
+): Promise<{ fetchMock: Mock; container: HTMLElement }> {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith("/api/files/search")) {
+      if (searchDelay > 0) await delay(searchDelay);
+      return jsonResponse(searchBody);
+    }
+    if (url.startsWith("/api/files")) {
+      return jsonResponse({
+        folders: ["docs"],
+        files: [
+          {
+            key: "users/alice/notes.txt",
+            name: "notes.txt",
+            size: 64,
+            lastModified: "2026-08-10T12:00:00.000Z",
+          },
+        ],
+        nextCursor: null,
+      });
+    }
+    if (url.startsWith("/api/shares")) {
+      return jsonResponse({ incoming: [], outgoing: [] });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <MemoryRouter initialEntries={["/files"]}>
+        <SessionContext.Provider value={session}>
+          <FilesPage />
+        </SessionContext.Provider>
+      </MemoryRouter>,
+    );
+  });
+  await flush();
+  return { fetchMock, container };
+}
+
+describe("Files page search wiring (T009/T012)", () => {
+  it("swaps the folder listing for results on submit and restores it on clear", async () => {
+    const { container } = await renderFilesPage({
+      results: [nestedResult],
+      capped: false,
+    });
+
+    // The listing is visible first.
+    expect(container.textContent).toContain("notes.txt");
+    expect(container.textContent).not.toContain("Q3-Report.pdf");
+
+    const input = container.querySelector(
+      'input[type="search"]',
+    ) as HTMLInputElement;
+    expect(input).not.toBeNull();
+    await act(async () => {
+      typeInput(input, "report");
+    });
+    const form = container.querySelector('form[role="search"]');
+    await act(async () => {
+      form?.dispatchEvent(new Event("submit", { bubbles: true }));
+    });
+    await flush();
+
+    // Results replace the listing.
+    expect(container.textContent).toContain("Q3-Report.pdf");
+    expect(container.textContent).not.toContain("notes.txt");
+
+    const clear = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Clear",
+    );
+    await act(async () => {
+      clear?.click();
+    });
+    await flush();
+
+    // Clearing restores the folder listing.
+    expect(container.textContent).toContain("notes.txt");
+    expect(container.textContent).not.toContain("Q3-Report.pdf");
+  });
+
+  it("navigates to the containing folder when a result is clicked", async () => {
+    const { container } = await renderFilesPage({
+      results: [nestedResult],
+      capped: false,
+    });
+
+    const input = container.querySelector(
+      'input[type="search"]',
+    ) as HTMLInputElement;
+    await act(async () => {
+      typeInput(input, "report");
+    });
+    const form = container.querySelector('form[role="search"]');
+    await act(async () => {
+      form?.dispatchEvent(new Event("submit", { bubbles: true }));
+    });
+    await flush();
+
+    const link = Array.from(container.querySelectorAll("a")).find((a) =>
+      a.textContent?.includes("Q3-Report.pdf"),
+    );
+    await act(async () => {
+      link?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    // The listing for projects/ replaced the results; the breadcrumb
+    // trail shows the containing folder.
+    expect(container.textContent).not.toContain("Name match");
+    expect(
+      container.querySelector('nav[aria-label="Breadcrumbs"]')?.textContent,
+    ).toContain("projects");
+  });
+});

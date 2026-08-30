@@ -1027,3 +1027,50 @@ export function getSearchDoc(
     .get(userId, key) as SearchDoc | null;
   return row ?? null;
 }
+
+/** One filename match of a search query. */
+export interface FileNameSearchHit {
+  /** Full object key including the owning user's storage prefix. */
+  key: string;
+  /** Base name of the object (after the last "/"). */
+  fileName: string;
+}
+
+/**
+ * Find one user's indexed objects whose file name contains the query,
+ * case-insensitively (007-file-search, FR-002). Queries of 3+ characters
+ * use the trigram FTS index — the query is phrase-quoted and restricted
+ * to the `fileName` column, so FTS operators stay literal and body text
+ * never produces a filename hit; shorter queries cannot produce trigrams
+ * and fall back to a LIKE scan over the same column. Rows outside the
+ * owner's space are never returned (constitution IV).
+ *
+ * @param db - database connection
+ * @param userId - owner of the space to search
+ * @param query - the (already trimmed, non-empty) search query
+ * @param limit - maximum number of hits to return
+ * @returns hits in relevance order (FTS rank; name order for LIKE)
+ */
+export function searchFileNames(
+  db: Database,
+  userId: string,
+  query: string,
+  limit = 50,
+): FileNameSearchHit[] {
+  if (query.length < 3) {
+    // Trigram MATCH sees nothing for 1-2 character queries: fall back to
+    // a case-insensitive LIKE (ASCII), with wildcards kept literal.
+    const pattern = `%${query.replace(/([\\%_])/g, "\\$1")}%`;
+    return db
+      .query(
+        "SELECT i.key AS key, d.fileName AS fileName FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ? AND d.fileName LIKE ? ESCAPE '\\' ORDER BY d.fileName LIMIT ?",
+      )
+      .all(userId, pattern, limit) as FileNameSearchHit[];
+  }
+  const phrase = `fileName : "${query.replace(/"/g, '""')}"`;
+  return db
+    .query(
+      "SELECT i.key AS key, d.fileName AS fileName FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ? AND search_docs MATCH ? ORDER BY rank LIMIT ?",
+    )
+    .all(userId, phrase, limit) as FileNameSearchHit[];
+}

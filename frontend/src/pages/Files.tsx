@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useState } from "react";
+import type { FormEvent } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
+import { SearchIcon } from "@primer/octicons-react";
 import { getDownloadUrl, listFiles, listShares } from "../api/client";
 import type {
   ApiClientError,
   FileEntry,
   ListFilesResponse,
   ListSharesResponse,
+  SearchResult,
   Space,
 } from "../api/client";
 import { useSession } from "../auth/sessionContext";
 import { DeleteDialog } from "../components/DeleteDialog";
 import { Breadcrumbs, FileListing } from "../components/FileListing";
 import type { MountRow } from "../components/FileListing";
+import { SearchResults } from "../components/SearchResults";
 import { ShareModal } from "../components/ShareModal";
 import { UploadControl } from "../components/UploadControl";
 import { ShareDialog } from "../components/ShareDialog";
@@ -39,6 +43,18 @@ const REVOKED_SPACE_MESSAGE =
 function parseSpace(value: string | null): Space {
   if (value === "own" || value === null) return "own";
   return value.startsWith("shared:") ? (value as Space) : "own";
+}
+
+/**
+ * Adapt a search result to the FileEntry shape the share and delete
+ * dialogs expect: they only read `key` and `name` (FR-003 — the listing
+ * row actions work unchanged on own-space results).
+ *
+ * @param result - the search result to adapt
+ * @returns a FileEntry view over the result
+ */
+function asFileEntry(result: SearchResult): FileEntry {
+  return { key: result.key, name: result.name, size: 0, lastModified: "" };
 }
 
 /**
@@ -77,6 +93,15 @@ export function FilesPage() {
   const [shares, setShares] = useState<ListSharesResponse | null>(null);
   /** The folder (base name) whose share dialog is open, or null. */
   const [shareFolder, setShareFolder] = useState<string | null>(null);
+  /** The submitted search query, or null when browsing (not searching). */
+  const [query, setQuery] = useState<string | null>(null);
+  /** The live value of the search input (not yet submitted). */
+  const [queryInput, setQueryInput] = useState("");
+  /**
+   * The space the open share/delete dialog acts on: the current space
+   * for listing rows, the result's space for search rows (FR-003).
+   */
+  const [dialogSpace, setDialogSpace] = useState<Space>("own");
 
   // Adjust state during render when navigating to a different folder, so
   // the stale listing is cleared and the skeleton shows for the new one.
@@ -85,6 +110,7 @@ export function FilesPage() {
   const [shown, setShown] = useState({ space, prefix });
   if (shown.space !== space || shown.prefix !== prefix) {
     setShown({ space, prefix });
+    setQuery(null);
     setListing(null);
     setListingPrefix(null);
     setError(null);
@@ -276,11 +302,16 @@ export function FilesPage() {
    * Fetch a short-lived presigned URL for a file and download it.
    *
    * @param file - the file to download
+   * @param fileSpace - the space the file lives in (the current space
+   *   for listing rows, the result's space for search rows)
    */
-  async function handleDownload(file: FileEntry): Promise<void> {
+  async function handleDownload(
+    file: FileEntry,
+    fileSpace: Space,
+  ): Promise<void> {
     setActionError(null);
     try {
-      const { url } = await getDownloadUrl(file.key, space);
+      const { url } = await getDownloadUrl(file.key, fileSpace);
       window.location.assign(url);
     } catch (err) {
       const apiError = err as ApiClientError;
@@ -288,6 +319,30 @@ export function FilesPage() {
         `Could not download "${file.name}". ${apiError?.message ?? messageOf(err)}`,
       );
     }
+  }
+
+  /**
+   * Submit the search input: a non-empty trimmed query swaps the folder
+   * listing for the results list (FR-001); an empty input does nothing.
+   *
+   * @param event - the form submit event
+   */
+  function submitSearch(event: FormEvent): void {
+    event.preventDefault();
+    const q = queryInput.trim();
+    if (q === "") return;
+    setQuery(q);
+  }
+
+  /**
+   * Open a search result's containing folder: navigating clears the
+   * query, which restores the folder listing (FR-003, US1 sc.4).
+   *
+   * @param result - the clicked result
+   */
+  function openResult(result: SearchResult): void {
+    setQuery(null);
+    navigate(result.space, result.path === "" ? "" : `${result.path}/`);
   }
 
   if (sessionLoading) {
@@ -327,17 +382,40 @@ export function FilesPage() {
           onHome={() => navigate("own", "")}
         />
 
-        <div className="mb-3 flex items-center justify-between gap-4">
-          <span className="text-sm opacity-70">
-            {itemCount} {itemCount === 1 ? "item" : "items"}
-          </span>
-          <UploadControl
-            folder={prefix}
-            space={space}
-            onUploaded={refreshListing}
-            onSessionExpired={() => void refresh()}
+        {/* The search box lives in the page header (contract); a
+            submitted query swaps the listing area for the results
+            (FR-001), and any navigation restores the listing. */}
+        <form
+          className="mb-3 flex items-center gap-2"
+          role="search"
+          onSubmit={submitSearch}
+        >
+          <input
+            type="search"
+            className="input input-bordered grow min-h-11"
+            aria-label="Search files"
+            placeholder="Search files by name"
+            value={queryInput}
+            onChange={(event) => setQueryInput(event.target.value)}
           />
-        </div>
+          {query !== null && (
+            <button
+              type="button"
+              className="btn min-h-11"
+              onClick={() => setQuery(null)}
+            >
+              Clear
+            </button>
+          )}
+          <button
+            type="submit"
+            className="btn btn-primary min-h-11"
+            aria-label="Search"
+          >
+            <SearchIcon aria-hidden="true" />
+            <span className="hidden sm:inline">Search</span>
+          </button>
+        </form>
 
         {actionError && (
           <p className="alert alert-error mb-3" role="alert">
@@ -345,35 +423,74 @@ export function FilesPage() {
           </p>
         )}
 
-        <FileListing
-          folders={listing?.folders ?? []}
-          files={listing?.files ?? []}
-          loading={fetching}
-          loadingMore={loadingMore}
-          nextCursor={listing?.nextCursor ?? null}
-          error={error}
-          hasParent={prefix !== "" || space !== "own"}
-          onOpenFolder={(folder) => navigate(space, prefix + folder + "/")}
-          onDownload={(file) => void handleDownload(file)}
-          onShare={setShareFile}
-          onDelete={setDeleteFile}
-          onLoadMore={() => void loadMore()}
-          onRetry={retry}
-          onShareFolder={
-            space === "own"
-              ? (folder) => setShareFolder(prefix + folder + "/")
-              : undefined
-          }
-          sharedFolders={sharedFolders}
-          mounts={mounts}
-          onOpenMount={(mountId) => navigate(`shared:${mountId}`, "")}
-        />
+        {query === null ? (
+          <>
+            <div className="mb-3 flex items-center justify-between gap-4">
+              <span className="text-sm opacity-70">
+                {itemCount} {itemCount === 1 ? "item" : "items"}
+              </span>
+              <UploadControl
+                folder={prefix}
+                space={space}
+                onUploaded={refreshListing}
+                onSessionExpired={() => void refresh()}
+              />
+            </div>
+
+            <FileListing
+              folders={listing?.folders ?? []}
+              files={listing?.files ?? []}
+              loading={fetching}
+              loadingMore={loadingMore}
+              nextCursor={listing?.nextCursor ?? null}
+              error={error}
+              hasParent={prefix !== "" || space !== "own"}
+              onOpenFolder={(folder) => navigate(space, prefix + folder + "/")}
+              onDownload={(file) => void handleDownload(file, space)}
+              onShare={(file) => {
+                setDialogSpace(space);
+                setShareFile(file);
+              }}
+              onDelete={(file) => {
+                setDialogSpace(space);
+                setDeleteFile(file);
+              }}
+              onLoadMore={() => void loadMore()}
+              onRetry={retry}
+              onShareFolder={
+                space === "own"
+                  ? (folder) => setShareFolder(prefix + folder + "/")
+                  : undefined
+              }
+              sharedFolders={sharedFolders}
+              mounts={mounts}
+              onOpenMount={(mountId) => navigate(`shared:${mountId}`, "")}
+            />
+          </>
+        ) : (
+          <SearchResults
+            query={query}
+            onOpenResult={openResult}
+            onDownload={(result) =>
+              void handleDownload(asFileEntry(result), result.space)
+            }
+            onShare={(result) => {
+              setDialogSpace(result.space);
+              setShareFile(asFileEntry(result));
+            }}
+            onDelete={(result) => {
+              setDialogSpace(result.space);
+              setDeleteFile(asFileEntry(result));
+            }}
+            onSessionExpired={() => void refresh()}
+          />
+        )}
       </main>
 
       {shareFile && (
         <ShareModal
           file={shareFile}
-          space={space}
+          space={dialogSpace}
           onClose={() => setShareFile(null)}
         />
       )}
@@ -391,7 +508,7 @@ export function FilesPage() {
       {deleteFile && (
         <DeleteDialog
           file={deleteFile}
-          space={space}
+          space={dialogSpace}
           onDeleted={() => {
             setDeleteFile(null);
             refreshListing();

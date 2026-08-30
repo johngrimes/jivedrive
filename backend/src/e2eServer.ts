@@ -61,9 +61,13 @@ function seedObject(
 }
 
 /**
- * List the direct children of a prefix in the mock store, matching the
- * shape of an S3 ListObjectsV2 response with delimiter "/" and opaque
- * continuation tokens (offsets).
+ * List objects under a prefix in the mock store, matching the shape of
+ * an S3 ListObjectsV2 response with opaque continuation tokens (offsets).
+ * With Delimiter "/" (the folder-listing route) keys under nested
+ * prefixes collapse into CommonPrefixes; without a delimiter (the
+ * search-index scan's recursive listing) every object under the prefix
+ * is returned in Contents — the real S3 semantics the scan relies on to
+ * see nested objects.
  *
  * @param input - the ListObjectsV2 command input
  * @returns a mock S3 listing response
@@ -76,6 +80,7 @@ function listObjectsV2(input: {
 }) {
   const prefix = input.Prefix ?? "";
   const maxKeys = input.MaxKeys ?? 1000;
+  const delimited = input.Delimiter === "/";
 
   // gina's space always fails so the listing-error e2e spec can assert the
   // error + retry UI replaces the eternal skeleton. Production analogue:
@@ -96,7 +101,7 @@ function listObjectsV2(input: {
     .sort()) {
     const rest = key.slice(prefix.length);
     if (rest === "") continue;
-    if (rest.includes("/")) {
+    if (delimited && rest.includes("/")) {
       const folder = prefix + rest.slice(0, rest.indexOf("/") + 1);
       if (!seenFolders.has(folder)) {
         seenFolders.add(folder);

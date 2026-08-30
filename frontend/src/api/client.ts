@@ -247,6 +247,56 @@ export function listFiles(
   return apiFetch<ListFilesResponse>(`/api/files${query ? `?${query}` : ""}`);
 }
 
+/** One search result, per the contract `SearchResult` schema. */
+export interface SearchResult {
+  /** Base name of the file (after the last "/"). */
+  name: string;
+  /**
+   * Human-readable folder path relative to the space root; "" for a file
+   * at the root (the UI breadcrumb).
+   */
+  path: string;
+  /**
+   * Object key in the space's existing key convention — identical to
+   * what the listing endpoints return, so existing row actions
+   * (download, share, delete) work unchanged with the result's space.
+   */
+  key: string;
+  /** "own" or "shared:<shareId>" (the same identifier listFiles takes). */
+  space: Space;
+  /** Sharer's username; present only when space is shared. */
+  sharedBy?: string;
+  /** Which field matched the query. */
+  match: "name" | "content";
+  /**
+   * Snippet of the document around the first content match, with the
+   * matching text wrapped in <mark>...</mark>; present only when match
+   * is content.
+   */
+  snippet?: string;
+}
+
+/** Response of GET /api/files/search. */
+export interface SearchFilesResponse {
+  /** Results, filename matches first. */
+  results: SearchResult[];
+  /** True when matches were dropped to enforce the 50-result cap. */
+  capped: boolean;
+}
+
+/**
+ * Search files by filename substring (and, later, content) across the
+ * caller's own space, ranked filename-first.
+ *
+ * @param q - the search query (the server trims it)
+ * @returns the matching results and whether the 50-result cap was hit
+ */
+export function searchFiles(q: string): Promise<SearchFilesResponse> {
+  return apiFetch<SearchFilesResponse>(
+    `/api/files/search?q=${encodeURIComponent(q)}`,
+  );
+}
+
 /** Response of POST /api/files/upload-url. */
 export interface UploadUrlResponse {
   /** Presigned PUT URL the browser uploads to directly. */
