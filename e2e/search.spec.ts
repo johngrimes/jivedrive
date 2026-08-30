@@ -158,16 +158,30 @@ test("content search finds uploaded txt/pdf/docx by phrase with snippets, below 
 
   // Search from the space root: results span the whole space (US1 sc.3).
   await page.goto("/files");
-  await search(page, "zephyrquill");
 
-  // The name match ranks first (R-008); the two content matches follow,
-  // once the scan has indexed the uploads (R-010). Rows are scoped to
-  // this attempt's unique names: the shared in-memory server keeps every
-  // earlier attempt's (equally searchable) uploads around.
-  const rows = page
-    .locator("li.list-row")
-    .filter({ hasText: attempt });
-  await expect(rows).toHaveCount(3, { timeout: INDEX_TIMEOUT });
+  // The name match ranks first (R-008); the two content matches follow
+  // once the scan has indexed the uploads (R-010). The results list
+  // fetches once per submitted query and never auto-refreshes, while the
+  // scan indexer runs on its 2 s interval: a query submitted before the
+  // next scan picks up the last upload shows a partial snapshot that
+  // would never update. Re-submit the query — from a cleared state, so a
+  // re-submission of the same string refetches — until the scan has
+  // indexed all three uploads. Rows are scoped to this attempt's unique
+  // names: the shared in-memory server keeps every earlier attempt's
+  // (equally searchable) uploads around.
+  await expect(async () => {
+    const clear = page.getByRole("button", { name: "Clear" });
+    if (await clear.isVisible()) await clear.click();
+    await search(page, "zephyrquill");
+    await expect(
+      page
+        .locator("li.list-row")
+        .filter({ hasText: attempt })
+        .filter({ hasText: "Content match" }),
+    ).toHaveCount(2);
+  }).toPass({ timeout: INDEX_TIMEOUT });
+
+  const rows = page.locator("li.list-row").filter({ hasText: attempt });
   const nameRow = rows.filter({ hasText: "Name match" });
   await expect(nameRow).toHaveCount(1);
   await expect(nameRow.locator("mark")).toHaveCount(0);

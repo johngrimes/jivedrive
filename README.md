@@ -14,6 +14,9 @@ accounts. Authentication is WebAuthn passkeys only - no passwords.
   [`deploy/helm/jivedrive/`](deploy/helm/jivedrive/).
 - Persistent user-to-user folder sharing: full read/write access to a
   folder, mounts labelled with the sharer, revocable at any time.
+- Full-text search: one search box finds files by name and by content
+  (plain text, PDF, DOCX) across the user's space and every folder shared
+  with them, kept fresh by a background index scan.
 
 ## Local development
 
@@ -79,22 +82,24 @@ All configuration is via `JIVEDRIVE_*` environment variables, parsed and
 validated by `backend/src/config.ts`. Required variables cause a startup
 error listing every problem when missing or invalid.
 
-| Variable                             | Default                 | Required          | Description                                                                     |
-| ------------------------------------ | ----------------------- | ----------------- | ------------------------------------------------------------------------------- |
-| `JIVEDRIVE_PORT`                     | `3000`                  | no                | HTTP port the server listens on                                                 |
-| `JIVEDRIVE_DB_PATH`                  | `jivedrive.db`          | no                | SQLite database file path                                                       |
-| `JIVEDRIVE_MIGRATIONS_DIR`           | `<cwd>/migrations`      | no                | Directory of SQL migration files, applied at startup                            |
-| `JIVEDRIVE_SESSION_TTL_DAYS`         | `30`                    | no                | Session lifetime in days                                                        |
-| `JIVEDRIVE_S3_ENDPOINT`              | -                       | yes               | OVHcloud Object Storage S3 endpoint URL, e.g. `https://s3.gra.io.cloud.ovh.net` |
-| `JIVEDRIVE_S3_REGION`                | `gra`                   | no                | OVHcloud region                                                                 |
-| `JIVEDRIVE_S3_ACCESS_KEY_ID`         | -                       | yes               | S3 access key id (secret)                                                       |
-| `JIVEDRIVE_S3_SECRET_ACCESS_KEY`     | -                       | yes               | S3 secret access key (secret)                                                   |
-| `JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME` | unset                   | no                | Provision this username as the bootstrap admin at first start                   |
-| `JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET`   | unset                   | when username set | Bucket for the bootstrap admin                                                  |
-| `JIVEDRIVE_BOOTSTRAP_ADMIN_PREFIX`   | unset                   | no                | Prefix for the bootstrap admin (normalised to end with `/`)                     |
-| `JIVEDRIVE_BOOTSTRAP_ADMIN_IS_ADMIN` | `true`                  | no                | Whether the bootstrap account is an admin                                       |
-| `JIVEDRIVE_WEBAUTHN_RP_ID`           | `localhost`             | in production     | WebAuthn relying party id                                                       |
-| `JIVEDRIVE_WEBAUTHN_ORIGIN`          | `http://localhost:5173` | in production     | WebAuthn relying party origin (must be https in production)                     |
+| Variable                                 | Default                 | Required          | Description                                                                     |
+| ---------------------------------------- | ----------------------- | ----------------- | ------------------------------------------------------------------------------- |
+| `JIVEDRIVE_PORT`                         | `3000`                  | no                | HTTP port the server listens on                                                 |
+| `JIVEDRIVE_DB_PATH`                      | `jivedrive.db`          | no                | SQLite database file path                                                       |
+| `JIVEDRIVE_MIGRATIONS_DIR`               | `<cwd>/migrations`      | no                | Directory of SQL migration files, applied at startup                            |
+| `JIVEDRIVE_SESSION_TTL_DAYS`             | `30`                    | no                | Session lifetime in days                                                        |
+| `JIVEDRIVE_S3_ENDPOINT`                  | -                       | yes               | OVHcloud Object Storage S3 endpoint URL, e.g. `https://s3.gra.io.cloud.ovh.net` |
+| `JIVEDRIVE_S3_REGION`                    | `gra`                   | no                | OVHcloud region                                                                 |
+| `JIVEDRIVE_S3_ACCESS_KEY_ID`             | -                       | yes               | S3 access key id (secret)                                                       |
+| `JIVEDRIVE_S3_SECRET_ACCESS_KEY`         | -                       | yes               | S3 secret access key (secret)                                                   |
+| `JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME`     | unset                   | no                | Provision this username as the bootstrap admin at first start                   |
+| `JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET`       | unset                   | when username set | Bucket for the bootstrap admin                                                  |
+| `JIVEDRIVE_BOOTSTRAP_ADMIN_PREFIX`       | unset                   | no                | Prefix for the bootstrap admin (normalised to end with `/`)                     |
+| `JIVEDRIVE_BOOTSTRAP_ADMIN_IS_ADMIN`     | `true`                  | no                | Whether the bootstrap account is an admin                                       |
+| `JIVEDRIVE_WEBAUTHN_RP_ID`               | `localhost`             | in production     | WebAuthn relying party id                                                       |
+| `JIVEDRIVE_WEBAUTHN_ORIGIN`              | `http://localhost:5173` | in production     | WebAuthn relying party origin (must be https in production)                     |
+| `JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS` | `3600`                  | no                | Seconds between background search-index scans of each user's space              |
+| `JIVEDRIVE_SEARCH_INDEX_MAX_BYTES`       | `10485760`              | no                | Maximum object size (bytes) eligible for search content extraction (10 MiB)     |
 
 ## Passkey setup
 
@@ -120,6 +125,32 @@ backing up credentials) is delegated to the platform - a lost passkey is
 recovered by having an admin reset the user's passkeys (Admin users page),
 after which the user re-enrolls via the "First time? Use your username"
 form.
+
+## Search
+
+The Files page has a search box that replaces the folder listing with a
+flat result list. Filenames are matched case-insensitively by substring
+across the user's entire space; content is matched against extracted text
+from plain text, PDF, and DOCX files. Filename matches rank above content
+matches, content matches show a snippet with the matching text, and the
+list is capped at 50 results. Queries shorter than three characters fall
+back to filename-only matching.
+
+Search covers every folder shared with the user in the same query; results
+from a shared mount are labelled with the sharer's username, and revoking
+a share removes its results immediately. Files above
+`JIVEDRIVE_SEARCH_INDEX_MAX_BYTES` and files whose text cannot be
+extracted (corrupt or password-protected documents, other formats) remain
+findable by name only.
+
+The search index is a trigram FTS5 table in the existing SQLite database,
+kept fresh by a background scan of each user's space every
+`JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS`: new objects are indexed, objects
+whose ETag or size changed are re-extracted, and rows for deleted objects
+are removed. Unchanged objects are never re-downloaded, so scans of
+stable spaces are cheap. An admin can force an immediate reconciliation
+for any user from the Admin users page ("Rebuild search index"), which
+reports how many objects were indexed, re-extracted, and removed.
 
 ## Deployment
 
