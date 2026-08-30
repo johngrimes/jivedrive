@@ -15,10 +15,19 @@ import {
   upsertSearchDoc,
 } from "../db/repository";
 import type { User } from "../db/repository";
-import { extractText } from "./extract";
+import { extractable, extractText } from "./extract";
 
 /** Default page size for listings, matching the S3 protocol limit. */
 const MAX_KEYS = 1000;
+
+/**
+ * How many objects one scan downloads and extracts concurrently. The
+ * per-object work is I/O-bound (one S3 GET plus extraction), while the
+ * SQLite writes stay serialized — bun:sqlite is synchronous and
+ * single-connection — so the pool only bounds in-flight bodies and
+ * extraction CPU, never the database.
+ */
+const SCAN_CONCURRENCY = 12;
 
 /** The outcome of one {@link scanUserSpace} run. */
 export interface ScanCounts {
@@ -106,12 +115,16 @@ async function listAllObjects(
 /**
  * Reconcile one user's search index with their S3 space (FR-007).
  *
- * New objects are downloaded (when within `cap`) and their extracted
- * text indexed; changed objects (different etag or size) are
+ * New objects are downloaded (when within `cap` and their extension is
+ * extractable — anything else would only be discarded) and their
+ * extracted text indexed; changed objects (different etag or size) are
  * re-downloaded and re-extracted; vanished objects have both index rows
  * removed. Unchanged objects are never re-downloaded. Objects above the
- * cap and files whose extraction fails are indexed name-only
- * (body = "") — extraction failures never fail the scan (FR-008).
+ * cap, files without an extraction handler, and files whose extraction
+ * fails are indexed name-only (body = "") — extraction failures never
+ * fail the scan (FR-008). Downloads and extraction run with bounded
+ * concurrency; each completed object is written to the index as it
+ * settles (the writes serialize on the synchronous SQLite connection).
  *
  * @param client - S3 client (injectable; tests substitute a stub)
  * @param db - database connection
@@ -141,6 +154,7 @@ export async function scanUserSpace(
     }
   }
 
+  const pending: Array<{ object: ListedObject; existing: boolean }> = [];
   for (const object of listed) {
     const existing = indexedByKey.get(object.key);
     if (
@@ -150,30 +164,55 @@ export async function scanUserSpace(
     ) {
       continue;
     }
-
-    let body = "";
-    if (object.size <= cap) {
-      const output = (await client.send(
-        new GetObjectCommand({ Bucket: user.bucket, Key: object.key }),
-      )) as { Body?: unknown };
-      const bytes = await readObjectBody(output.Body);
-      body = (await extractText(bytes, baseName(object.key))) ?? "";
-    }
-
-    upsertSearchDoc(db, {
-      userId: user.id,
-      key: object.key,
-      etag: object.etag,
-      size: object.size,
-      fileName: baseName(object.key),
-      body,
-    });
-    if (existing) {
-      counts.reindexed++;
-    } else {
-      counts.indexed++;
-    }
+    pending.push({ object, existing: existing !== undefined });
   }
+
+  // Download and extract with bounded concurrency, writing each result
+  // as it settles. A per-object failure aborts the whole scan: the
+  // scheduler reports it and the next cycle re-diffs from the listing,
+  // so partial progress is harmless (the scan is idempotent).
+  let cursor = 0;
+  let failed = false;
+  let failure: unknown;
+  const fetchBody = async (object: ListedObject): Promise<string> => {
+    if (object.size > cap || !extractable(baseName(object.key))) return "";
+    const output = (await client.send(
+      new GetObjectCommand({ Bucket: user.bucket, Key: object.key }),
+    )) as { Body?: unknown };
+    const bytes = await readObjectBody(output.Body);
+    return (await extractText(bytes, baseName(object.key))) ?? "";
+  };
+  const worker = async (): Promise<void> => {
+    while (!failed) {
+      const index = cursor++;
+      const next = pending[index];
+      if (!next) return;
+      const { object, existing } = next;
+      try {
+        const body = await fetchBody(object);
+        upsertSearchDoc(db, {
+          userId: user.id,
+          key: object.key,
+          etag: object.etag,
+          size: object.size,
+          fileName: baseName(object.key),
+          body,
+        });
+        if (existing) {
+          counts.reindexed++;
+        } else {
+          counts.indexed++;
+        }
+      } catch (error) {
+        failed = true;
+        failure = error;
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(SCAN_CONCURRENCY, pending.length) }, worker),
+  );
+  if (failed) throw failure;
 
   return counts;
 }
