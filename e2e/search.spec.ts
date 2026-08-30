@@ -119,6 +119,25 @@ test("the search UI is fully usable at mobile width", async ({ page }) => {
   await expect(page.getByText("Name match")).toHaveCount(0);
 });
 
+test("the search UI is fully usable at tablet width", async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await expect(
+    page.getByRole("searchbox", { name: "Search files" }),
+  ).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  await search(page, "report");
+
+  await expect(page.getByText("report.pdf").first()).toBeVisible({
+    timeout: INDEX_TIMEOUT,
+  });
+  await expectNoHorizontalOverflow(page);
+
+  await page.getByRole("button", { name: "Clear" }).first().click();
+  await expect(page.getByText("archive.zip")).toBeVisible();
+  await expect(page.getByText("Name match")).toHaveCount(0);
+});
+
 test("content search finds uploaded txt/pdf/docx by phrase with snippets, below name matches", async ({
   page,
 }) => {
