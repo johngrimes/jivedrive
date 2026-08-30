@@ -342,7 +342,10 @@ export interface EvalReport {
 function dcgAt10(gains: number[]): number {
   return gains
     .slice(0, 10)
-    .reduce((sum, gain, index) => sum + (2 ** gain - 1) / Math.log2(index + 2), 0);
+    .reduce(
+      (sum, gain, index) => sum + (2 ** gain - 1) / Math.log2(index + 2),
+      0,
+    );
 }
 
 /**
@@ -400,7 +403,12 @@ export function routeSearch(db: Database, user: User, query: string): string[] {
     push(hit.key);
   }
   if (!nameCapped && query.length >= 3) {
-    const contentHits = searchContent(db, user.id, query, SEARCH_RESULT_CAP + 1);
+    const contentHits = searchContent(
+      db,
+      user.id,
+      query,
+      SEARCH_RESULT_CAP + 1,
+    );
     for (const hit of contentHits) {
       // A file matching both name and content already ranked in the
       // name group: drop the duplicate and keep scanning, exactly as
@@ -416,7 +424,9 @@ export function routeSearch(db: Database, user: User, query: string): string[] {
 export async function runSearchEval(): Promise<EvalReport> {
   const db = openDatabase(":memory:");
   try {
-    const migrationsDir = fileURLToPath(new URL("../migrations", import.meta.url));
+    const migrationsDir = fileURLToPath(
+      new URL("../migrations", import.meta.url),
+    );
     migrateFromDir(db, migrationsDir);
     const user = await seed(db);
     const perQuery = GOLD.map(({ query, grades }) => {
@@ -428,8 +438,7 @@ export async function runSearchEval(): Promise<EvalReport> {
         query,
         pAt5: gains.slice(0, 5).filter((g) => g > 0).length / 5,
         ndcgAt10:
-          dcgAt10(gains) /
-          dcgAt10(Object.values(grades).sort((a, b) => b - a)),
+          dcgAt10(gains) / dcgAt10(Object.values(grades).sort((a, b) => b - a)),
         mrr: firstRelevant === -1 ? 0 : 1 / (firstRelevant + 1),
         recallAt10:
           gains.slice(0, 10).filter((g) => g > 0).length / judged.length,
@@ -454,4 +463,3 @@ export async function runSearchEval(): Promise<EvalReport> {
     db.close();
   }
 }
-
