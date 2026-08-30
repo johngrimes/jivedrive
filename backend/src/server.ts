@@ -139,7 +139,7 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
 
   // The S3 client is injectable so tests can substitute a stub or mock;
   // the file routes use it for listing/URLs and the admin reindex
-  // endpoint (US4) for synchronous scans.
+  // endpoint (US4) for on-demand background scans.
   const s3Client = deps.s3Client ?? createS3Client(deps.config.s3);
   app.route(
     "/api/files",

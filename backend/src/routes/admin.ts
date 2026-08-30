@@ -48,7 +48,7 @@ export interface AdminRouteDeps {
   db: Database;
   /** Middleware that requires a signed-in user and sets `c.get("user")`. */
   requireUser: MiddlewareHandler<ServerEnv>;
-  /** S3 client used by the reindex endpoint's synchronous scan (US4). */
+  /** S3 client used by the reindex endpoint's background scan (US4). */
   s3Client: S3Client;
 }
 
@@ -276,24 +276,28 @@ export function adminRoutes(deps: AdminRouteDeps): Hono<ServerEnv> {
   });
 
   // Force an immediate search-index reconciliation of one user's space
-  // (007-file-search, US4, FR-017): synchronously list the target's
-  // objects, index new/changed ones (extracting text within the size
-  // cap) and remove index rows for vanished objects. The response
-  // reports what happened so the admin page can show an explicit
-  // result. The caller's own space may be reindexed the same way; an
-  // unknown user is refused with 404 and nothing is scanned.
-  app.post("/users/:id/reindex", async (c) => {
+  // (007-file-search, US4, FR-017): list the target's objects, index
+  // new/changed ones (extracting text within the size cap) and remove
+  // index rows for vanished objects. A full space can take far longer
+  // than a client is willing to wait (a big reindex once outlived
+  // Bun's 10s idle timeout and dropped the response), so the scan runs
+  // in the background and the request is accepted (202) immediately;
+  // the scheduler's next cycle reconciles anything this scan misses.
+  // An unknown user is refused with 404 and nothing is scanned.
+  app.post("/users/:id/reindex", (c) => {
     const target = getUserById(db, c.req.param("id"));
     if (!target) {
       return jsonError(c, 404, "User not found", "not_found");
     }
-    const counts = await scanUserSpace(
+    void scanUserSpace(
       deps.s3Client,
       db,
       target,
       config.searchIndexMaxBytes,
-    );
-    return c.json(counts, 200);
+    ).catch((error: unknown) => {
+      console.error(`Search scan failed for user ${target.username}:`, error);
+    });
+    return c.json({ started: true }, 202);
   });
 
   // List pending, claimed and expired invites with derived status.

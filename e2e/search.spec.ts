@@ -366,8 +366,9 @@ test("US4: an admin reindex makes an upload searchable and a deletion disappear"
   });
   await expect(page.getByText(`Uploaded ${fileName}`)).toBeVisible();
 
-  // The admin forces an immediate reindex of alice's space and sees the
-  // reported outcome (FR-017, US4 sc.7).
+  // The admin forces an immediate reindex of alice's space; the request
+  // is accepted (202) and the scan runs in the background (FR-017,
+  // US4 sc.7).
   await startSignedInAs(page, context, "admin", "admin-session");
   await page.goto("/admin");
   await expect(
@@ -380,15 +381,20 @@ test("US4: an admin reindex makes an upload searchable and a deletion disappear"
     });
   await aliceRow.getByRole("button", { name: "Rebuild search index" }).click();
   await expect(page.locator("p.alert-success")).toContainText(
-    `Search index rebuilt for "alice" (`,
+    `Search index rebuild started for "alice".`,
   );
 
-  // The reindexed content is searchable right away.
+  // The reindexed content is searchable. The scan runs in the
+  // background and the results page fetches once per submitted query,
+  // so poll by re-navigating and searching until it surfaces.
   await startSignedInAs(page, context, "alice", "browse-session");
-  await page.goto("/files");
-  await search(page, "xenocryptic");
+  await expect(async () => {
+    await page.goto("/files");
+    await search(page, "xenocryptic");
+    const row = page.locator("li.list-row", { hasText: fileName });
+    await expect(row).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: INDEX_TIMEOUT });
   const row = page.locator("li.list-row", { hasText: fileName });
-  await expect(row).toBeVisible({ timeout: INDEX_TIMEOUT });
   await expect(row.locator("mark").first()).toHaveText("xenocryptic");
 
   // alice deletes the file; a second admin reindex drops it from the
@@ -401,13 +407,16 @@ test("US4: an admin reindex makes an upload searchable and a deletion disappear"
   await page.goto("/admin");
   await aliceRow.getByRole("button", { name: "Rebuild search index" }).click();
   await expect(page.locator("p.alert-success")).toContainText(
-    `Search index rebuilt for "alice" (`,
+    `Search index rebuild started for "alice".`,
   );
 
   await startSignedInAs(page, context, "alice", "browse-session");
-  await page.goto("/files");
-  await search(page, "xenocryptic");
-  await expect(page.getByText(/No files match/)).toBeVisible({
-    timeout: INDEX_TIMEOUT,
-  });
+  await expect(async () => {
+    await page.goto("/files");
+    await search(page, "xenocryptic");
+    await expect(page.getByText(/No files match/)).toBeVisible({
+      timeout: 1_000,
+    });
+  }).toPass({ timeout: INDEX_TIMEOUT });
+  await expect(page.locator("li.list-row")).toHaveCount(0);
 });

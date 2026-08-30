@@ -355,10 +355,11 @@ export function AdminUsersPage() {
   }
 
   /**
-   * Force an immediate search-index rebuild for a user (007-file-search,
-   * US4, FR-017). The endpoint runs synchronously and reports the
-   * counts, so the notice can state exactly what happened (constitution
-   * V: no silent success or failure).
+   * Kick off a background search-index rebuild for one user (007-file-search,
+   * US4, FR-017). The endpoint accepts the request (202) and scans in the
+   * background — a full space can outlast any client timeout — so the notice
+   * states the rebuild was started and its outcome is observed by searching
+   * (constitution V: no silent success or failure).
    *
    * @param target - the user whose index is being rebuilt
    */
@@ -368,10 +369,8 @@ export function AdminUsersPage() {
     setError(null);
     setNotice(null);
     try {
-      const counts = await reindexUser(target.id);
-      setNotice(
-        `Search index rebuilt for "${target.username}" (${counts.indexed} indexed, ${counts.reindexed} re-extracted, ${counts.removed} removed)`,
-      );
+      await reindexUser(target.id);
+      setNotice(`Search index rebuild started for "${target.username}".`);
     } catch (err) {
       const apiError = err as ApiClientError;
       setError(apiError?.message ?? "Could not rebuild the search index.");

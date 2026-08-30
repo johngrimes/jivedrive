@@ -1,8 +1,9 @@
 /**
  * Route tests for `POST /api/admin/users/:id/reindex` (007-file-search,
- * US4, T024): force a synchronous search-index reconciliation of one
- * user's space. Follows the app conventions of `routes-admin.test.ts`
- * and the fake-S3 pattern of `search-indexer.test.ts`: the fake client
+ * US4, T024): force a search-index reconciliation of one user's space;
+ * the scan runs in the background and the route accepts immediately.
+ * Follows the app conventions of `routes-admin.test.ts` and the
+ * fake-S3 pattern of `search-indexer.test.ts`: the fake client
  * serves listings and downloads from an in-memory store so the route's
  * scan exercises the real indexer.
  */
@@ -85,11 +86,17 @@ interface FakeObject {
 /** A fake S3 space: objects keyed by full key, iterated by the listing. */
 type FakeStore = Map<string, FakeObject>;
 
-/** The counts body returned by the reindex endpoint. */
-interface ReindexBody {
-  indexed: number;
-  reindexed: number;
-  removed: number;
+/**
+ * Poll until `predicate` holds or a deadline passes, then assert it:
+ * the reindex scan runs in the background, so its effects are only
+ * eventually visible.
+ */
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (!predicate() && Date.now() < deadline) {
+    await Bun.sleep(10);
+  }
+  expect(predicate()).toBe(true);
 }
 
 /**
@@ -231,7 +238,7 @@ describe("POST /api/admin/users/:id/reindex (US4)", () => {
     expect(calls).toEqual([]);
   });
 
-  it("reconciles the target user's space synchronously and reports counts (T024)", async () => {
+  it("accepts the request (202) and the background scan reconciles the space (T024)", async () => {
     // Kate's space: one unchanged object, one changed object (new etag),
     // one new object carrying a unique phrase, and one index row whose
     // storage object has vanished.
@@ -254,36 +261,36 @@ describe("POST /api/admin/users/:id/reindex (US4)", () => {
 
     const res = await reindex(app, member.id);
 
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as ReindexBody;
-    expect(body).toEqual({ indexed: 1, reindexed: 1, removed: 1 });
-    // The scan listed the member's prefix (and only that space: the admin
-    // must not trigger downloads outside the target's scope).
-    expect(calls).toContain("ListObjectsV2Command");
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ started: true });
 
-    // The run was synchronous: the new object's extracted text is
-    // immediately in the index (queried via the repository; content
-    // search over it is US2's surface).
-    expect(getSearchDoc(db, member.id, "users/kate/new report.txt")).toEqual({
-      fileName: "new report.txt",
-      body: "the quokka brigade rides at dawn",
-    });
-    expect(getSearchDoc(db, member.id, "users/kate/gone.txt")).toBeNull();
+    // The scan runs in the background: wait for it to list the member's
+    // prefix and converge on the expected index state (queried via the
+    // repository; content search over it is US2's surface).
+    await waitFor(
+      () =>
+        calls.includes("ListObjectsV2Command") &&
+        getSearchDoc(db, member.id, "users/kate/new report.txt")?.body ===
+          "the quokka brigade rides at dawn" &&
+        getSearchDoc(db, member.id, "users/kate/gone.txt") === null,
+    );
+    expect(getSearchDoc(db, member.id, "users/kate/changed.txt")?.body).toBe(
+      "fresh",
+    );
   });
 
   it("reindexes the caller's own space the same way (T024)", async () => {
     const store: FakeStore = new Map([
       ["users/admin/notes.txt", { etag: '"a"', size: 6, body: "hello" }],
     ]);
-    const { app, admin } = createReindexApp(store);
+    const { app, db, admin } = createReindexApp(store);
 
     const res = await reindex(app, admin.id);
 
-    expect(res.status).toBe(200);
-    expect((await res.json()) as ReindexBody).toEqual({
-      indexed: 1,
-      reindexed: 0,
-      removed: 0,
-    });
+    expect(res.status).toBe(202);
+    await waitFor(
+      () =>
+        getSearchDoc(db, admin.id, "users/admin/notes.txt")?.body === "hello",
+    );
   });
 });

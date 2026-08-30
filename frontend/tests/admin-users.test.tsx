@@ -208,11 +208,11 @@ describe("AdminUsersPage", () => {
     expect(deleteCalls).toHaveLength(1);
   });
 
-  it("rebuilds a user's search index and reports the counts (T026)", async () => {
+  it("rebuilds a user's search index and reports it was started (T026)", async () => {
     const fetchMock = stubAdminApi({
       "POST /api/admin/users/target-1/reindex": {
-        status: 200,
-        body: { indexed: 2, reindexed: 1, removed: 3 },
+        status: 202,
+        body: { started: true },
       },
     });
     const container = await renderAdminUsers();
@@ -231,10 +231,10 @@ describe("AdminUsersPage", () => {
       rebuildButton?.click();
     });
 
-    // An explicit success notice carries the counts from the response
-    // (constitution V: no silent success).
+    // An explicit notice states the rebuild was started (constitution V:
+    // no silent success); the scan itself runs in the background.
     expect(container.textContent).toContain(
-      'Search index rebuilt for "kate" (2 indexed, 1 re-extracted, 3 removed)',
+      'Search index rebuild started for "kate".',
     );
     expect(
       (
@@ -281,11 +281,11 @@ describe("AdminUsersPage", () => {
     expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3);
 
     await act(async () => {
-      resolveReindex(jsonResponse({ indexed: 0, reindexed: 0, removed: 0 }));
+      resolveReindex(jsonResponse({ started: true }));
     });
 
     expect(container.textContent).toContain(
-      'Search index rebuilt for "kate" (0 indexed, 0 re-extracted, 0 removed)',
+      'Search index rebuild started for "kate".',
     );
   });
 
