@@ -28,6 +28,10 @@ Every user action produces a perceptible response. Listings and uploads show pro
 
 The UI is designed mobile-first: layouts are built for the smallest supported viewport and progressively enhanced for larger screens. Every view MUST remain fully usable on a narrow viewport - no horizontal scrolling, no clipped or unreachable content - and touch targets MUST be large enough to operate by touch. A feature is not complete until its UI is exercised at mobile, tablet, and desktop widths.
 
+#### VII. Quality Gate (NON-NEGOTIABLE)
+
+Before every push, the full local quality gate MUST pass against the exact code being pushed: the complete unit test suite, TypeScript type checking (`tsc --noEmit`), lint, and format checking (`prettier --check`, the CI static-analysis gate). CI re-runs these checks, but a red CI run is a defect, not a filter: no change is pushed that has not already cleared the gate locally. Formatting is applied (not skipped) whenever the check flags a touched file.
+
 ### Security Requirements
 
 - Authentication is WebAuthn passkeys only. Password credentials are never accepted.

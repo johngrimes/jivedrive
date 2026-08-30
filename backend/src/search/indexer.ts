@@ -279,7 +279,7 @@ export async function scanUserSpace(
       // tryAdmit's exclusive branch (nothing running) guarantees the
       // largest deferred item is admitted unconditionally, so a charge
       // above the budget can never starve the scan.
-      for (let i = 0; i < deferred.length; ) {
+      for (let i = 0; i < deferred.length;) {
         if (tryAdmit(deferred[i]!)) {
           deferred.splice(i, 1);
         } else {
@@ -298,9 +298,10 @@ export async function scanUserSpace(
    * Returns whether the item was admitted; rejected items are
    * deferred and retried on every release.
    */
-  const tryAdmit = (
-    item: { object: ListedObject; existing: boolean },
-  ): boolean => {
+  const tryAdmit = (item: {
+    object: ListedObject;
+    existing: boolean;
+  }): boolean => {
     const charge = downloadCharge(baseName(item.object.key), item.object.size);
     if (running >= SCAN_CONCURRENCY) return false;
     if (charged + charge > budget && running > 0) return false;

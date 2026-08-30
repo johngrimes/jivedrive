@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { migrateFromDir, openDatabase } from "../src/db/migrate";
-import { createUser, getSearchDoc, listSearchIndex } from "../src/db/repository";
+import {
+  createUser,
+  getSearchDoc,
+  listSearchIndex,
+} from "../src/db/repository";
 import type { User } from "../src/db/repository";
 import { scanUserSpace } from "../src/search/indexer";
 import { startScanScheduler } from "../src/search/scheduler";
@@ -409,10 +413,14 @@ describe("scanUserSpace", () => {
       },
     });
     const store: FakeStore = new Map(
-      Array.from({ length: 10 }, (_, i) => [
-        `users/alice/f${i}.txt`,
-        tracked(new TextEncoder().encode("x".repeat(550))),
-      ] as const),
+      Array.from(
+        { length: 10 },
+        (_, i) =>
+          [
+            `users/alice/f${i}.txt`,
+            tracked(new TextEncoder().encode("x".repeat(550))),
+          ] as const,
+      ),
     );
     const { client } = fakeClient(store);
 
@@ -439,20 +447,23 @@ describe("scanUserSpace", () => {
     let peak = 0;
     const gates: Array<() => void> = [];
     const store: FakeStore = new Map(
-      [0, 1, 2].map((i) => [
-        `users/alice/heavy${i}.pdf`,
-        {
-          etag: `"p${i}"`,
-          size: 990,
-          body: async () => {
-            inflight++;
-            peak = Math.max(peak, inflight);
-            await new Promise<void>((r) => gates.push(r));
-            inflight--;
-            return new Uint8Array(990);
-          },
-        } satisfies FakeObject,
-      ] as const),
+      [0, 1, 2].map(
+        (i) =>
+          [
+            `users/alice/heavy${i}.pdf`,
+            {
+              etag: `"p${i}"`,
+              size: 990,
+              body: async () => {
+                inflight++;
+                peak = Math.max(peak, inflight);
+                await new Promise<void>((r) => gates.push(r));
+                inflight--;
+                return new Uint8Array(990);
+              },
+            } satisfies FakeObject,
+          ] as const,
+      ),
     );
     const { client } = fakeClient(store);
 
