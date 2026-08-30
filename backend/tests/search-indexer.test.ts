@@ -471,15 +471,26 @@ describe("scanUserSpace", () => {
     await flush();
     expect(inflight).toBe(1);
 
-    while (gates.length) {
-      gates.shift()!();
-      await flush();
+    // Extractions round-trip through a real worker, so the next gated
+    // download starts on a macrotask boundary — poll for gates instead
+    // of assuming microtask timing. Release all three; the heavyweight
+    // budget admits exactly one download at a time, which is the
+    // behaviour under test.
+    let released = 0;
+    while (released < 3) {
+      while (gates.length) {
+        gates.shift()!();
+        released++;
+      }
+      await new Promise((r) => setTimeout(r, 5));
     }
     const counts = await scanning;
 
     expect(counts).toEqual({ indexed: 3, reindexed: 0, removed: 0 });
     expect(peak).toBe(1);
-  });
+    // Extractions now round-trip through a real worker; the first job
+    // pays pdf.js's module load, so allow well over the 5s default.
+  }, 30_000);
 
   it("degrades to name-only when the downloaded body exceeds the cap", async () => {
     const db = createDb();

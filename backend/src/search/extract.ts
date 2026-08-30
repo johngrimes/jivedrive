@@ -155,14 +155,63 @@ export async function extractText(
   fileName: string,
 ): Promise<string | null> {
   const ext = extensionOf(fileName);
+  if (TEXT_EXTENSIONS.has(ext)) {
+    try {
+      return normalize(decodeUtf8(buffer));
+    } catch {
+      return null;
+    }
+  }
+  if (ext !== "pdf" && ext !== "docx") {
+    return null;
+  }
+  try {
+    const text = await runExtractionWorker(buffer, fileName);
+    return text === null ? null : normalize(text);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract without any threading concerns: the pure, in-thread handler
+ * the extraction worker runs, and the fallback shape every caller of
+ * {@link extractText} relies on (null on any failure, FR-008). Kept
+ * separate from {@link extractText} so the worker entry can import it
+ * without a runtime cycle.
+ *
+ * @param buffer - the object body
+ * @param fileName - the object's name; the extension selects the handler
+ * @returns the extracted, normalised text, or null on any failure
+ */
+export async function extractTextPure(
+  buffer: Uint8Array,
+  fileName: string,
+): Promise<string | null> {
+  const ext = extensionOf(fileName);
   try {
     if (TEXT_EXTENSIONS.has(ext)) {
       return normalize(decodeUtf8(buffer));
     }
     if (ext === "pdf") {
       const pdf = await getDocumentProxy(new Uint8Array(buffer));
-      const { text } = await extractPdfText(pdf, { mergePages: true });
-      return normalize(text);
+      // unpdf's PDFDocumentProxy exposes teardown only via its loading
+      // task (the proxy itself has no destroy in the bundled build).
+      const pdfjsTask = (
+        pdf as unknown as {
+          loadingTask: { destroy(): Promise<void> };
+        }
+      ).loadingTask;
+      try {
+        const { text } = await extractPdfText(pdf, { mergePages: true });
+        return normalize(text);
+      } finally {
+        // Release pdf.js's parsed page structures now instead of at
+        // some future GC: a scan over many PDFs retained every parsed
+        // document until then and breached the container's memory
+        // limit (prod OOMKill, 2026-08-30).
+        void pdfjsTask.destroy();
+      }
     }
     if (ext === "docx") {
       const { value } = await extractRawText({ buffer: Buffer.from(buffer) });
@@ -171,5 +220,110 @@ export async function extractText(
     return null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Per-job timeout for the extraction worker. Generous: a capped 10 MB
+ * PDF parses in a few seconds; the timeout only exists so a wedged
+ * parse cannot stall the scan forever (the job degrades to name-only
+ * indexing, FR-008).
+ */
+const EXTRACTION_TIMEOUT_MS = 120_000;
+
+/**
+ * Worker recycle interval: pdf.js retains per-document structures
+ * even after destroy() until GC runs; recycling the worker after a
+ * bounded number of heavy jobs makes the worst-case retained heap a
+ * constant instead of a function of the space's PDF count.
+ */
+const WORKER_RECYCLE_JOBS = 50;
+
+let worker: Worker | null = null;
+let jobsSinceRecycle = 0;
+let nextJobId = 1;
+const pending = new Map<
+  number,
+  { resolve: (text: string | null) => void; reject: (err: unknown) => void }
+>();
+
+interface WorkerResult {
+  id: number;
+  text: string | null;
+  error: string | null;
+}
+
+function failAllPending(reason: string): void {
+  const jobs = [...pending.values()];
+  pending.clear();
+  for (const job of jobs) {
+    job.reject(new Error(reason));
+  }
+}
+
+function getWorker(): Worker {
+  if (worker === null) {
+    jobsSinceRecycle = 0;
+    worker = new Worker(new URL("./extract-worker.ts", import.meta.url));
+    worker.onmessage = (event: MessageEvent<WorkerResult>) => {
+      const job = pending.get(event.data.id);
+      if (job === undefined) {
+        return;
+      }
+      pending.delete(event.data.id);
+      if (event.data.error !== null) {
+        job.reject(new Error(event.data.error));
+      } else {
+        job.resolve(event.data.text);
+      }
+    };
+    worker.onerror = () => {
+      failAllPending("extraction worker crashed");
+      worker?.terminate();
+      worker = null;
+    };
+  }
+  return worker;
+}
+
+/**
+ * Run one heavy (PDF/DOCX) extraction in the worker. The buffer is
+ * copied by structured clone (never transferred), so the caller keeps
+ * ownership. Jobs queue inside the worker and run one at a time.
+ *
+ * @param buffer - the object body
+ * @param fileName - the object's name; the extension selects the handler
+ * @returns the extracted, normalised text, or null on any failure
+ */
+async function runExtractionWorker(
+  buffer: Uint8Array,
+  fileName: string,
+): Promise<string | null> {
+  const id = nextJobId++;
+  const w = getWorker();
+  const result = new Promise<string | null>((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    w.postMessage({ id, buffer, fileName });
+  });
+  const timeout = setTimeout(() => {
+    const job = pending.get(id);
+    if (job !== undefined) {
+      pending.delete(id);
+      // A wedged parse is indistinguishable from a slow one; recycle
+      // the worker so later jobs are not queued behind it.
+      worker?.terminate();
+      worker = null;
+      job.reject(new Error("extraction timed out"));
+    }
+  }, EXTRACTION_TIMEOUT_MS);
+  try {
+    return await result;
+  } finally {
+    clearTimeout(timeout);
+    jobsSinceRecycle += 1;
+    if (jobsSinceRecycle >= WORKER_RECYCLE_JOBS && pending.size === 0) {
+      worker?.terminate();
+      worker = null;
+    }
   }
 }
