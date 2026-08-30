@@ -284,7 +284,9 @@ test("US3: a recipient's search shows the shared label and downloads from the sh
   // succeeds (US3 sc.3).
   const downloadPromise = page.waitForEvent("download");
   await row.getByRole("button", { name: "Download" }).click();
-  const content = await readStream(await (await downloadPromise).createReadStream());
+  const content = await readStream(
+    await (await downloadPromise).createReadStream(),
+  );
   expect(content.toString()).toBe("hello from notes");
 });
 

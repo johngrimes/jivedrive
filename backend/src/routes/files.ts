@@ -28,10 +28,7 @@ import {
   searchContent,
   searchFileNames,
 } from "../db/repository";
-import type {
-  ContentSearchHit,
-  FileNameSearchHit,
-} from "../db/repository";
+import type { ContentSearchHit, FileNameSearchHit } from "../db/repository";
 import type { Database } from "bun:sqlite";
 import { parseSpace, resolveSpace } from "../scope";
 import type { ResolvedScope, SpaceRef } from "../scope";

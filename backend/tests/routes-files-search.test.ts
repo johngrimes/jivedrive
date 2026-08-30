@@ -383,13 +383,7 @@ describe("GET /api/files/search (US2)", () => {
     const { app, db, alice } = createSearchApp();
     // Route-level fixtures: the extracted text the scan would have
     // stored (extraction itself is covered by search-extract.test.ts).
-    seedDoc(
-      db,
-      alice.id,
-      "users/alice/docs/sample.pdf",
-      "sample.pdf",
-      PHRASE,
-    );
+    seedDoc(db, alice.id, "users/alice/docs/sample.pdf", "sample.pdf", PHRASE);
     seedDoc(
       db,
       alice.id,
@@ -434,7 +428,10 @@ describe("GET /api/files/search (US2)", () => {
     const body = (await res.json()) as {
       results: Array<{ name: string; match: string }>;
     };
-    expect(body.results[0]).toMatchObject({ name: "budget.xlsx", match: "name" });
+    expect(body.results[0]).toMatchObject({
+      name: "budget.xlsx",
+      match: "name",
+    });
     // Within the content group the FTS relevance order decides.
     expect(body.results.slice(1).map((r) => r.match)).toEqual([
       "content",
@@ -444,7 +441,13 @@ describe("GET /api/files/search (US2)", () => {
 
   it("falls back to filename-only matching for a 1-2 character query (T014)", async () => {
     const { app, db, alice } = createSearchApp();
-    seedDoc(db, alice.id, "users/alice/ab-tools.txt", "ab-tools.txt", "no help");
+    seedDoc(
+      db,
+      alice.id,
+      "users/alice/ab-tools.txt",
+      "ab-tools.txt",
+      "no help",
+    );
     seedDoc(
       db,
       alice.id,
@@ -456,7 +459,9 @@ describe("GET /api/files/search (US2)", () => {
     const res = await search(app, "ab");
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { results: Array<Record<string, unknown>> };
+    const body = (await res.json()) as {
+      results: Array<Record<string, unknown>>;
+    };
     // Only the filename match comes back; the body hit is invisible.
     expect(body.results).toEqual([
       {
@@ -512,7 +517,9 @@ describe("GET /api/files/search (US2)", () => {
 
     const res = await search(app, "report");
 
-    const body = (await res.json()) as { results: Array<Record<string, unknown>> };
+    const body = (await res.json()) as {
+      results: Array<Record<string, unknown>>;
+    };
     // The file ranks as a name match, once — no duplicate content row.
     expect(body.results).toEqual([
       {

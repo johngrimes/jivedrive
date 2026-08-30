@@ -1,4 +1,12 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from "bun:test";
 import type { Database } from "bun:sqlite";
 import type { S3Client } from "@aws-sdk/client-s3";
 import { Hono } from "hono";
@@ -431,8 +439,8 @@ describe("search scan scheduler (T007)", () => {
       async send(command: unknown): Promise<unknown> {
         const name = (command as { constructor: { name: string } }).constructor
           .name;
-        const input = (command as { input: Record<string, unknown> }).input ??
-          {};
+        const input =
+          (command as { input: Record<string, unknown> }).input ?? {};
         calls.push({ name, input });
         if (name === "ListObjectsV2Command") {
           const prefix = (input.Prefix as string) ?? "";

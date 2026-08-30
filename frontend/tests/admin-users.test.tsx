@@ -237,9 +237,11 @@ describe("AdminUsersPage", () => {
       'Search index rebuilt for "kate" (2 indexed, 1 re-extracted, 3 removed)',
     );
     expect(
-      (kateRow?.querySelector(
-        'button[aria-label="Rebuild search index"]',
-      ) as HTMLButtonElement | null)?.disabled,
+      (
+        kateRow?.querySelector(
+          'button[aria-label="Rebuild search index"]',
+        ) as HTMLButtonElement | null
+      )?.disabled,
     ).toBe(false);
 
     const postCalls = fetchMock.mock.calls.filter(
@@ -279,9 +281,7 @@ describe("AdminUsersPage", () => {
     expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3);
 
     await act(async () => {
-      resolveReindex(
-        jsonResponse({ indexed: 0, reindexed: 0, removed: 0 }),
-      );
+      resolveReindex(jsonResponse({ indexed: 0, reindexed: 0, removed: 0 }));
     });
 
     expect(container.textContent).toContain(

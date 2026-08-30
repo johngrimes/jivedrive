@@ -386,9 +386,11 @@ describe("SearchResults snippet rendering (T015)", () => {
   it("renders a content match with a marked snippet and a Content match badge", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        jsonResponse({ results: [contentResult], capped: false }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ results: [contentResult], capped: false }),
+        ),
     );
     const container = renderResults();
     await flush();
@@ -437,7 +439,7 @@ describe("SearchResults snippet rendering (T015)", () => {
     await flush();
 
     expect(container.querySelector("img")).toBeNull();
-    expect(container.textContent).toContain('<img src=x onerror=alert(1)>');
+    expect(container.textContent).toContain("<img src=x onerror=alert(1)>");
   });
 });
 
@@ -470,9 +472,11 @@ describe("SearchResults shared results (T020)", () => {
   it("labels results from a shared mount with the sharer's username", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        jsonResponse({ results: [sharedResult], capped: false }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ results: [sharedResult], capped: false }),
+        ),
     );
     const container = renderResults();
     await flush();

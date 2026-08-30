@@ -354,7 +354,6 @@ export function AdminUsersPage() {
     }
   }
 
-
   /**
    * Force an immediate search-index rebuild for a user (007-file-search,
    * US4, FR-017). The endpoint runs synchronously and reports the

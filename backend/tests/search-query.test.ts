@@ -253,7 +253,9 @@ describe("searchFileNames/searchContent with a key prefix (US3, T021)", () => {
     seed(db, alice, "users/alice/projects/ab-tool.txt", "ab-tool.txt");
     seed(db, alice, "users/alice/private/ab-secret.txt", "ab-secret.txt");
 
-    expect(searchFileNames(db, alice.id, "ab", 50, "users/alice/projects/")).toEqual([
+    expect(
+      searchFileNames(db, alice.id, "ab", 50, "users/alice/projects/"),
+    ).toEqual([
       { key: "users/alice/projects/ab-tool.txt", fileName: "ab-tool.txt" },
     ]);
   });

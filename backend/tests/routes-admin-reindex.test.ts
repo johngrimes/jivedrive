@@ -109,8 +109,7 @@ function fakeClient(store: FakeStore): {
       const name = (command as { constructor: { name: string } }).constructor
         .name;
       calls.push(name);
-      const input = (command as { input: Record<string, unknown> }).input ??
-        {};
+      const input = (command as { input: Record<string, unknown> }).input ?? {};
       switch (name) {
         case "ListObjectsV2Command": {
           const prefix = (input.Prefix as string) ?? "";
@@ -237,14 +236,8 @@ describe("POST /api/admin/users/:id/reindex (US4)", () => {
     // one new object carrying a unique phrase, and one index row whose
     // storage object has vanished.
     const store: FakeStore = new Map([
-      [
-        "users/kate/kept.txt",
-        { etag: '"same"', size: 10, body: "stale text" },
-      ],
-      [
-        "users/kate/changed.txt",
-        { etag: '"v2"', size: 5, body: "fresh" },
-      ],
+      ["users/kate/kept.txt", { etag: '"same"', size: 10, body: "stale text" }],
+      ["users/kate/changed.txt", { etag: '"v2"', size: 5, body: "fresh" }],
       [
         "users/kate/new report.txt",
         {

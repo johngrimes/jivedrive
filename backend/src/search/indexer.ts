@@ -6,13 +6,14 @@
  * above the size cap are indexed name-only (R-009), and objects that
  * vanished are removed from the index (FR-007).
  */
-import {
-  GetObjectCommand,
-  ListObjectsV2Command,
-} from "@aws-sdk/client-s3";
+import { GetObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import type { S3Client } from "@aws-sdk/client-s3";
 import type { Database } from "bun:sqlite";
-import { listSearchIndex, removeSearchDoc, upsertSearchDoc } from "../db/repository";
+import {
+  listSearchIndex,
+  removeSearchDoc,
+  upsertSearchDoc,
+} from "../db/repository";
 import type { User } from "../db/repository";
 import { extractText } from "./extract";
 

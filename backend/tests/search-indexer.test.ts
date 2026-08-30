@@ -56,7 +56,10 @@ function textObject(body: string, etag: string): FakeObject {
  * store. Listings paginate at `pageSize` to exercise the scan's
  * continuation loop.
  */
-function fakeClient(store: FakeStore, pageSize = 1000): {
+function fakeClient(
+  store: FakeStore,
+  pageSize = 1000,
+): {
   client: S3Client;
   calls: Array<{ name: string; input: Record<string, unknown> }>;
 } {
@@ -65,8 +68,7 @@ function fakeClient(store: FakeStore, pageSize = 1000): {
     async send(command: unknown): Promise<unknown> {
       const name = (command as { constructor: { name: string } }).constructor
         .name;
-      const input = (command as { input: Record<string, unknown> }).input ??
-        {};
+      const input = (command as { input: Record<string, unknown> }).input ?? {};
       calls.push({ name, input });
       switch (name) {
         case "ListObjectsV2Command": {
@@ -242,14 +244,20 @@ describe("scanUserSpace", () => {
     const db = createDb();
     const alice = seedUser(db);
     const corrupt = readFileSync(
-      join(fileURLToPath(new URL("./fixtures", import.meta.url)), "corrupt.pdf"),
+      join(
+        fileURLToPath(new URL("./fixtures", import.meta.url)),
+        "corrupt.pdf",
+      ),
     );
     const store: FakeStore = new Map([
-      ["users/alice/broken.pdf", {
-        etag: '"bad"',
-        size: corrupt.length,
-        body: corrupt,
-      }],
+      [
+        "users/alice/broken.pdf",
+        {
+          etag: '"bad"',
+          size: corrupt.length,
+          body: corrupt,
+        },
+      ],
       ["users/alice/fine.txt", textObject("fine text", '"ok"')],
     ]);
     const { client } = fakeClient(store);
@@ -270,11 +278,14 @@ describe("scanUserSpace", () => {
     const db = createDb();
     const alice = seedUser(db);
     const store: FakeStore = new Map([
-      ["users/alice/stream.txt", {
-        etag: '"s1"',
-        size: 5,
-        body: async () => new TextEncoder().encode("hello"),
-      }],
+      [
+        "users/alice/stream.txt",
+        {
+          etag: '"s1"',
+          size: 5,
+          body: async () => new TextEncoder().encode("hello"),
+        },
+      ],
     ]);
     const { client } = fakeClient(store);
 
