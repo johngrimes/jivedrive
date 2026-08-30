@@ -120,9 +120,14 @@ async function listAllObjects(
  * extracted text indexed; changed objects (different etag or size) are
  * re-downloaded and re-extracted; vanished objects have both index rows
  * removed. Unchanged objects are never re-downloaded. Objects above the
- * cap, files without an extraction handler, and files whose extraction
- * fails are indexed name-only (body = "") — extraction failures never
- * fail the scan (FR-008). Downloads and extraction run with bounded
+ * cap, files without an extraction handler, files whose extraction
+ * fails, and files whose download fails are indexed name-only
+ * (body = "") — per-object failures never abort the scan (FR-008). A
+ * download failure stores a blank etag so the next cycle re-attempts
+ * it: transient failures self-heal, and a permanent one (a listed
+ * object that can never be re-fetched, e.g. a key that does not
+ * round-trip through the SDK) costs one failed GET per cycle.
+ * Downloads and extraction run with bounded
  * concurrency; each completed object is written to the index as it
  * settles (the writes serialize on the synchronous SQLite connection).
  *
@@ -168,12 +173,11 @@ export async function scanUserSpace(
   }
 
   // Download and extract with bounded concurrency, writing each result
-  // as it settles. A per-object failure aborts the whole scan: the
-  // scheduler reports it and the next cycle re-diffs from the listing,
-  // so partial progress is harmless (the scan is idempotent).
+  // as it settles. A per-object download failure never aborts the scan
+  // (FR-008): the object is indexed name-only with a blank etag, which
+  // makes the next cycle's diff re-pend it — transient failures
+  // self-heal, and a permanent one costs one failed GET per cycle.
   let cursor = 0;
-  let failed = false;
-  let failure: unknown;
   const fetchBody = async (object: ListedObject): Promise<string> => {
     if (object.size > cap || !extractable(baseName(object.key))) return "";
     const output = (await client.send(
@@ -183,36 +187,40 @@ export async function scanUserSpace(
     return (await extractText(bytes, baseName(object.key))) ?? "";
   };
   const worker = async (): Promise<void> => {
-    while (!failed) {
+    while (cursor < pending.length) {
       const index = cursor++;
       const next = pending[index];
       if (!next) return;
       const { object, existing } = next;
+      let body: string | null = null;
       try {
-        const body = await fetchBody(object);
-        upsertSearchDoc(db, {
-          userId: user.id,
-          key: object.key,
-          etag: object.etag,
-          size: object.size,
-          fileName: baseName(object.key),
-          body,
-        });
-        if (existing) {
-          counts.reindexed++;
-        } else {
-          counts.indexed++;
-        }
+        body = await fetchBody(object);
       } catch (error) {
-        failed = true;
-        failure = error;
+        console.warn(
+          `Search scan: indexing ${object.key} name-only after failed download:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+      upsertSearchDoc(db, {
+        userId: user.id,
+        key: object.key,
+        // Blank etag marks "listed but never downloaded": the next
+        // cycle's fingerprint diff then re-attempts the download.
+        etag: body === null ? "" : object.etag,
+        size: object.size,
+        fileName: baseName(object.key),
+        body: body ?? "",
+      });
+      if (existing) {
+        counts.reindexed++;
+      } else {
+        counts.indexed++;
       }
     }
   };
   await Promise.all(
     Array.from({ length: Math.min(SCAN_CONCURRENCY, pending.length) }, worker),
   );
-  if (failed) throw failure;
 
   return counts;
 }

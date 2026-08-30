@@ -59,6 +59,7 @@ function textObject(body: string, etag: string): FakeObject {
 function fakeClient(
   store: FakeStore,
   pageSize = 1000,
+  failGets: ReadonlySet<string> = new Set(),
 ): {
   client: S3Client;
   calls: Array<{ name: string; input: Record<string, unknown> }>;
@@ -97,8 +98,9 @@ function fakeClient(
           };
         }
         case "GetObjectCommand": {
-          const object = store.get(input.Key as string);
-          if (!object) {
+          const key = input.Key as string;
+          const object = store.get(key);
+          if (!object || failGets.has(key)) {
             const err = new Error("NoSuchKey") as Error & { name: string };
             err.name = "NoSuchKey";
             throw err;
@@ -272,6 +274,56 @@ describe("scanUserSpace", () => {
     expect(getSearchDoc(db, alice.id, "users/alice/fine.txt")?.body).toBe(
       "fine text",
     );
+  });
+
+  it("indexes a failed download name-only and keeps scanning (FR-008)", async () => {
+    const db = createDb();
+    const alice = seedUser(db);
+    const store: FakeStore = new Map([
+      ["users/alice/broken.txt", textObject("never read", '"bad"')],
+      ["users/alice/fine.txt", textObject("fine text", '"ok"')],
+    ]);
+    const { client, calls } = fakeClient(
+      store,
+      1000,
+      new Set(["users/alice/broken.txt"]),
+    );
+
+    const counts = await scanUserSpace(client, db, alice, CAP);
+
+    expect(counts).toEqual({ indexed: 2, reindexed: 0, removed: 0 });
+    expect(getSearchDoc(db, alice.id, "users/alice/broken.txt")).toEqual({
+      fileName: "broken.txt",
+      body: "",
+    });
+    expect(getSearchDoc(db, alice.id, "users/alice/fine.txt")?.body).toBe(
+      "fine text",
+    );
+    // Only the failing object's GET failed; the other was downloaded.
+    expect(calls.filter((c) => c.name === "GetObjectCommand")).toHaveLength(2);
+  });
+
+  it("re-attempts a failed download on the next scan", async () => {
+    const db = createDb();
+    const alice = seedUser(db);
+    const store: FakeStore = new Map([
+      ["users/alice/heal.txt", textObject("recovered", '"h1"')],
+    ]);
+    const failing = fakeClient(store, 1000, new Set(["users/alice/heal.txt"]));
+    const first = await scanUserSpace(failing.client, db, alice, CAP);
+    expect(first).toEqual({ indexed: 1, reindexed: 0, removed: 0 });
+    expect(getSearchDoc(db, alice.id, "users/alice/heal.txt")?.body).toBe("");
+
+    // The blank sentinel etag makes the object pend again even though
+    // its listing fingerprint is unchanged.
+    const { client, calls } = fakeClient(store);
+    const second = await scanUserSpace(client, db, alice, CAP);
+    expect(second).toEqual({ indexed: 0, reindexed: 1, removed: 0 });
+    expect(getSearchDoc(db, alice.id, "users/alice/heal.txt")).toEqual({
+      fileName: "heal.txt",
+      body: "recovered",
+    });
+    expect(calls.filter((c) => c.name === "GetObjectCommand")).toHaveLength(1);
   });
 
   it("reads real-SDK-style byte streams (T006)", async () => {
