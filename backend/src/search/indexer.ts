@@ -275,21 +275,13 @@ export async function scanUserSpace(
     } finally {
       charged -= charge;
       running--;
-      // A release unblocks deferred heavyweights: admit what now fits,
-      // first-fit over the deferred queue. With nothing running the
-      // exclusive branch below admits the largest one unconditionally.
+      // A release unblocks deferred heavyweights: admit what now fits.
+      // tryAdmit's exclusive branch (nothing running) guarantees the
+      // largest deferred item is admitted unconditionally, so a charge
+      // above the budget can never starve the scan.
       for (let i = 0; i < deferred.length; ) {
-        const next = deferred[i];
-        if (!next) break;
-        const nextCharge = downloadCharge(
-          baseName(next.object.key),
-          next.object.size,
-        );
-        if (running < SCAN_CONCURRENCY && charged + nextCharge <= budget) {
+        if (tryAdmit(deferred[i]!)) {
           deferred.splice(i, 1);
-          charged += nextCharge;
-          running++;
-          inFlight.push(run(next, nextCharge));
         } else {
           i++;
         }
@@ -297,21 +289,29 @@ export async function scanUserSpace(
     }
   };
 
-  const launch = (item: { object: ListedObject; existing: boolean }): void => {
+  /**
+   * Admit one pending item if the pool has room: a concurrency slot
+   * and charged bytes within the budget. An item charged above the
+   * whole budget still runs when nothing else is in flight — weights
+   * keep the max charge at 4x cap, inside the 5x-cap budget, and the
+   * exclusive branch guards that invariant if the constants drift.
+   * Returns whether the item was admitted; rejected items are
+   * deferred and retried on every release.
+   */
+  const tryAdmit = (
+    item: { object: ListedObject; existing: boolean },
+  ): boolean => {
     const charge = downloadCharge(baseName(item.object.key), item.object.size);
-    if (running >= SCAN_CONCURRENCY) return;
-    if (charged + charge > budget && running > 0) return;
-    // Nothing else is running: admit even a budget-busting item —
-    // deferring it forever would starve the scan.
+    if (running >= SCAN_CONCURRENCY) return false;
+    if (charged + charge > budget && running > 0) return false;
     charged = running === 0 ? charge : charged + charge;
     running++;
     inFlight.push(run(item, charge));
+    return true;
   };
 
   for (const item of pending) {
-    const before = running;
-    launch(item);
-    if (running === before) deferred.push(item);
+    if (!tryAdmit(item)) deferred.push(item);
   }
   while (inFlight.length > 0) {
     const batch = inFlight.splice(0);
