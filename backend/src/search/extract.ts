@@ -97,6 +97,20 @@ function extensionOf(fileName: string): string {
 }
 
 /**
+ * Whether {@link extractText} can produce text for this file name: the
+ * plain-text extension table plus PDF and DOCX. The scan uses this to
+ * skip downloading objects it could only discard — their content never
+ * reaches the index, so they are indexed name-only without a GET.
+ *
+ * @param fileName - the object's base name
+ * @returns true when an extraction handler exists for the extension
+ */
+export function extractable(fileName: string): boolean {
+  const ext = extensionOf(fileName);
+  return TEXT_EXTENSIONS.has(ext) || ext === "pdf" || ext === "docx";
+}
+
+/**
  * Strip NUL bytes and cap the text at {@link MAX_EXTRACTED_TEXT_CHARS}.
  *
  * @param text - raw extracted text
