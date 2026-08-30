@@ -14,6 +14,8 @@
 import { randomBytes } from "node:crypto";
 import type { S3Client } from "@aws-sdk/client-s3";
 import { scanUserSpace } from "../search/indexer";
+import type { ScanCounts } from "../search/indexer";
+import type { ScanState, ScanStatusRegistry } from "../search/status";
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import type { Database } from "bun:sqlite";
@@ -50,6 +52,20 @@ export interface AdminRouteDeps {
   requireUser: MiddlewareHandler<ServerEnv>;
   /** S3 client used by the reindex endpoint's background scan (US4). */
   s3Client: S3Client;
+  /** Shared scan status registry the reindex scan reports into. */
+  scanStatus: ScanStatusRegistry;
+}
+
+/** One user's scan status in the admin scan-status list. */
+interface AdminScanStatusResponse {
+  userId: string;
+  username: string;
+  /** "idle" until the process has recorded a scan for the user. */
+  state: ScanState | "idle";
+  startedAt: string | null;
+  finishedAt: string | null;
+  counts: ScanCounts | null;
+  error: string | null;
 }
 
 /** The user shape in the admin list: contract `User` plus createdAt. */
@@ -283,21 +299,45 @@ export function adminRoutes(deps: AdminRouteDeps): Hono<ServerEnv> {
   // Bun's 10s idle timeout and dropped the response), so the scan runs
   // in the background and the request is accepted (202) immediately;
   // the scheduler's next cycle reconciles anything this scan misses.
+  // The scan reports its start, success or failure into the shared scan
+  // status registry so the scan-status view shows it live.
   // An unknown user is refused with 404 and nothing is scanned.
   app.post("/users/:id/reindex", (c) => {
     const target = getUserById(db, c.req.param("id"));
     if (!target) {
       return jsonError(c, 404, "User not found", "not_found");
     }
-    void scanUserSpace(
-      deps.s3Client,
-      db,
-      target,
-      config.searchIndexMaxBytes,
-    ).catch((error: unknown) => {
-      console.error(`Search scan failed for user ${target.username}:`, error);
-    });
+    const run = deps.scanStatus.recordStart(target.id);
+    void scanUserSpace(deps.s3Client, db, target, config.searchIndexMaxBytes)
+      .then((counts) => {
+        deps.scanStatus.recordSuccess(run, counts);
+      })
+      .catch((error: unknown) => {
+        deps.scanStatus.recordFailure(run, error);
+        console.error(`Search scan failed for user ${target.username}:`, error);
+      });
     return c.json({ started: true }, 202);
+  });
+
+  // Per-user scan status for the admin view: the latest recorded scan
+  // run per user merged with the user list, so a user never scanned
+  // (or after a restart, which drops the process-lifetime records)
+  // appears as "idle".
+  app.get("/scan-status", (c) => {
+    const records = deps.scanStatus.all();
+    const scans: AdminScanStatusResponse[] = listUsers(db).map((user) => {
+      const record = records.get(user.id);
+      return {
+        userId: user.id,
+        username: user.username,
+        state: record?.state ?? "idle",
+        startedAt: record?.startedAt ?? null,
+        finishedAt: record?.finishedAt ?? null,
+        counts: record?.counts ?? null,
+        error: record?.error ?? null,
+      };
+    });
+    return c.json({ scans }, 200);
   });
 
   // List pending, claimed and expired invites with derived status.

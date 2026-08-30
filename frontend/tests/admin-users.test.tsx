@@ -87,6 +87,7 @@ function stubAdminApi(
       },
     },
     "GET /api/admin/invites": { status: 200, body: { invites: [] } },
+    "GET /api/admin/scan-status": { status: 200, body: { scans: [] } },
     "DELETE /api/admin/users/target-1/passkeys": {
       status: 200,
       body: {
@@ -312,5 +313,87 @@ describe("AdminUsersPage", () => {
     const alert = container.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("Reconciliation failed");
     expect(container.textContent).not.toContain("Search index rebuilt");
+  });
+
+  it("renders the per-user scan status card from the endpoint", async () => {
+    stubAdminApi({
+      "GET /api/admin/scan-status": {
+        status: 200,
+        body: {
+          scans: [
+            {
+              userId: "admin-1",
+              username: "admin",
+              state: "ok",
+              startedAt: "2026-08-30T05:03:14.104Z",
+              finishedAt: "2026-08-30T05:24:52.446Z",
+              counts: { indexed: 3, reindexed: 1, removed: 2 },
+              error: null,
+            },
+            {
+              userId: "target-1",
+              username: "kate",
+              state: "error",
+              startedAt: "2026-08-30T05:03:14.104Z",
+              finishedAt: "2026-08-30T05:03:15.000Z",
+              counts: null,
+              error:
+                "RequestTimeTooSkewed: The difference between the request time and the current time is too large.",
+            },
+          ],
+        },
+      },
+    });
+    const container = await renderAdminUsers();
+
+    const scanTable = container.querySelector(
+      'table[aria-label="Search index scan status"]',
+    );
+    expect(scanTable).not.toBeNull();
+    const text = scanTable?.textContent ?? "";
+    expect(text).toContain("admin");
+    expect(text).toContain("ok");
+    expect(text).toContain("error");
+    expect(text).toContain("RequestTimeTooSkewed");
+  });
+
+  it("polls the scan status every 5 seconds while the page is open", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = stubAdminApi();
+      await renderAdminUsers();
+      const scanCalls = () =>
+        fetchMock.mock.calls.filter(([url]) => url === "/api/admin/scan-status")
+          .length;
+      const afterMount = scanCalls();
+      expect(afterMount).toBeGreaterThanOrEqual(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(scanCalls()).toBeGreaterThan(afterMount);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces a scan-status failure inside the card, not a blank page", async () => {
+    stubAdminApi({
+      "GET /api/admin/scan-status": {
+        status: 500,
+        body: { error: "Registry exploded", code: "internal" },
+      },
+    });
+    const container = await renderAdminUsers();
+
+    // The card still renders (heading present) and the failure is
+    // surfaced as an alert rather than replacing the page.
+    expect(container.textContent).toContain("Search index scans");
+    const alerts = Array.from(container.querySelectorAll('[role="alert"]'));
+    expect(
+      alerts.some(
+        (alert) => alert.textContent?.includes("Registry exploded") === true,
+      ),
+    ).toBe(true);
   });
 });

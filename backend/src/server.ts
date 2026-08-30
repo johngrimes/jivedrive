@@ -26,6 +26,8 @@ import { usersRoutes } from "./routes/users";
 import { createS3Client } from "./s3/client";
 import { startScanScheduler } from "./search/scheduler";
 import type { ScanSchedulerHandle } from "./search/scheduler";
+import { createScanStatusRegistry } from "./search/status";
+import type { ScanStatusRegistry } from "./search/status";
 import {
   createRateLimitMiddleware,
   createRateLimitStore,
@@ -54,6 +56,12 @@ export interface ServerDeps {
    * Mirrors the s3Client/listPageSize injection pattern.
    */
   rateLimitNow?: () => number;
+  /**
+   * Shared scan status registry for admin reporting; defaults to a
+   * fresh one. Pass the instance given to `startSearchIndexer` so the
+   * admin view covers the background scheduler's scans too.
+   */
+  scanStatus?: ScanStatusRegistry;
 }
 
 /**
@@ -141,6 +149,7 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
   // the file routes use it for listing/URLs and the admin reindex
   // endpoint (US4) for on-demand background scans.
   const s3Client = deps.s3Client ?? createS3Client(deps.config.s3);
+  const scanStatus = deps.scanStatus ?? createScanStatusRegistry();
   app.route(
     "/api/files",
     filesRoutes({
@@ -180,6 +189,7 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
       db: deps.db,
       requireUser: requireUser(deps.db, deps.config.sessionIdleDays),
       s3Client,
+      scanStatus,
     }),
   );
 
@@ -276,21 +286,23 @@ export function getUser(c: Context<ServerEnv>): User {
  * @param config - application configuration (interval + size cap)
  * @param db - open, migrated database connection
  * @param client - S3 client; defaults to one built from the config
+ * @param scanStatus - shared scan status registry for admin reporting
  * @returns a handle to stop the scheduler (or observe in-flight scans)
  */
 export function startSearchIndexer(
   config: AppConfig,
   db: Database,
   client: S3Client = createS3Client(config.s3),
+  scanStatus?: ScanStatusRegistry,
 ): ScanSchedulerHandle {
   return startScanScheduler({
     client,
     db,
     intervalSeconds: config.searchScanIntervalSeconds,
     maxBytes: config.searchIndexMaxBytes,
+    status: scanStatus,
   });
 }
-
 /**
  * Load configuration, open and migrate the database, and start the server.
  * Runs when this module is the entry point.
@@ -303,11 +315,14 @@ export function main(): void {
   // FR-011: purge absolute- and idle-expired sessions in a sweep at
   // startup so dead rows do not accumulate between lazy purges.
   sweepExpiredSessions(db, undefined, config.sessionIdleDays);
-  const app = createApp({ config, db });
+  // One shared registry: the admin scan-status route reads what the
+  // background scheduler and the reindex endpoint record.
+  const scanStatus = createScanStatusRegistry();
+  const app = createApp({ config, db, scanStatus });
   Bun.serve({ port: config.port, fetch: app.fetch });
   // FR-007: the background scan loop reconciles every user's search
   // index; the process lifetime is its lifetime, so nothing stops it.
-  startSearchIndexer(config, db);
+  startSearchIndexer(config, db, undefined, scanStatus);
   console.log(`JiveDrive listening on http://localhost:${config.port}`);
 }
 

@@ -36,6 +36,7 @@ import {
 import {
   cancelAdminInvite,
   createAdminInvite,
+  getScanStatus,
   listAdminInvites,
   listAdminUsers,
   reindexUser,
@@ -43,7 +44,12 @@ import {
   resendAdminInvite,
   resetUserPasskeys,
 } from "../api/client";
-import type { AdminUser, ApiClientError, Invite } from "../api/client";
+import type {
+  AdminUser,
+  ApiClientError,
+  Invite,
+  ScanStatus,
+} from "../api/client";
 import { useSession } from "../auth/sessionContext";
 import { formatDate } from "../lib/format";
 
@@ -102,6 +108,20 @@ function inviteBadgeClass(status: Invite["status"]): string {
   }
 }
 
+/** daisyUI badge variant for a scan status (idle/running/ok/error). */
+function scanBadgeClass(state: ScanStatus["state"]): string {
+  switch (state) {
+    case "running":
+      return "badge-info";
+    case "ok":
+      return "badge-success";
+    case "error":
+      return "badge-error";
+    default:
+      return "badge-ghost";
+  }
+}
+
 /**
  * Admin user management page.
  *
@@ -136,6 +156,9 @@ export function AdminUsersPage() {
   const [resending, setResending] = useState<ResendingInvite | null>(null);
   /** The user pending a search-index rebuild (busy state). */
   const [reindexing, setReindexing] = useState<ReindexingUser | null>(null);
+  // Latest recorded scan per user (null until the first poll lands).
+  const [scanStatuses, setScanStatuses] = useState<ScanStatus[] | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
 
   /**
    * Load both admin tables.
@@ -177,6 +200,33 @@ export function AdminUsersPage() {
     };
   }, []);
 
+  // Scan status polling: fetch immediately, then every 5 seconds while
+  // the page is open, so a triggered rebuild is observed live as it
+  // moves running → ok/error. Failures surface in the card; stale data
+  // stays visible rather than blanking the table. Admins only: a
+  // non-admin stuck on the access-denied screen must not poll an
+  // endpoint that will only answer 403 forever.
+  const isSessionAdmin = user?.isAdmin === true;
+  useEffect(() => {
+    if (!isSessionAdmin) return;
+    let cancelled = false;
+    async function poll(): Promise<void> {
+      try {
+        const body = await getScanStatus();
+        if (cancelled) return;
+        setScanStatuses(body.scans);
+        setScanError(null);
+      } catch (err) {
+        if (!cancelled) setScanError(messageOf(err));
+      }
+    }
+    void poll();
+    const timer = setInterval(() => void poll(), 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isSessionAdmin]);
   if (sessionLoading) {
     return (
       <p className="py-8 text-center opacity-70" role="status">
@@ -625,6 +675,88 @@ export function AdminUsersPage() {
                 </p>
               </div>
             )}
+          </div>
+        </section>
+
+        <section className="mt-6">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider opacity-60">
+            Search index scans
+          </h2>
+          <div className="card bg-base-100 shadow-xl p-3">
+            {scanError && (
+              <p className="alert alert-error mx-3 mt-3" role="alert">
+                {scanError}
+              </p>
+            )}
+            {!scanStatuses ? (
+              <div className="card-body">
+                <p
+                  className="py-4 text-center text-sm opacity-70"
+                  role="status"
+                >
+                  Loading scan status...
+                </p>
+              </div>
+            ) : (
+              <table
+                className="table table-xs w-full"
+                aria-label="Search index scan status"
+              >
+                <thead>
+                  <tr>
+                    <th scope="col">User</th>
+                    <th scope="col">Status</th>
+                    <th scope="col" className="hidden md:table-cell">
+                      Last run
+                    </th>
+                    <th scope="col" className="hidden lg:table-cell">
+                      Indexed / reindexed / removed
+                    </th>
+                    <th scope="col" className="hidden md:table-cell">
+                      Error
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scanStatuses.map((scan) => (
+                    <tr key={scan.userId}>
+                      <td className="break-all font-semibold">
+                        {scan.username}
+                      </td>
+                      <td>
+                        <span className={`badge ${scanBadgeClass(scan.state)}`}>
+                          {scan.state}
+                        </span>
+                      </td>
+                      <td className="hidden whitespace-nowrap md:table-cell">
+                        {scan.state === "idle"
+                          ? "Never"
+                          : scan.finishedAt
+                            ? `${formatDate(scan.startedAt ?? "")} → ${formatDate(scan.finishedAt)}`
+                            : `since ${formatDate(scan.startedAt ?? "")}`}
+                      </td>
+                      <td className="hidden lg:table-cell">
+                        {scan.counts
+                          ? `${scan.counts.indexed} / ${scan.counts.reindexed} / ${scan.counts.removed}`
+                          : "—"}
+                      </td>
+                      <td
+                        className="hidden max-w-64 truncate md:table-cell"
+                        title={scan.error ?? undefined}
+                      >
+                        {scan.error ?? "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <div className="card-body border-t border-base-300/50">
+              <p className="text-xs italic opacity-60">
+                Refreshes every 5 seconds. "Rebuild index" in the Users table
+                below starts a scan whose progress appears here.
+              </p>
+            </div>
           </div>
         </section>
 

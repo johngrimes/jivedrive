@@ -18,6 +18,7 @@ import { migrateFromDir, openDatabase } from "./db/migrate";
 import { createInvite, createUser } from "./db/repository";
 import { createApp, startSearchIndexer } from "./server";
 import { createS3Client } from "./s3/client";
+import { createScanStatusRegistry } from "./search/status";
 import { createSession } from "./auth/sessions";
 
 /**
@@ -496,11 +497,16 @@ mockS3.put("/:bucket/*", async (c) => {
 Bun.serve({ port: MOCK_S3_PORT, fetch: mockS3.fetch });
 
 const staticDir = resolve(import.meta.dir, "../../frontend/dist");
+// One shared scan-status registry, as production main() wires it: the
+// admin scan-status route reads what the scheduler and the reindex
+// endpoint record.
+const scanStatus = createScanStatusRegistry();
 const app = createApp({
   config,
   db,
   staticDir,
   s3Client: createMockS3Client(),
+  scanStatus,
   // Small page size so the browse e2e exercises load more without
   // seeding 1000 objects.
   listPageSize: 5,
@@ -509,7 +515,7 @@ const app = createApp({
 Bun.serve({ port: config.port, fetch: app.fetch });
 // T007: run the search-index scan loop against the mock S3 client so
 // seeded and uploaded objects become searchable within one interval.
-startSearchIndexer(config, db, createMockS3Client());
+startSearchIndexer(config, db, createMockS3Client(), scanStatus);
 console.log(
   `E2E JiveDrive listening on http://localhost:${config.port} (db + mock S3 seeded)`,
 );

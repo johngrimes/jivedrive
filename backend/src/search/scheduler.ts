@@ -12,6 +12,7 @@ import { listUsers } from "../db/repository";
 import type { User } from "../db/repository";
 import { scanUserSpace } from "./indexer";
 import type { ScanCounts } from "./indexer";
+import type { ScanStatusRegistry } from "./status";
 
 /** The outcome of one user's scan within a cycle. */
 export interface ScanCycleResult {
@@ -46,6 +47,12 @@ export interface ScanSchedulerOptions {
   maxBytes: number;
   /** Per-scan result hook (tests, future admin reporting). */
   onCycle?: (result: ScanCycleResult) => void;
+  /**
+   * Optional scan status registry (admin reporting): every scan start,
+   * success and failure is recorded so the admin scan-status view
+   * reflects both this scheduler and manual reindex scans.
+   */
+  status?: ScanStatusRegistry;
 }
 
 /**
@@ -63,16 +70,19 @@ export interface ScanSchedulerOptions {
 export function startScanScheduler(
   options: ScanSchedulerOptions,
 ): ScanSchedulerHandle {
-  const { client, db, intervalSeconds, maxBytes, onCycle } = options;
+  const { client, db, intervalSeconds, maxBytes, onCycle, status } = options;
   const running = new Set<string>();
 
   async function scanUser(user: User): Promise<void> {
     if (running.has(user.id)) return;
     running.add(user.id);
+    const run = status?.recordStart(user.id);
     try {
       const counts = await scanUserSpace(client, db, user, maxBytes);
+      if (run) status?.recordSuccess(run, counts);
       onCycle?.({ userId: user.id, counts });
     } catch (error) {
+      if (run) status?.recordFailure(run, error);
       console.error(`Search scan failed for user ${user.username}:`, error);
       onCycle?.({ userId: user.id, error });
     } finally {

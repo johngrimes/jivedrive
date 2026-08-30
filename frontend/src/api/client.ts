@@ -647,3 +647,34 @@ export function reindexUser(id: string): Promise<{ started: boolean }> {
     method: "POST",
   });
 }
+
+/** The per-user outcome counts of one completed scan run. */
+export interface ScanCounts {
+  indexed: number;
+  reindexed: number;
+  removed: number;
+}
+
+/** One user's latest recorded scan run in the admin scan-status view. */
+export interface ScanStatus {
+  userId: string;
+  username: string;
+  /** "idle" until the server has recorded a scan for the user. */
+  state: "idle" | "running" | "ok" | "error";
+  startedAt: string | null;
+  finishedAt: string | null;
+  counts: ScanCounts | null;
+  error: string | null;
+}
+
+/**
+ * Read every user's latest scan run (admin only): the latest record per
+ * user from the server's in-memory scan registry, "idle" for users the
+ * process has not scanned since it started.
+ *
+ * @returns the scan status list
+ * @throws {ApiClientError} on failure; a 403 carries code "forbidden"
+ */
+export function getScanStatus(): Promise<{ scans: ScanStatus[] }> {
+  return apiFetch<{ scans: ScanStatus[] }>("/api/admin/scan-status");
+}
