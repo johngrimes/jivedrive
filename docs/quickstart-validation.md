@@ -724,3 +724,74 @@ T032 is recorded as done; T033 is **not** ticked because the full e2e suite
 could not be run end-to-end green in this environment (5173 occupied; the
 remaining 6 failures are the pre-existing scratch-port artifacts documented
 above, plus two suite interruptions attributed to parallel-worker restarts).
+
+### Search-quality gold-set evaluation (2026-08-30)
+
+Beyond the functional scenarios above, search result quality is measured
+with a gold-set harness (the Cranfield method): a fixed corpus, a fixed
+query list with hand-graded relevance judgments (2 = directly relevant,
+1 = partially relevant, unjudged = irrelevant), and standard IR metrics.
+No public IR benchmark (BEIR, MS MARCO) fits a per-user personal-file
+store with a trigram FTS5 index, so the gold set is the quality tool.
+
+Implementation:
+
+- Harness: `backend/scripts/search-eval.ts` (`runSearchEval()`, also the
+  CLI core); table printer: `backend/scripts/eval-search.ts`, run as
+  `bun run eval:search` in `backend/`.
+- Corpus: 22 documents in an in-memory database with the real migrations
+  — 19 text files with deliberately overlapping vocabulary (invoices,
+  recipes, finance, the "Zephyrquill" project, travel) plus the
+  `tests/fixtures` binaries: `sample.pdf` / `sample.docx` (quarterly
+  review docs, exercising both extraction paths) and `corrupt.pdf`
+  (extraction fails, must degrade to name-only indexing, FR-008). A
+  name-trap file (`budget-notes.txt` — finance name, recipe content)
+  exercises the name-above-content merge (R-008).
+- Queries: 17, graded per document, covering exact-name, content-only,
+  phrase, numeric and name-trap cases.
+- Ranking under test: the real repository helpers
+  (`searchFileNames` / `searchContent`) replayed through the route's
+  merge semantics — name group above content group, duplicates dropped
+  and skipped (not loop-breaking), cap 50.
+- Metrics: P@5, nDCG@10 (gain 2^rel − 1), MRR (first hit graded >= 1),
+  recall@10 over the judged-relevant set; summary is the unweighted mean
+  over queries.
+
+Results (2026-08-30, all queries MRR 1.00):
+
+```
+query               P@5  nDCG@10   R@10      query               P@5  nDCG@10   R@10
+invoice            1.00    1.000  1.00      quarterly          1.00    1.000  1.00
+invoice-2024       0.40    1.000  1.00      meeting            0.20    1.000  1.00
+pancakes           0.40    1.000  1.00      acme               0.60    1.000  1.00
+sourdough          0.40    1.000  1.00      expenses           0.20    0.826  0.50
+budget             1.00    0.850  1.00      2024               0.40    1.000  1.00
+zephyrquill        0.80    1.000  1.00      roadmap            0.20    1.000  1.00
+receipt            0.40    1.000  1.00      meal               0.20    1.000  1.00
+japan              0.40    1.000  1.00      budget review      0.80    1.000  1.00
+packing            0.20    1.000  1.00      ────────────────────────────────────────
+summary            P@5 0.51   nDCG@10 0.981   MRR 1.00   recall@10 0.97
+```
+
+Findings:
+
+- P@5's low absolute values are an artifact of the k=5 denominator on
+  small relevant sets (a query with one relevant file tops out at 0.2),
+  not ranking failures; nDCG@10 and recall@10 are the discriminating
+  metrics here.
+- Every query's first hit is relevant (MRR 1.00), including the corrupt
+  PDF found by name after failed extraction (query "receipt").
+- Two queries sit below 1.0 nDCG by design: "budget" (the name-trap
+  ranks first as a name match, graded 1) and "expenses" — the latter
+  documents the real lexical ceiling: FTS5 trigram phrase queries need a
+  contiguous string, so a synonym-style query ("expenses" vs. a budget
+  CSV) cannot retrieve the partially relevant file. Switching the
+  matcher (tokenization, prefix or fuzzy matching) would be measured by
+  exactly this gap.
+
+Regression gate: `backend/tests/search-eval.test.ts` asserts the
+calibrated floor (nDCG@10 >= 0.93, MRR >= 0.95, recall@10 >= 0.92,
+P@5 >= 0.45) plus two behavioral checks (corrupt PDF found by name at
+rank 1; both binary fixtures surface for "zephyrquill"), so a ranking or
+extraction regression fails the backend suite. Full backend suite green:
+464 pass / 0 fail (2026-08-30).
