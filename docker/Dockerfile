@@ -30,8 +30,15 @@ FROM oven/bun:1.3.14 AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production
-
 COPY --from=build /app/backend/src ./backend/src
+# bun resolves workspace dependencies (hono, ...) by walking up from
+# backend/src to the root node_modules; the backend package.json is
+# what marks /app/backend as inside the workspace.
+COPY --from=build /app/backend/package.json ./backend/package.json
+# bun's isolated installs put the backend's dependencies in
+# backend/node_modules (symlinks into the root .bun store); both are
+# needed for resolution from backend/src.
+COPY --from=build /app/backend/node_modules ./backend/node_modules
 COPY --from=build /app/frontend/dist ./frontend/dist
 # SQL migrations are read from disk at startup.
 COPY --from=build /app/backend/migrations ./migrations
