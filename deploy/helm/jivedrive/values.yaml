@@ -32,7 +32,11 @@ jivedrive:
       memory: "256Mi"
     limits:
       cpu: "2"
-      memory: "1Gi"
+      # DOCX extraction (mammoth inflates the document XML to many
+      # times the file size) peaks past 1Gi on large documents even
+      # with the scan's weighted budget admitting only one heavy file
+      # at a time (prod OOMKill, 2026-08-31).
+      memory: "2Gi"
 
   # Pod scheduling. All optional, all unset by default.
   nodeSelector: {}

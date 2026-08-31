@@ -306,14 +306,15 @@ async function runExtractionWorker(
     w.postMessage({ id, buffer, fileName });
   });
   const timeout = setTimeout(() => {
-    const job = pending.get(id);
-    if (job !== undefined) {
-      pending.delete(id);
+    // delete-first guarantees the timed-out job settles exactly once,
+    // while failAllPending fast-fails its queued siblings instead of
+    // leaving them to hang until their own timeouts.
+    if (pending.delete(id)) {
       // A wedged parse is indistinguishable from a slow one; recycle
       // the worker so later jobs are not queued behind it.
       worker?.terminate();
       worker = null;
-      job.reject(new Error("extraction timed out"));
+      failAllPending("extraction timed out");
     }
   }, EXTRACTION_TIMEOUT_MS);
   try {
