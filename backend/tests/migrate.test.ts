@@ -184,6 +184,7 @@ describe("migrateFromDir", () => {
       "003_session_last_used.sql",
       "004_shares.sql",
       "005_search_index.sql",
+      "006_share_links.sql",
     ]);
 
     // Every table from data-model.md exists.
@@ -192,8 +193,8 @@ describe("migrateFromDir", () => {
       "passkey_credentials",
       "invites",
       "sessions",
-      "schema_migrations",
       "shares",
+      "share_links",
     ]) {
       expect(
         db
@@ -466,6 +467,143 @@ describe("migrateFromDir", () => {
       .query("SELECT folder FROM shares WHERE id = 's1'")
       .get() as { folder: string };
     expect(share.folder).toBe("projects/");
+  });
+
+  it("006 adds the share_links table, indexes and cascade (T003)", () => {
+    const db = createDb();
+    const initialSql = readFileSync(
+      join(migrationsDir, "001_init.sql"),
+      "utf8",
+    );
+    const secondSql = readFileSync(
+      join(migrationsDir, "002_passkey_discoverable.sql"),
+      "utf8",
+    );
+    const thirdSql = readFileSync(
+      join(migrationsDir, "003_session_last_used.sql"),
+      "utf8",
+    );
+    const fourthSql = readFileSync(
+      join(migrationsDir, "004_shares.sql"),
+      "utf8",
+    );
+    const fifthSql = readFileSync(
+      join(migrationsDir, "005_search_index.sql"),
+      "utf8",
+    );
+    const sixthSql = readFileSync(
+      join(migrationsDir, "006_share_links.sql"),
+      "utf8",
+    );
+
+    expect(
+      migrate(db, [
+        { name: "001_init.sql", sql: initialSql },
+        { name: "002_passkey_discoverable.sql", sql: secondSql },
+        { name: "003_session_last_used.sql", sql: thirdSql },
+        { name: "004_shares.sql", sql: fourthSql },
+        { name: "005_search_index.sql", sql: fifthSql },
+      ]),
+    ).toEqual([
+      "001_init.sql",
+      "002_passkey_discoverable.sql",
+      "003_session_last_used.sql",
+      "004_shares.sql",
+      "005_search_index.sql",
+    ]);
+    expect(
+      migrate(db, [{ name: "006_share_links.sql", sql: sixthSql }]),
+    ).toEqual(["006_share_links.sql"]);
+
+    // Table exists with the expected columns; token is the primary key
+    // and every other column is NOT NULL.
+    const columns = db.query("PRAGMA table_info(share_links)").all() as Array<{
+      name: string;
+      type: string;
+      notnull: number;
+      pk: number;
+    }>;
+    expect(columns.map((c) => c.name)).toEqual([
+      "token",
+      "ownerUserId",
+      "bucket",
+      "objectKey",
+      "expiresIn",
+      "expiresAt",
+      "createdAt",
+    ]);
+    expect(columns.find((c) => c.name === "token")?.pk).toBe(1);
+    for (const column of columns) {
+      if (column.name === "token") continue;
+      expect(column.notnull).toBe(1);
+    }
+
+    // The single foreign key references users and cascades on delete
+    // (FR-008): the links die with the account.
+    const foreignKeys = db
+      .query("PRAGMA foreign_key_list(share_links)")
+      .all() as Array<{
+      table: string;
+      from: string;
+      to: string;
+      on_delete: string;
+    }>;
+    expect(foreignKeys).toHaveLength(1);
+    expect(foreignKeys[0]!.table).toBe("users");
+    expect(foreignKeys[0]!.from).toBe("ownerUserId");
+    expect(foreignKeys[0]!.to).toBe("id");
+    expect(foreignKeys[0]!.on_delete).toBe("CASCADE");
+
+    // The unique dedupe index spans owner, file and lifetime (FR-006).
+    const indexList = db
+      .query("PRAGMA index_list(share_links)")
+      .all() as Array<{ name: string; unique: number }>;
+    const uniqueIndex = indexList.find(
+      (index) => index.name === "uq_share_links_active_dedupe",
+    );
+    expect(uniqueIndex).toBeTruthy();
+    expect(uniqueIndex!.unique).toBe(1);
+    const uniqueColumns = db
+      .query("SELECT * FROM pragma_index_info(?)")
+      .all(uniqueIndex!.name) as Array<{ name: string }>;
+    expect(uniqueColumns.map((c) => c.name)).toEqual([
+      "ownerUserId",
+      "bucket",
+      "objectKey",
+      "expiresIn",
+    ]);
+
+    // Dedicated indexes for the owner cascade and the expiry sweep.
+    for (const name of [
+      "idx_share_links_owner_user_id",
+      "idx_share_links_expires_at",
+    ]) {
+      expect(indexList.some((index) => index.name === name)).toBe(true);
+    }
+
+    // The table is usable: a row inserts, an unknown lifetime violates
+    // the CHECK, a duplicate dedupe key is refused, and deleting the
+    // owner cascades.
+    db.run(
+      "INSERT INTO users (id, username, bucket, prefix, isAdmin, createdAt) VALUES ('u1', 'alice', 'jivedrive-prod', 'users/alice/', 0, '2026-08-01T00:00:00.000Z')",
+    );
+    db.run(
+      "INSERT INTO share_links (token, ownerUserId, bucket, objectKey, expiresIn, expiresAt, createdAt) VALUES ('tok00000001', 'u1', 'jivedrive-prod', 'users/alice/a.txt', '7d', '2026-09-08T00:00:00.000Z', '2026-09-01T00:00:00.000Z')",
+    );
+    expect(() =>
+      db.run(
+        "INSERT INTO share_links (token, ownerUserId, bucket, objectKey, expiresIn, expiresAt, createdAt) VALUES ('tok00000002', 'u1', 'jivedrive-prod', 'users/alice/a.txt', '5d', '2026-09-08T00:00:00.000Z', '2026-09-01T00:00:00.000Z')",
+      ),
+    ).toThrow();
+    expect(() =>
+      db.run(
+        "INSERT INTO share_links (token, ownerUserId, bucket, objectKey, expiresIn, expiresAt, createdAt) VALUES ('tok00000003', 'u1', 'jivedrive-prod', 'users/alice/a.txt', '7d', '2026-09-08T00:00:00.000Z', '2026-09-01T00:00:00.000Z')",
+      ),
+    ).toThrow();
+    db.run("DELETE FROM users WHERE id = 'u1'");
+    expect(db.query("SELECT COUNT(*) AS n FROM share_links").get()).toEqual({
+      n: 0,
+    });
   });
 
   it("is idempotent against the real migrations directory", () => {

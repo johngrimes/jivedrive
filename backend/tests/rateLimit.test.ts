@@ -36,6 +36,8 @@ const config: AppConfig = {
     authBurst: 10,
     filesPerMinute: 300,
     filesBurst: 100,
+    shareLinksPerMinute: 60,
+    shareLinksBurst: 30,
     trustProxy: false,
   },
   s3: {
@@ -156,6 +158,65 @@ describe("family separation (T033)", () => {
     expect((await app.request("/api/files/ping")).status).toBe(200);
     expect((await app.request("/api/files/ping")).status).toBe(200);
     expect(store.size()).toBe(2);
+  });
+});
+
+describe("share-links family (T006)", () => {
+  it("limits /s/* per identity and 429s with a Retry-After", async () => {
+    const clock = 0;
+    const app = new Hono<ServerEnv>();
+    app.use(
+      "/s/*",
+      createRateLimitMiddleware(config, "shareLinks", { now: () => clock }),
+    );
+    app.get("/s/ping", (c) => c.json({ ok: true }));
+
+    // The shareLinks burst (30) passes, then the endpoint is limited.
+    for (let i = 0; i < 30; i++) {
+      expect((await app.request("/s/ping")).status).toBe(200);
+    }
+    const denied = await app.request("/s/ping");
+    expect(denied.status).toBe(429);
+    // 60/min refills one token per second.
+    expect(denied.headers.get("retry-after")).toBe("1");
+  });
+
+  it("limits /s/* without touching the auth or files buckets", async () => {
+    const clock = 0;
+    const store = createRateLimitStore();
+    const app = new Hono<ServerEnv>();
+    // One shared store, keyed by family + identity, exactly as server.ts
+    // wires it.
+    app.use(
+      "/s/*",
+      createRateLimitMiddleware(config, "shareLinks", {
+        now: () => clock,
+        store,
+      }),
+    );
+    app.use(
+      "/auth/*",
+      createRateLimitMiddleware(config, "auth", { now: () => clock, store }),
+    );
+    app.use(
+      "/api/files/*",
+      createRateLimitMiddleware(config, "files", { now: () => clock, store }),
+    );
+    app.get("/s/ping", (c) => c.json({ ok: true }));
+    app.post("/auth/ping", (c) => c.json({ ok: true }));
+    app.get("/api/files/ping", (c) => c.json({ ok: true }));
+
+    // Exhaust the share-links family: anonymous link traffic must not
+    // consume the authenticated families' budgets (D6).
+    for (let i = 0; i < 30; i++) {
+      expect((await app.request("/s/ping")).status).toBe(200);
+    }
+    expect((await app.request("/s/ping")).status).toBe(429);
+    expect((await app.request("/auth/ping", { method: "POST" })).status).toBe(
+      200,
+    );
+    expect((await app.request("/api/files/ping")).status).toBe(200);
+    expect(store.size()).toBe(3);
   });
 });
 

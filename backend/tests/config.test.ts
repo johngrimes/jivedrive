@@ -26,6 +26,8 @@ describe("loadConfig", () => {
       authBurst: 10,
       filesPerMinute: 300,
       filesBurst: 100,
+      shareLinksPerMinute: 60,
+      shareLinksBurst: 30,
       trustProxy: false,
     });
     expect(config.s3.endpoint).toBe("https://s3.gra.io.cloud.ovh.net");
@@ -208,6 +210,8 @@ describe("loadConfig", () => {
       JIVEDRIVE_RATE_LIMIT_AUTH_BURST: "25",
       JIVEDRIVE_RATE_LIMIT_FILES_PER_MINUTE: "600",
       JIVEDRIVE_RATE_LIMIT_FILES_BURST: "200",
+      JIVEDRIVE_RATE_LIMIT_SHARE_LINKS_PER_MINUTE: "120",
+      JIVEDRIVE_RATE_LIMIT_SHARE_LINKS_BURST: "50",
       JIVEDRIVE_TRUST_PROXY: "true",
     });
 
@@ -216,6 +220,8 @@ describe("loadConfig", () => {
       authBurst: 25,
       filesPerMinute: 600,
       filesBurst: 200,
+      shareLinksPerMinute: 120,
+      shareLinksBurst: 50,
       trustProxy: true,
     });
   });
@@ -225,7 +231,8 @@ describe("loadConfig", () => {
       "JIVEDRIVE_RATE_LIMIT_AUTH_PER_MINUTE",
       "JIVEDRIVE_RATE_LIMIT_AUTH_BURST",
       "JIVEDRIVE_RATE_LIMIT_FILES_PER_MINUTE",
-      "JIVEDRIVE_RATE_LIMIT_FILES_BURST",
+      "JIVEDRIVE_RATE_LIMIT_SHARE_LINKS_PER_MINUTE",
+      "JIVEDRIVE_RATE_LIMIT_SHARE_LINKS_BURST",
     ]) {
       for (const value of ["abc", "0", "-5", "2.5"]) {
         expect(() => loadConfig({ ...minimalEnv, [key]: value })).toThrow(

@@ -10,7 +10,7 @@ import { loadConfig } from "./config";
 import type { AppConfig } from "./config";
 import { migrateFromDir, openDatabase } from "./db/migrate";
 import { bootstrapAdmin } from "./db/bootstrap";
-import { getUserById } from "./db/repository";
+import { getUserById, sweepExpiredShareLinks } from "./db/repository";
 import type { User } from "./db/repository";
 import {
   SESSION_COOKIE_NAME,
@@ -20,6 +20,7 @@ import {
 import { createChallengeStore } from "./auth/webauthn";
 import { authRoutes } from "./routes/auth";
 import { filesRoutes } from "./routes/files";
+import { publicShareRoutes } from "./routes/publicShare";
 import { adminRoutes } from "./routes/admin";
 import { sharesRoutes } from "./routes/shares";
 import { usersRoutes } from "./routes/users";
@@ -124,6 +125,16 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
       store: rateLimitStore,
     }),
   );
+  // The /s/* short share links are the one unauthenticated file-serving
+  // surface (FR-009): the shareLinks family limits anonymous link
+  // traffic per IP without touching the auth or files budgets.
+  app.use(
+    "/s/*",
+    createRateLimitMiddleware(deps.config, "shareLinks", {
+      now: deps.rateLimitNow,
+      store: rateLimitStore,
+    }),
+  );
   // The share and user-search endpoints are file-domain operations, so
   // they share the files family bucket (R7): one store, same limits.
   // Their route modules mount with the user stories (Phase 3); the
@@ -166,6 +177,7 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
       requireUser: requireUser(deps.db, deps.config.sessionIdleDays),
       listPageSize: deps.listPageSize,
       db: deps.db,
+      config: deps.config,
     }),
   );
 
@@ -187,6 +199,10 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
       requireUser: requireUser(deps.db, deps.config.sessionIdleDays),
     }),
   );
+
+  // Public share links (009-short-share-links): anonymous, unmounted
+  // under /s with the shareLinks rate-limit middleware registered above.
+  app.route("/s", publicShareRoutes({ db: deps.db, s3Client }));
 
   // Admin routes (user and invite management) mounted under /api/admin.
   // The requireUser middleware plus an admin check guards every route
@@ -326,6 +342,10 @@ export function main(): void {
   // FR-011: purge absolute- and idle-expired sessions in a sweep at
   // startup so dead rows do not accumulate between lazy purges.
   sweepExpiredSessions(db, undefined, config.sessionIdleDays);
+  // FR-007/FR-004 (009-short-share-links, D8): sweep expired share-link
+  // rows at startup, mirroring the session sweep — dead rows never
+  // serve, and a restarted replica starts with a clean link table.
+  sweepExpiredShareLinks(db);
   // One shared registry: the admin scan-status route reads what the
   // background scheduler and the reindex endpoint record.
   const scanStatus = createScanStatusRegistry();

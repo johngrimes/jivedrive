@@ -66,6 +66,10 @@ export interface AppConfig {
     filesPerMinute: number;
     /** Token-bucket burst capacity for /api/files/*. */
     filesBurst: number;
+    /** Maximum requests per minute for /s/* (anonymous share links). */
+    shareLinksPerMinute: number;
+    /** Token-bucket burst capacity for /s/*. */
+    shareLinksBurst: number;
     /**
      * When true, client identity comes from the leftmost X-Forwarded-For
      * value (deployments behind a reverse proxy); when false, the socket
@@ -198,6 +202,16 @@ export function loadConfig(
   const filesBurst = parseIntPositive(
     env.JIVEDRIVE_RATE_LIMIT_FILES_BURST ?? "100",
     "JIVEDRIVE_RATE_LIMIT_FILES_BURST",
+    errors,
+  );
+  const shareLinksPerMinute = parseIntPositive(
+    env.JIVEDRIVE_RATE_LIMIT_SHARE_LINKS_PER_MINUTE ?? "60",
+    "JIVEDRIVE_RATE_LIMIT_SHARE_LINKS_PER_MINUTE",
+    errors,
+  );
+  const shareLinksBurst = parseIntPositive(
+    env.JIVEDRIVE_RATE_LIMIT_SHARE_LINKS_BURST ?? "30",
+    "JIVEDRIVE_RATE_LIMIT_SHARE_LINKS_BURST",
     errors,
   );
 
@@ -339,6 +353,8 @@ export function loadConfig(
       authBurst: authBurst as number,
       filesPerMinute: filesPerMinute as number,
       filesBurst: filesBurst as number,
+      shareLinksPerMinute: shareLinksPerMinute as number,
+      shareLinksBurst: shareLinksBurst as number,
       trustProxy,
     },
     s3: {

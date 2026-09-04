@@ -1,3 +1,4 @@
+import { generateShareToken } from "../shareLinks";
 import { randomUUID } from "node:crypto";
 import type { Database } from "bun:sqlite";
 
@@ -77,6 +78,43 @@ export interface Share {
   folder: string;
   /** ISO 8601 timestamp. */
   createdAt: string;
+}
+
+/** The lifetime choices offered when generating a share link. */
+export type ShareLinkLifetime = "1h" | "24h" | "7d" | "30d";
+
+/** A stored short share link for exactly one file (009-short-share-links). */
+export interface ShareLink {
+  /** 12-char base62 public identifier used in `<origin>/s/<token>`. */
+  token: string;
+  /** User who created the link; deletion of the user cascades the row. */
+  ownerUserId: string;
+  /** Resolved storage bucket at creation (D10). */
+  bucket: string;
+  /** Resolved full object key at creation (D10). */
+  objectKey: string;
+  /** The chosen lifetime; part of the dedupe key (D4). */
+  expiresIn: ShareLinkLifetime;
+  /** ISO 8601; creation time + lifetime. */
+  expiresAt: string;
+  /** ISO 8601 timestamp. */
+  createdAt: string;
+}
+
+/** Input for {@link createShareLink}. */
+export interface CreateShareLinkInput {
+  ownerUserId: string;
+  bucket: string;
+  objectKey: string;
+  expiresIn: ShareLinkLifetime;
+  /** ISO 8601 timestamp; defaults to now. */
+  createdAt?: string;
+}
+
+/** Injection seams for {@link createShareLink} (tests). */
+export interface CreateShareLinkOptions {
+  /** Token source; defaults to the real generator. */
+  tokenFactory?: () => string;
 }
 
 /** Input for {@link createUser}. */
@@ -181,6 +219,20 @@ interface SessionRow {
   expiresAt: string;
   /** Null only for rows written before migration 003 backfilled them. */
   lastUsedAt: string | null;
+}
+
+interface ShareLinkRow {
+  token: string;
+  ownerUserId: string;
+  bucket: string;
+  objectKey: string;
+  expiresIn: ShareLinkLifetime;
+  expiresAt: string;
+  createdAt: string;
+}
+
+function mapShareLinkRow(row: ShareLinkRow): ShareLink {
+  return { ...row };
 }
 
 interface ShareRow {
@@ -809,6 +861,181 @@ export function getShareById(db: Database, id: string): Share | null {
  */
 export function deleteShare(db: Database, id: string): void {
   db.query("DELETE FROM shares WHERE id = ?").run(id);
+}
+
+/** Lifetime → expiry offset in seconds; 30d is a full 30 days (FR-004). */
+const SHARE_LINK_LIFETIME_SECONDS: Record<ShareLinkLifetime, number> = {
+  "1h": 3600,
+  "24h": 86400,
+  "7d": 604800,
+  "30d": 2592000,
+};
+
+/** Maximum create attempts before a colliding token draw gives up (D3). */
+const SHARE_LINK_CREATE_ATTEMPTS = 3;
+
+/**
+ * Find the active (unexpired) share link for a dedupe key (D4).
+ *
+ * The key is owner + resolved storage location + chosen lifetime; a row
+ * whose `expiresAt` has passed is a miss, exactly as in
+ * {@link getShareLinkByToken} (FR-005).
+ *
+ * @param db - database connection
+ * @param key - the dedupe-key fields of {@link CreateShareLinkInput}
+ * @param now - reference time, defaults to now
+ * @returns the active link, or null
+ */
+export function findActiveShareLink(
+  db: Database,
+  key: Pick<
+    CreateShareLinkInput,
+    "ownerUserId" | "bucket" | "objectKey" | "expiresIn"
+  >,
+  now: Date = new Date(),
+): ShareLink | null {
+  const row = db
+    .query(
+      "SELECT * FROM share_links WHERE ownerUserId = ? AND bucket = ? AND objectKey = ? AND expiresIn = ?",
+    )
+    .get(key.ownerUserId, key.bucket, key.objectKey, key.expiresIn) as
+    ShareLinkRow | undefined;
+  if (!row || row.expiresAt <= now.toISOString()) return null;
+  return mapShareLinkRow(row);
+}
+
+/**
+ * Create a share link, computing `expiresAt` from the chosen lifetime.
+ *
+ * The dedupe key (D4) makes this idempotent per owner + file + lifetime:
+ * the active row for the key is looked up first and returned unchanged
+ * (FR-006, with its remaining lifetime); only on a miss is a row
+ * inserted, replacing any expired row still holding the key.
+ *
+ * @param db - database connection
+ * @param input - link fields (createdAt defaults to now and also decides
+ *   whether an existing row is still active; the token is generated and
+ *   NOT caller-supplied, so the storage location can never be chosen by
+ *   the client)
+ * @param options - test injection (tokenFactory)
+ * @returns the stored link (pre-existing when still active)
+ * @throws {Error} when the token draw collides on every attempt (D3) or
+ *   when any other constraint is violated (unknown owner)
+ */
+export function createShareLink(
+  db: Database,
+  input: CreateShareLinkInput,
+  options: CreateShareLinkOptions = {},
+): ShareLink {
+  const lifetime = SHARE_LINK_LIFETIME_SECONDS[input.expiresIn];
+  if (lifetime === undefined) {
+    throw new Error(`Unknown share-link lifetime: "${input.expiresIn}"`);
+  }
+  const createdAt = input.createdAt ?? new Date().toISOString();
+  // FR-006 (D4): insert only on a miss. Activity is judged at generation
+  // time (createdAt), consistent with the row's own expiresAt clock.
+  const active = findActiveShareLink(db, input, new Date(createdAt));
+  if (active) return active;
+  const expiresAt = new Date(
+    Date.parse(createdAt) + lifetime * 1000,
+  ).toISOString();
+  // A miss means any row still holding the dedupe key is expired; it is
+  // deleted so the unique index accepts the fresh draw. Requests run on
+  // a single event loop over one synchronous SQLite connection, so no
+  // concurrent creator can slip in between the lookup and this delete.
+  db.query(
+    "DELETE FROM share_links WHERE ownerUserId = ? AND bucket = ? AND objectKey = ? AND expiresIn = ?",
+  ).run(input.ownerUserId, input.bucket, input.objectKey, input.expiresIn);
+  const draw = options.tokenFactory ?? generateShareToken;
+  let collision: unknown;
+  for (let attempt = 0; attempt < SHARE_LINK_CREATE_ATTEMPTS; attempt++) {
+    const token = draw();
+    try {
+      db.query(
+        "INSERT INTO share_links (token, ownerUserId, bucket, objectKey, expiresIn, expiresAt, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        token,
+        input.ownerUserId,
+        input.bucket,
+        input.objectKey,
+        input.expiresIn,
+        expiresAt,
+        createdAt,
+      );
+      return {
+        token,
+        ownerUserId: input.ownerUserId,
+        bucket: input.bucket,
+        objectKey: input.objectKey,
+        expiresIn: input.expiresIn,
+        expiresAt,
+        createdAt,
+      };
+    } catch (error) {
+      // Only a token primary-key collision is redrawn (D3); anything
+      // else (an unknown owner, say) propagates.
+      if (
+        !(error instanceof Error) ||
+        !error.message.includes("share_links.token")
+      ) {
+        throw error;
+      }
+      collision = error;
+    }
+  }
+  throw collision;
+}
+
+/**
+ * Read one unexpired share link by its token.
+ *
+ * An expired row is treated as a miss (identical to an unknown token,
+ * FR-005); it is left in place for the sweep or the route's lazy delete.
+ *
+ * @param db - database connection
+ * @param token - the 12-char token from the public URL
+ * @param now - reference time, defaults to now
+ * @returns the link, or null when unknown or expired
+ */
+export function getShareLinkByToken(
+  db: Database,
+  token: string,
+  now: Date = new Date(),
+): ShareLink | null {
+  const row = db
+    .query("SELECT * FROM share_links WHERE token = ?")
+    .get(token) as ShareLinkRow | undefined;
+  if (!row) return null;
+  if (row.expiresAt <= now.toISOString()) return null;
+  return mapShareLinkRow(row);
+}
+
+/**
+ * Delete one share link by token (lazy expiry sweep on lookup, D8).
+ *
+ * @param db - database connection
+ * @param token - the link's token
+ */
+export function deleteShareLink(db: Database, token: string): void {
+  db.query("DELETE FROM share_links WHERE token = ?").run(token);
+}
+
+/**
+ * Delete every share link whose `expiresAt` has passed (startup sweep,
+ * D8). Timestamps are ISO 8601 UTC so string comparison is correct.
+ *
+ * @param db - database connection
+ * @param now - reference time, defaults to now
+ * @returns the number of deleted rows
+ */
+export function sweepExpiredShareLinks(
+  db: Database,
+  now: Date = new Date(),
+): number {
+  const result = db
+    .query("DELETE FROM share_links WHERE expiresAt <= ?")
+    .run(now.toISOString());
+  return result.changes;
 }
 
 /** Identity-only view of a user, for the share recipient picker (FR-006). */

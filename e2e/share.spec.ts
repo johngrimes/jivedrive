@@ -1,27 +1,37 @@
 import { expect, test } from "@playwright/test";
-import type { Browser, BrowserContext, Page } from "@playwright/test";
-import { expectNoHorizontalOverflow, expectSignedInAs } from "./helpers";
+import type { Browser, BrowserContext, Download, Page } from "@playwright/test";
+import {
+  expectNoHorizontalOverflow,
+  expectSignedInAs,
+  readStream,
+} from "./helpers";
+
+/** The origin the e2e server serves; overridable for scratch-port runs. */
+const ORIGIN = process.env.E2E_ORIGIN ?? "http://localhost:5173";
+
+/** The share-link shape the modal must display (FR-001): origin + /s/ + token. */
+const SHORT_LINK_PATTERN = new RegExp(
+  `^${ORIGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/s/[A-Za-z0-9]{12}$`,
+);
 
 /**
  * Start signed in with the pre-seeded session (no WebAuthn ceremony; the
  * sign-in flows are covered by auth.spec) and open the space root.
- *
- * @param page - the page
- * @param context - the browser context
  */
 async function startSignedIn(
   page: Page,
   context: BrowserContext,
+  cookie = "browse-session",
 ): Promise<void> {
   await context.addCookies([
     {
       name: "jivedrive_session",
-      value: "browse-session",
-      url: "http://localhost:5173",
+      value: cookie,
+      url: ORIGIN,
     },
   ]);
   await page.goto("/files");
-  await expectSignedInAs(page, "alice");
+  await expectSignedInAs(page, cookie === "browse-session" ? "alice" : "bob");
 }
 
 /**
@@ -39,11 +49,31 @@ async function openShare(page: Page, rowText: string) {
     .click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toContainText(rowText);
-  await expect(dialog.getByLabel("Share link")).toHaveValue(/X-Amz-Signature/);
+  await expect(dialog.getByLabel("Share link")).toHaveValue(SHORT_LINK_PATTERN);
   return dialog;
 }
 
-test("generates a share link with the default expiry, copies it, and reflects expiry changes", async ({
+/**
+ * Open a short link in a brand-new browser context (no cookies, no
+ * sign-in) and return the resulting download. The caller must invoke
+ * `close` after reading the download: the stream dies with its context.
+ */
+async function anonymousDownload(
+  browser: Browser,
+  link: string,
+): Promise<{ download: Download; close: () => Promise<void> }> {
+  const anon = await browser.newContext();
+  const anonPage = await anon.newPage();
+  const downloadPromise = anonPage.waitForEvent("download");
+  // The navigation itself turns into a download (Content-Disposition:
+  // attachment), which Playwright's goto reports as an error; the
+  // download event is the real outcome.
+  await anonPage.goto(link).catch(() => undefined);
+  const download = await downloadPromise;
+  return { download, close: () => anon.close() };
+}
+
+test("the modal shows a short app link with nothing about storage in it", async ({
   page,
   context,
 }) => {
@@ -52,56 +82,29 @@ test("generates a share link with the default expiry, copies it, and reflects ex
   await page.getByRole("button", { name: "Load more" }).click();
   const dialog = await openShare(page, "readme.md");
 
-  // Default expiry is 7 days: the presigned URL carries X-Amz-Expires
-  // = 604800 and points at the storage provider, not the app.
-  await expect(dialog.getByLabel("Share link")).toHaveValue(
-    /X-Amz-Expires=604800/,
-  );
-  await expect(dialog.getByLabel("Share link")).toHaveValue(
-    /localhost:5299\/jivedrive-prod\/users\/alice\/readme\.md/,
-  );
-  // Fire-and-forget note per the wireframe.
-  await expect(dialog.getByText(/Not stored by JiveDrive/)).toBeVisible();
+  const link = await dialog.getByLabel("Share link").inputValue();
+  expect(link).toMatch(SHORT_LINK_PATTERN);
+  // FR-003: no storage provider host, bucket, prefix or object key.
+  expect(link).not.toContain("X-Amz");
+  expect(link).not.toContain("5299");
+  expect(link).not.toContain("jivedrive-prod");
+  expect(link).not.toContain("users/alice");
+  expect(link).not.toContain("readme");
 
-  // Selecting a different expiry regenerates the link (US4 scenario 2).
-  await dialog.getByLabel("Link expires in").selectOption({ label: "1 hour" });
-  await expect(dialog.getByLabel("Share link")).toHaveValue(
-    /X-Amz-Expires=3600/,
-  );
-
-  await dialog
-    .getByLabel("Link expires in")
-    .selectOption({ label: "24 hours" });
-  await expect(dialog.getByLabel("Share link")).toHaveValue(
-    /X-Amz-Expires=86400/,
-  );
-
-  await dialog
-    .getByLabel("Link expires in")
-    .selectOption({ label: "30 days (7-day maximum)" });
-  await expect(dialog.getByLabel("Share link")).toHaveValue(
-    /X-Amz-Expires=604800/,
-  );
-  // The dialog states the real expiry rather than the nominal 30 days
-  // (the SigV4 presigned-TTL cap is 7 days).
+  // The dialog shows when the link will expire.
   await expect(dialog.getByText(/Link expires \d/)).toBeVisible();
 
-  await dialog
-    .getByLabel("Link expires in")
-    .selectOption({ label: "7 days (default)" });
-  await expect(dialog.getByLabel("Share link")).toHaveValue(
-    /X-Amz-Expires=604800/,
-  );
-
-  // Copy: the clipboard receives exactly the generated link.
+  // Copy: the clipboard receives exactly the displayed link (FR-001).
   await context.grantPermissions(["clipboard-read", "clipboard-write"], {
-    origin: "http://localhost:5173",
+    origin: ORIGIN,
   });
-  const link = await dialog.getByLabel("Share link").inputValue();
   await dialog.getByRole("button", { name: "Copy link" }).click();
   await expect(dialog.getByRole("button", { name: "Copied" })).toBeVisible();
-  const copied = await page.evaluate(() => navigator.clipboard.readText());
-  expect(copied).toBe(link);
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(link);
+
+  // A different lifetime regenerates the link — still a short one.
+  await dialog.getByLabel("Link expires in").selectOption({ label: "1 hour" });
+  await expect(dialog.getByLabel("Share link")).toHaveValue(SHORT_LINK_PATTERN);
 
   // Done closes the modal.
   await dialog.getByRole("button", { name: "Done" }).click();
@@ -114,31 +117,7 @@ test("generates a share link with the default expiry, copies it, and reflects ex
   await expectNoHorizontalOverflow(page);
 });
 
-test("the share URL response carries the chosen expiry and a matching expiresAt", async ({
-  page,
-  context,
-}) => {
-  await startSignedIn(page, context);
-  const dialog = await openShare(page, "data.csv");
-
-  const responsePromise = page.waitForResponse(
-    (res) =>
-      res.url().includes("/api/files/share-url") &&
-      res.request().postDataJSON()?.expiresIn === "1h",
-  );
-  await dialog.getByLabel("Link expires in").selectOption({ label: "1 hour" });
-  const response = await responsePromise;
-  expect(response.status()).toBe(200);
-  const body = (await response.json()) as { url: string; expiresAt: string };
-  expect(body.url).toContain("X-Amz-Expires=3600");
-  const expiresAt = new Date(body.expiresAt).getTime();
-  expect(Math.abs(expiresAt - (Date.now() + 3600 * 1000))).toBeLessThan(10_000);
-  await expect(dialog.getByLabel("Share link")).toHaveValue(
-    /X-Amz-Expires=3600/,
-  );
-});
-
-test("the generated link downloads the file in a fresh context without a session", async ({
+test("an anonymous visitor downloads data.csv byte-identical with its name", async ({
   page,
   context,
   browser,
@@ -150,18 +129,134 @@ test("the generated link downloads the file in a fresh context without a session
   await startSignedIn(page, context);
   const dialog = await openShare(page, "data.csv");
   const link = await dialog.getByLabel("Share link").inputValue();
-  expect(link).toContain("localhost:5299");
-  expect(link).toContain("X-Amz-Signature");
 
-  // A brand-new context carries no cookies: opening the presigned URL
-  // still downloads the file, mirroring S3's public presigned behaviour
-  // (FR-011, US4 scenario 3). The mock download server has no auth.
+  // US1 scenario 2: a clean context carries no cookies; opening the link
+  // downloads the file with its original filename (FR-002).
+  const { download, close } = await anonymousDownload(browser, link);
+  expect(download.suggestedFilename()).toBe("data.csv");
+  const content = await readStream(await download.createReadStream());
+  await close();
+  expect(content.toString()).toBe("a,b,c\n1,2,3");
+});
+
+test("an anonymous visitor downloads a file whose name has spaces and special characters", async ({
+  page,
+  context,
+  browser,
+}: {
+  page: Page;
+  context: BrowserContext;
+  browser: Browser;
+}) => {
+  await startSignedIn(page, context);
+  await page.getByRole("link", { name: "docs" }).click();
+  const dialog = await openShare(page, "my file #1?.txt");
+  const link = await dialog.getByLabel("Share link").inputValue();
+  // The short link itself carries no trace of the awkward name (FR-003).
+  expect(link).toMatch(SHORT_LINK_PATTERN);
+
+  const { download, close } = await anonymousDownload(browser, link);
+  // The app sends the original name verbatim in Content-Disposition;
+  // the browser itself replaces the one character it cannot use in a
+  // filename ("?") with "_", which no server can prevent.
+  expect(download.suggestedFilename()).toBe("my file #1_.txt");
+  const content = await readStream(await download.createReadStream());
+  await close();
+  expect(content.toString()).toBe("special file content");
+});
+
+test("a link from a shared mount downloads for an anonymous visitor", async ({
+  page,
+  context,
+  browser,
+}: {
+  page: Page;
+  context: BrowserContext;
+  browser: Browser;
+}) => {
+  // Idempotent setup: alice shares `projects` with bob via the API
+  // (201 first time, 409 when a previous run created it).
+  await startSignedIn(page, context);
+  const shareRes = await page.request.post("/api/shares", {
+    data: { folder: "projects/", recipientUsername: "bob" },
+  });
+  expect([201, 409]).toContain(shareRes.status());
+
+  // Bob opens the mount and shares plan.txt from it (US1 scenario 3).
+  await context.clearCookies();
+  await startSignedIn(page, context, "bob-session");
+  await page
+    .locator("li.list-row", { hasText: "Shared by alice" })
+    .getByRole("link")
+    .click();
+  const dialog = await openShare(page, "plan.txt");
+  const link = await dialog.getByLabel("Share link").inputValue();
+
+  const { download, close } = await anonymousDownload(browser, link);
+  expect(download.suggestedFilename()).toBe("plan.txt");
+  const content = await readStream(await download.createReadStream());
+  await close();
+  expect(content.toString()).toBe("project plan");
+});
+
+test("out-of-scope and unknown-space share requests are refused with no link", async ({
+  page,
+  context,
+}) => {
+  // US1 scenario 4: the existing error codes, end to end.
+  await startSignedIn(page, context);
+
+  const outOfScope = await page.request.post("/api/files/share-url", {
+    data: { key: "users/bob/a.txt" },
+  });
+  expect(outOfScope.status()).toBe(400);
+  expect(await outOfScope.json()).toMatchObject({ code: "out_of_scope" });
+
+  const unknownSpace = await page.request.post("/api/files/share-url", {
+    data: { space: "shared:no-such-share", key: "a.txt" },
+  });
+  expect(unknownSpace.status()).toBe(404);
+});
+
+test("an expired link shows the friendly dead-link page at every width", async ({
+  browser,
+}: {
+  browser: Browser;
+}) => {
+  // US2 scenarios 2-3: an anonymous visitor opening the seeded expired
+  // link sees the styled expiry page — no JSON error, no SPA crash —
+  // usable at mobile, tablet and desktop widths (constitution VI).
   const anon = await browser.newContext();
-  try {
-    const res = await anon.request.get(link);
-    expect(res.status()).toBe(200);
-    expect(await res.text()).toBe("a,b,c\n1,2,3");
-  } finally {
-    await anon.close();
+  const page = await anon.newPage();
+  for (const viewport of [
+    { width: 375, height: 667 },
+    { width: 768, height: 1024 },
+    { width: 1280, height: 800 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const res = await page.goto("/s/exp1redshare");
+    expect(res?.status()).toBe(410);
+    await expect(
+      page.getByRole("heading", { name: /expired or does not exist/i }),
+    ).toBeVisible();
+    await expectNoHorizontalOverflow(page);
   }
+  await anon.close();
+});
+
+test("an unknown token shows the same dead-link page as an expired one", async ({
+  browser,
+}: {
+  browser: Browser;
+}) => {
+  // FR-005: a token that was never issued is indistinguishable from an
+  // expired one — the same 410 status and the same wording.
+  const anon = await browser.newContext();
+  const page = await anon.newPage();
+  const res = await page.goto("/s/zzzzzzzzzzz9");
+  expect(res?.status()).toBe(410);
+  await expect(
+    page.getByRole("heading", { name: /expired or does not exist/i }),
+  ).toBeVisible();
+  await anon.close();
 });

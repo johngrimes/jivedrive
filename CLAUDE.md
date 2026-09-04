@@ -36,7 +36,7 @@ Before every push, the full local quality gate MUST pass against the exact code 
 
 - Authentication is WebAuthn passkeys only. Password credentials are never accepted.
 - First-passkey enrollment is token-gated (an invite token or the JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN); a username alone never grants enrollment.
-- Anonymous share links are fire-and-forget: generated, displayed, and never stored, listed, or revoked before expiry. User-to-user folder grants (shares) are the opposite: stored in the database, listed back to the owner, and revocable at any time.
+- Anonymous share links are generated, displayed, and stored only until expiry: never listed, never revoked early. User-to-user folder grants (shares) are the opposite: stored in the database, listed back to the owner, and revocable at any time.
 - Sessions are opaque tokens in httpOnly, Secure, SameSite=Lax cookies. Secrets come from environment configuration, never from the repository.
 
 ### Deployment

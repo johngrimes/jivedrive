@@ -180,6 +180,8 @@ defaults, except where the chart defaults to the production deployment
 | `JIVEDRIVE_RATE_LIMIT_AUTH_BURST` | Token-bucket burst capacity for `/auth/*` | `10` |
 | `JIVEDRIVE_RATE_LIMIT_FILES_PER_MINUTE` | Token-bucket refill per minute for `/api/files/*` | `300` |
 | `JIVEDRIVE_RATE_LIMIT_FILES_BURST` | Token-bucket burst capacity for `/api/files/*` | `100` |
+| `JIVEDRIVE_RATE_LIMIT_SHARE_LINKS_PER_MINUTE` | Token-bucket refill per minute for `/s/<token>` anonymous share links | `60` |
+| `JIVEDRIVE_RATE_LIMIT_SHARE_LINKS_BURST` | Token-bucket burst capacity for `/s/<token>` anonymous share links | `30` |
 | `JIVEDRIVE_TRUST_PROXY` | Trust the TLS terminator's `X-Forwarded-For` header for rate-limit client identity (the backend itself defaults to `false`) | `true` (chart) |
 | `JIVEDRIVE_S3_ENDPOINT` | OVHcloud Object Storage S3 endpoint URL | `https://s3.sgp.io.cloud.ovh.net` |
 | `JIVEDRIVE_S3_REGION` | OVHcloud region | `sgp` |

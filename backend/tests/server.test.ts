@@ -42,6 +42,8 @@ const config: AppConfig = {
   searchScanIntervalSeconds: 3600,
   searchIndexMaxBytes: 10485760,
   rateLimit: {
+    shareLinksPerMinute: 60,
+    shareLinksBurst: 30,
     authPerMinute: 20,
     authBurst: 10,
     filesPerMinute: 300,

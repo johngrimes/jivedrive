@@ -2,8 +2,9 @@
 # Verify the share link flow (User Story 4) against a running server with a
 # mocked S3 layer. Boots the e2e server on port 5174 with a file-backed
 # SQLite database and in-memory mock object store, then exercises
-# POST /api/files/share-url with curl, checks that nothing is persisted,
-# and downloads the file anonymously via a generated link.
+# POST /api/files/share-url with curl, checks that short links are stored
+# until expiry (the share_links table grows), and downloads the file
+# anonymously via a generated short link.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -39,7 +40,7 @@ counts() {
   DB_FILE="$DB_FILE" bun -e '
     import { Database } from "bun:sqlite";
     const db = new Database(process.env.DB_FILE, { readonly: true });
-    const tables = ["users", "passkey_credentials", "invites", "sessions"];
+    const tables = ["users", "passkey_credentials", "invites", "sessions", "share_links"];
     console.log(
       tables
         .map((t) => db.query(`SELECT COUNT(*) AS n FROM ${t}`).get().n)
@@ -68,7 +69,7 @@ check() {
 }
 
 BEFORE=$(counts)
-echo "DB row counts before (users,credentials,invites,sessions): $BEFORE"
+echo "DB row counts before (users,credentials,invites,sessions,share_links): $BEFORE"
 
 check "default 7-day expiry" 200 POST /api/files/share-url \
   '{"key":"users/alice/readme.md"}' signed
@@ -87,21 +88,28 @@ check "unsigned request refused" 401 POST /api/files/share-url \
   '{"key":"users/alice/readme.md"}'
 
 AFTER=$(counts)
-echo "DB row counts after  (users,credentials,invites,sessions): $AFTER"
-if [[ "$BEFORE" == "$AFTER" ]]; then
-  echo "PASS nothing persisted: the share route never writes to the database"
+echo "DB row counts after  (users,credentials,invites,sessions,share_links): $AFTER"
+if [[ "${BEFORE%,*}" == "${AFTER%,*}" ]]; then
+  echo "PASS other tables unchanged by the share route"
 else
-  echo "FAIL the share route changed the database: $BEFORE -> $AFTER"
+  echo "FAIL the share route changed other tables: $BEFORE -> $AFTER"
   FAILED=1
 fi
-
-# URL shape checks: default carries X-Amz-Expires=604800 and an expiresAt.
+SHARE_ROWS=${AFTER##*,}
+if [[ "$SHARE_ROWS" -gt 0 ]]; then
+  echo "PASS share links are stored: $SHARE_ROWS share_links rows"
+else
+  echo "FAIL no share_links rows after generation"
+  FAILED=1
+fi
+# URL shape checks: a short app link (<origin>/s/<12-char token>) plus an
+# expiresAt for the default lifetime.
 DEFAULT=$(curl -s -X POST "$BASE_URL/api/files/share-url" -b "$SESSION" \
   -H "Content-Type: application/json" -d '{"key":"users/alice/readme.md"}')
-if grep -q 'X-Amz-Expires=604800' <<<"$DEFAULT"; then
-  echo "PASS default link carries the 7-day expiry (X-Amz-Expires=604800)"
+if grep -Eq '"url":"[^"]*/s/[A-Za-z0-9]{12}"' <<<"$DEFAULT"; then
+  echo "PASS default link is a short app link with a 12-character token"
 else
-  echo "FAIL default link expiry missing: $DEFAULT"
+  echo "FAIL default link is not a short app link: $DEFAULT"
   FAILED=1
 fi
 if grep -q '"expiresAt":"' <<<"$DEFAULT"; then
@@ -111,24 +119,23 @@ else
   FAILED=1
 fi
 
-# 1-hour override carries X-Amz-Expires=3600.
+# The 1-hour override yields its own short link (no storage details in it).
 HOUR=$(curl -s -X POST "$BASE_URL/api/files/share-url" -b "$SESSION" \
   -H "Content-Type: application/json" \
   -d '{"key":"users/alice/readme.md","expiresIn":"1h"}')
-if grep -q 'X-Amz-Expires=3600' <<<"$HOUR"; then
-  echo "PASS 1-hour link carries X-Amz-Expires=3600"
+if grep -Eq '"url":"[^"]*/s/[A-Za-z0-9]{12}"' <<<"$HOUR"; then
+  echo "PASS 1-hour link is a short app link"
 else
-  echo "FAIL 1-hour link expiry missing: $HOUR"
+  echo "FAIL 1-hour link is not a short app link: $HOUR"
   FAILED=1
 fi
-
-# The generated link downloads the file with no JiveDrive session: the
-# mock S3 server has no auth, mirroring S3's public presigned behaviour.
+# The generated link downloads the file with no JiveDrive session: GET
+# /s/:token 302-redirects to a presigned mock-S3 URL, which curl follows.
 URL=$(curl -s -X POST "$BASE_URL/api/files/share-url" -b "$SESSION" \
   -H "Content-Type: application/json" \
   -d '{"key":"users/alice/data.csv","expiresIn":"1h"}')
 LINK=$(sed -n 's/.*"url":"\([^"]*\)".*/\1/p' <<<"$URL")
-BODY=$(curl -s "$LINK")
+BODY=$(curl -sL "$LINK")
 if [[ "$BODY" == $'a,b,c\n1,2,3' ]]; then
   echo "PASS anonymous GET of the link downloads the file bytes"
 else
