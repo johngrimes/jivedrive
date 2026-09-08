@@ -31,7 +31,14 @@ async function startSignedIn(
     },
   ]);
   await page.goto("/files");
-  await expectSignedInAs(page, cookie === "browse-session" ? "alice" : "bob");
+  await expectSignedInAs(
+    page,
+    {
+      "browse-session": "alice",
+      "bob-session": "bob",
+      "erin-session": "erin",
+    }[cookie] ?? "alice",
+  );
 }
 
 /**
@@ -174,29 +181,33 @@ test("a link from a shared mount downloads for an anonymous visitor", async ({
   context: BrowserContext;
   browser: Browser;
 }) => {
-  // Idempotent setup: alice shares `projects` with bob via the API
-  // (201 first time, 409 when a previous run created it).
+  // Idempotent setup: alice shares `docs` with erin via the API
+  // (201 first time, 409 when a previous run created it). erin is a
+  // dedicated seeded user no spec removes; bob is not usable here
+  // because share-folder.spec's US5 deletes him and the suite runs
+  // fullyParallel. docs (not projects) so this share never interferes
+  // with share-folder.spec's recipient assertions about projects.
   await startSignedIn(page, context);
   const shareRes = await page.request.post("/api/shares", {
-    data: { folder: "projects/", recipientUsername: "bob" },
+    data: { folder: "docs/", recipientUsername: "erin" },
   });
   expect([201, 409]).toContain(shareRes.status());
 
-  // Bob opens the mount and shares plan.txt from it (US1 scenario 3).
+  // Erin opens the mount and shares notes.txt from it (US1 scenario 3).
   await context.clearCookies();
-  await startSignedIn(page, context, "bob-session");
+  await startSignedIn(page, context, "erin-session");
   await page
     .locator("li.list-row", { hasText: "Shared by alice" })
     .getByRole("link")
     .click();
-  const dialog = await openShare(page, "plan.txt");
+  const dialog = await openShare(page, "notes.txt");
   const link = await dialog.getByLabel("Share link").inputValue();
 
   const { download, close } = await anonymousDownload(browser, link);
-  expect(download.suggestedFilename()).toBe("plan.txt");
+  expect(download.suggestedFilename()).toBe("notes.txt");
   const content = await readStream(await download.createReadStream());
   await close();
-  expect(content.toString()).toBe("project plan");
+  expect(content.toString()).toBe("hello from notes");
 });
 
 test("out-of-scope and unknown-space share requests are refused with no link", async ({

@@ -277,6 +277,18 @@ const bob = createUser(db, {
 });
 createSession(db, bob.id, { token: "bob-session" });
 
+// A third non-admin user dedicated to the short-share-link spec
+// (share.spec.ts): she receives alice's `projects` share and creates a
+// link from inside that shared mount (US1 scenario 3). No spec removes
+// her, and the suite runs fullyParallel, so she must not be anyone's
+// removal target (unlike bob, whom share-folder.spec US5 deletes).
+const erin = createUser(db, {
+  username: "erin",
+  bucket: "jivedrive-prod",
+  prefix: "users/erin/",
+});
+createSession(db, erin.id, { token: "erin-session" });
+
 // Bob's space: a root file and a same-named `projects` folder of his own,
 // so the US2 mount ("projects", shared by alice) renders alongside a
 // folder bob already owns (US2 collision scenario).

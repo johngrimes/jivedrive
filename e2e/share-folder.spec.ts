@@ -211,7 +211,7 @@ test("US3: bob uploads, overwrites and deletes a file in the projects folder sha
   // context's cookie jar, which switches to bob below, so alice-side
   // assertions go through their own cookie-carrying client instead.
   const aliceApi = await playwright.request.newContext({
-    baseURL: "http://localhost:5173",
+    baseURL: process.env.E2E_ORIGIN ?? "http://localhost:5173",
     extraHTTPHeaders: { cookie: "jivedrive_session=browse-session" },
   });
   try {
@@ -350,7 +350,7 @@ test("US4: alice revokes bob's share; the mount disappears and every request 404
   // context's cookie jar, which switches to bob below, so alice-side
   // assertions go through their own cookie-carrying client instead.
   const aliceApi = await playwright.request.newContext({
-    baseURL: "http://localhost:5173",
+    baseURL: process.env.E2E_ORIGIN ?? "http://localhost:5173",
     extraHTTPHeaders: { cookie: "jivedrive_session=browse-session" },
   });
   try {
@@ -610,15 +610,15 @@ test("US5: admin deletes bob; alice's mount, share dialog and /api/shares show n
   // page's cookie-jar switches (pattern from US3/US4). Alice and bob
   // carry their own sessions; the admin uses the seeded admin-session.
   const aliceApi = await playwright.request.newContext({
-    baseURL: "http://localhost:5173",
+    baseURL: process.env.E2E_ORIGIN ?? "http://localhost:5173",
     extraHTTPHeaders: { cookie: "jivedrive_session=browse-session" },
   });
   const bobApi = await playwright.request.newContext({
-    baseURL: "http://localhost:5173",
+    baseURL: process.env.E2E_ORIGIN ?? "http://localhost:5173",
     extraHTTPHeaders: { cookie: "jivedrive_session=bob-session" },
   });
   const adminApi = await playwright.request.newContext({
-    baseURL: "http://localhost:5173",
+    baseURL: process.env.E2E_ORIGIN ?? "http://localhost:5173",
     extraHTTPHeaders: { cookie: "jivedrive_session=admin-session" },
   });
   try {
