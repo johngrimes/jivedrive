@@ -37,7 +37,7 @@ export const BUCKET_IDLE_MS = 10 * 60 * 1000;
 export const MAX_BUCKETS = 10000;
 
 /** A route family with its own rate limit. */
-export type RateLimitFamily = "auth" | "files";
+export type RateLimitFamily = "auth" | "files" | "shareLinks";
 
 /** Per-family rate limit values. */
 export interface RateLimitLimits {
@@ -228,10 +228,15 @@ export function createRateLimitMiddleware(
           perMinute: config.rateLimit.authPerMinute,
           burst: config.rateLimit.authBurst,
         }
-      : {
-          perMinute: config.rateLimit.filesPerMinute,
-          burst: config.rateLimit.filesBurst,
-        };
+      : family === "shareLinks"
+        ? {
+            perMinute: config.rateLimit.shareLinksPerMinute,
+            burst: config.rateLimit.shareLinksBurst,
+          }
+        : {
+            perMinute: config.rateLimit.filesPerMinute,
+            burst: config.rateLimit.filesBurst,
+          };
 
   return async (c, next) => {
     const identity = clientIdentity(c, config.rateLimit.trustProxy);

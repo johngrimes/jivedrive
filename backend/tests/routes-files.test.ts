@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import type { S3Client } from "@aws-sdk/client-s3";
 import { fileURLToPath } from "node:url";
 import { migrateFromDir, openDatabase } from "../src/db/migrate";
-import { createUser } from "../src/db/repository";
+import { createUser, getShareLinkByToken } from "../src/db/repository";
 import { createSession } from "../src/auth/sessions";
 import { createApp } from "../src/server";
 import { createS3Client } from "../src/s3/client";
@@ -11,6 +11,7 @@ import type { AppConfig } from "../src/config";
 import type { Hono } from "hono";
 import type { ServerEnv } from "../src/server";
 import { createShare, deleteShare } from "../src/db/repository";
+import type { ShareLink, User } from "../src/db/repository";
 
 const migrationsDir = fileURLToPath(new URL("../migrations", import.meta.url));
 
@@ -35,6 +36,8 @@ const config: AppConfig = {
     authBurst: 10,
     filesPerMinute: 300,
     filesBurst: 100,
+    shareLinksPerMinute: 60,
+    shareLinksBurst: 30,
     trustProxy: false,
   },
   s3: {
@@ -91,8 +94,8 @@ interface CallRecord {
 
 /**
  * Row counts per table. Deleting an object in storage must never touch
- * the database (data-model.md deletion rules: share links are never
- * stored and object deletion leaves all DB records alone).
+ * the database (data-model.md deletion rules: object deletion leaves
+ * all DB records alone).
  *
  * @param db - database connection
  * @returns table name to row count
@@ -633,23 +636,52 @@ describe("POST /api/files/upload-url", () => {
 });
 
 describe("POST /api/files/share-url", () => {
-  /** POST a share-url request with the alice session cookie. */
+  /** POST a share-url request with a signed-in session cookie. */
   async function postShareUrl(
-    app: ReturnType<typeof createApp>,
+    app: TestApp,
     body: unknown,
+    cookie = aliceCookie,
   ): Promise<Response> {
     return app.request("/api/files/share-url", {
       method: "POST",
       headers: {
-        cookie: aliceCookie,
+        cookie,
         "Content-Type": "application/json",
       },
       body: typeof body === "string" ? body : JSON.stringify(body),
     });
   }
 
-  it("returns a presigned GET URL with the default 7-day expiry", async () => {
-    const { app, calls } = createFilesApp();
+  /** Number of share_links rows currently stored. */
+  function shareRowCount(db: Database): number {
+    return (
+      db.query("SELECT COUNT(*) AS n FROM share_links").get() as { n: number }
+    ).n;
+  }
+
+  /**
+   * The share_links row for a token. Fails the test when the row is
+   * missing rather than returning undefined.
+   */
+  function shareRow(db: Database, token: string): ShareLink {
+    const row = db
+      .query("SELECT * FROM share_links WHERE token = ?")
+      .get(token) as ShareLink | undefined;
+    if (!row) throw new Error(`No share_links row for token "${token}"`);
+    return row;
+  }
+
+  /** The user id for a seeded username. */
+  function userId(db: Database, username: string): string {
+    const user = db
+      .query("SELECT * FROM users WHERE username = ?")
+      .get(username) as User | undefined;
+    if (!user) throw new Error(`No user "${username}" seeded`);
+    return user.id;
+  }
+
+  it("returns a short link and stores a row with the resolved location", async () => {
+    const { app, db, calls } = createFilesApp();
 
     const before = Date.now();
     const res = await postShareUrl(app, { key: "users/alice/readme.md" });
@@ -657,34 +689,44 @@ describe("POST /api/files/share-url", () => {
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as { url: string; expiresAt: string };
-    expect(body.url).toContain(
-      "https://s3.gra.io.cloud.ovh.net/jivedrive-prod/users/alice/readme.md",
-    );
-    // Default expiry: 7 days = 604800 seconds, visible in the URL.
-    expect(body.url).toContain("X-Amz-Expires=604800");
-    expect(body.url).toContain("X-Amz-Signature");
-    // expiresAt is now + 7 days.
+    // FR-001: the link is the app origin plus /s/ and a 12-char token.
+    expect(body.url).toMatch(/^http:\/\/localhost:5173\/s\/[A-Za-z0-9]{12}$/);
+    // FR-003: the link carries no storage provider, bucket, prefix or key.
+    expect(body.url).not.toContain("s3.gra.io.cloud.ovh.net");
+    expect(body.url).not.toContain("jivedrive-prod");
+    expect(body.url).not.toContain("users/alice");
+    expect(body.url).not.toContain("readme");
+    // Generation never contacts storage (US4 scenario 5: a missing
+    // object is refused later, when the link is opened).
+    expect(calls).toHaveLength(0);
+
+    // The row stores the resolved bucket/key and the owning user.
+    const token = body.url.slice(-12);
+    expect(shareRow(db, token)).toMatchObject({
+      bucket,
+      objectKey: "users/alice/readme.md",
+      ownerUserId: userId(db, "alice"),
+      expiresIn: "7d",
+    });
+    // Default expiry: 7 days out, and exactly the row's expiresAt.
     const expiresAt = new Date(body.expiresAt).getTime();
     expect(expiresAt).toBeGreaterThanOrEqual(before + 604800_000);
     expect(expiresAt).toBeLessThanOrEqual(after + 604800_000);
-    // The link is generated without contacting storage (US4 scenario 5:
-    // no HEAD; a missing object is refused later by the provider).
-    expect(calls).toHaveLength(0);
+    expect(shareRow(db, token).expiresAt).toBe(body.expiresAt);
   });
 
-  it("honours the expiresIn overrides in both the URL and expiresAt", async () => {
+  it("honours every expiresIn choice for its full duration (FR-004)", async () => {
     const { app } = createFilesApp();
 
-    // 1h, 24h and 7d map to their exact contract values. The "30d" case
-    // is covered separately: SigV4 presigned URLs are capped at 7 days
-    // (604800s) by the SDK and by OVHcloud's S3 gateway, which refuse
-    // longer expiries ("X-Amz-Expires must be less than 604800 seconds").
-    const cases = [
-      { expiresIn: "1h", seconds: 3600 },
-      { expiresIn: "24h", seconds: 86400 },
-      { expiresIn: "7d", seconds: 604800 },
-    ] as const;
-    for (const { expiresIn, seconds } of cases) {
+    // 30 days is 2592000 seconds: no 7-day presigned-URL cap (FR-004).
+    const cases: Array<[string, number]> = [
+      ["1h", 3600_000],
+      ["24h", 86400_000],
+      ["7d", 604800_000],
+      ["30d", 2592000_000],
+    ];
+
+    for (const [expiresIn, durationMs] of cases) {
       const before = Date.now();
       const res = await postShareUrl(app, {
         key: "users/alice/readme.md",
@@ -693,85 +735,95 @@ describe("POST /api/files/share-url", () => {
       const after = Date.now();
 
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { url: string; expiresAt: string };
-      expect(body.url).toContain(`X-Amz-Expires=${seconds}`);
+      const body = (await res.json()) as { expiresAt: string };
       const expiresAt = new Date(body.expiresAt).getTime();
-      expect(expiresAt).toBeGreaterThanOrEqual(before + seconds * 1000);
-      expect(expiresAt).toBeLessThanOrEqual(after + seconds * 1000);
+      // The response's expiresAt is exactly the chosen lifetime out:
+      // never shorter (the old 30d→7d cap) and never longer.
+      expect(expiresAt - before).toBeGreaterThanOrEqual(durationMs);
+      expect(expiresAt - after).toBeLessThanOrEqual(durationMs);
     }
   });
 
-  it("signs the 30d choice at the provider maximum of 7 days", async () => {
-    const { app } = createFilesApp();
+  it("stores the sharer-resolved location for a shared-mount file", async () => {
+    const { app, db, shareId } = createSharedApp();
 
-    // Deviation from the contract's nominal 2592000 seconds: presigned GET
-    // URLs cannot outlive 604800s. Both the AWS SDK and OVHcloud's S3
-    // gateway reject X-Amz-Expires above 604800, so a 30-day link is
-    // impossible; the longest working link is signed at 604800s and
-    // expiresAt truthfully reflects that provider-enforced lifetime.
-    const before = Date.now();
-    const res = await postShareUrl(app, {
-      key: "users/alice/readme.md",
-      expiresIn: "30d",
-    });
-    const after = Date.now();
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { url: string; expiresAt: string };
-    expect(body.url).toContain("X-Amz-Expires=604800");
-    const expiresAt = new Date(body.expiresAt).getTime();
-    expect(expiresAt).toBeGreaterThanOrEqual(before + 604800_000);
-    expect(expiresAt).toBeLessThanOrEqual(after + 604800_000);
-  });
-
-  it("URL-encodes special characters in the key", async () => {
-    const { app } = createFilesApp();
-
-    const res = await postShareUrl(app, {
-      key: "users/alice/my file #1?.txt",
-    });
+    const res = await postShareUrl(
+      app,
+      { space: `shared:${shareId}`, key: "plan.txt" },
+      bobCookie,
+    );
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as { url: string };
-    expect(body.url).toContain(encodeURIComponent("my file #1?.txt"));
+    expect(body.url).toMatch(/^http:\/\/localhost:5173\/s\/[A-Za-z0-9]{12}$/);
+    // The mount-relative key resolves to the sharer's full object key,
+    // and the link's owner is its creator (bob), not the sharer.
+    expect(shareRow(db, body.url.slice(-12))).toMatchObject({
+      bucket,
+      objectKey: "users/alice/projects/plan.txt",
+      ownerUserId: userId(db, "bob"),
+    });
   });
 
-  it("rejects a key outside the user's prefix without touching storage", async () => {
-    const { app, calls } = createFilesApp();
+  it("rejects keys outside the scope with 400 and stores no row", async () => {
+    const { app, db, calls } = createFilesApp();
 
-    for (const key of ["users/bob/a.txt", "users/alice2/x.txt"]) {
+    for (const key of [
+      "users/bob/a.txt",
+      "users/alice2/x.txt",
+      "users/alice/../bob.txt",
+      "users/alice/a/../../x",
+    ]) {
       const res = await postShareUrl(app, { key });
       expect(res.status).toBe(400);
       expect(await res.json()).toMatchObject({ code: "out_of_scope" });
     }
     expect(calls).toHaveLength(0);
+    expect(shareRowCount(db)).toBe(0);
   });
 
-  it("rejects a key containing a .. segment without a signed URL (T054)", async () => {
-    const { app, calls } = createFilesApp();
+  it("rejects unknown, foreign and revoked shared spaces with 404 and stores no row", async () => {
+    const { app, db, shareId, foreignShareId } = createSharedApp();
 
-    for (const key of ["users/alice/../bob.txt", "users/alice/a/../../x"]) {
-      const res = await postShareUrl(app, { key });
-      expect(res.status).toBe(400);
-      const body = (await res.json()) as Record<string, unknown>;
-      expect(body).toMatchObject({ code: "out_of_scope" });
-      expect(body.url).toBeUndefined();
-    }
-    expect(calls).toHaveLength(0);
+    // A share id that was never issued.
+    const unknown = await postShareUrl(
+      app,
+      { space: "shared:no-such-share", key: "x.txt" },
+      bobCookie,
+    );
+    expect(unknown.status).toBe(404);
+    // A share that exists but does not belong to the caller (carol's).
+    const foreign = await postShareUrl(
+      app,
+      { space: `shared:${foreignShareId}`, key: "x.txt" },
+      bobCookie,
+    );
+    expect(foreign.status).toBe(404);
+    // A share revoked after creation.
+    deleteShare(db, shareId);
+    const revoked = await postShareUrl(
+      app,
+      { space: `shared:${shareId}`, key: "plan.txt" },
+      bobCookie,
+    );
+    expect(revoked.status).toBe(404);
+
+    expect(shareRowCount(db)).toBe(0);
   });
 
   it("rejects a missing or empty key", async () => {
-    const { app } = createFilesApp();
+    const { app, db } = createFilesApp();
 
     for (const body of [{}, { key: "" }]) {
       const res = await postShareUrl(app, body);
       expect(res.status).toBe(400);
       expect(await res.json()).toMatchObject({ code: "bad_request" });
     }
+    expect(shareRowCount(db)).toBe(0);
   });
 
-  it("rejects an invalid expiresIn", async () => {
-    const { app, calls } = createFilesApp();
+  it("rejects an invalid expiresIn and stores no row", async () => {
+    const { app, db, calls } = createFilesApp();
 
     const badExpiries: unknown[] = ["2h", "7", "7 days", 7, null, true];
     for (const expiresIn of badExpiries) {
@@ -783,20 +835,7 @@ describe("POST /api/files/share-url", () => {
       expect(await res.json()).toMatchObject({ code: "invalid_expiry" });
     }
     expect(calls).toHaveLength(0);
-  });
-
-  it("persists nothing: the database is untouched by any share request", async () => {
-    const { app, db } = createFilesApp();
-
-    const before = dbRowCounts(db);
-    // A mix of successful and rejected requests must all be side-effect
-    // free (FR-012: links are generated, displayed, never stored).
-    await postShareUrl(app, { key: "users/alice/readme.md" });
-    await postShareUrl(app, { key: "users/alice/readme.md", expiresIn: "1h" });
-    await postShareUrl(app, { key: "users/bob/a.txt" });
-    await postShareUrl(app, { key: "users/alice/a.txt", expiresIn: "2h" });
-
-    expect(dbRowCounts(db)).toEqual(before);
+    expect(shareRowCount(db)).toBe(0);
   });
 
   it("requires a signed-in session", async () => {
@@ -807,6 +846,80 @@ describe("POST /api/files/share-url", () => {
       body: JSON.stringify({ key: "users/alice/a.txt" }),
     });
     expect(res.status).toBe(401);
+  });
+  it("returns the same active link for the same file and lifetime (FR-006)", async () => {
+    const { app, db } = createFilesApp();
+
+    const first = await postShareUrl(app, {
+      key: "users/alice/readme.md",
+      expiresIn: "7d",
+    });
+    const second = await postShareUrl(app, {
+      key: "users/alice/readme.md",
+      expiresIn: "7d",
+    });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const firstBody = (await first.json()) as {
+      url: string;
+      expiresAt: string;
+    };
+    const secondBody = (await second.json()) as {
+      url: string;
+      expiresAt: string;
+    };
+    // Reopening the modal re-shows the same link with its remaining
+    // lifetime, and no duplicate row is created.
+    expect(secondBody.url).toBe(firstBody.url);
+    expect(secondBody.expiresAt).toBe(firstBody.expiresAt);
+    expect(shareRowCount(db)).toBe(1);
+  });
+
+  it("serves distinct lifetimes concurrently for the same file (FR-006)", async () => {
+    const { app, db } = createFilesApp();
+
+    const shortRes = await postShareUrl(app, {
+      key: "users/alice/readme.md",
+      expiresIn: "1h",
+    });
+    const longRes = await postShareUrl(app, {
+      key: "users/alice/readme.md",
+      expiresIn: "30d",
+    });
+
+    const shortBody = (await shortRes.json()) as { url: string };
+    const longBody = (await longRes.json()) as { url: string };
+    // A different lifetime is a different link; both rows exist.
+    expect(longBody.url).not.toBe(shortBody.url);
+    expect(shareRowCount(db)).toBe(2);
+    // Both tokens resolve to a live row for the same file.
+    for (const body of [shortBody, longBody]) {
+      const row = getShareLinkByToken(db, body.url.slice(-12));
+      expect(row?.objectKey).toBe("users/alice/readme.md");
+      expect(row?.token).toBe(body.url.slice(-12));
+    }
+  });
+
+  it("mints a new token after the previous link expired (FR-006)", async () => {
+    const { app, db } = createFilesApp();
+
+    const first = await postShareUrl(app, { key: "users/alice/readme.md" });
+    const firstBody = (await first.json()) as { url: string };
+    const firstToken = firstBody.url.slice(-12);
+    // Age the row past its expiry the way the sweep would.
+    db.query("UPDATE share_links SET expiresAt = ? WHERE token = ?").run(
+      new Date(Date.now() - 1000).toISOString(),
+      firstToken,
+    );
+
+    const second = await postShareUrl(app, { key: "users/alice/readme.md" });
+    const secondBody = (await second.json()) as { url: string };
+
+    expect(second.status).toBe(200);
+    expect(secondBody.url).not.toBe(firstBody.url);
+    // The expired row was replaced, not duplicated.
+    expect(shareRowCount(db)).toBe(1);
   });
 });
 
@@ -1140,7 +1253,7 @@ describe("space-aware file operations (T007)", () => {
   });
 
   it("generates a share link for a key in a shared space", async () => {
-    const { app, calls, shareId } = createSharedApp();
+    const { app, calls, db, shareId } = createSharedApp();
 
     const res = await app.request("/api/files/share-url", {
       method: "POST",
@@ -1152,11 +1265,13 @@ describe("space-aware file operations (T007)", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { url: string; expiresAt: string };
-    expect(body.url).toContain(
-      "https://s3.gra.io.cloud.ovh.net/jivedrive-prod/users/alice/projects/plan.txt",
-    );
+    const body = (await res.json()) as { url: string };
+    expect(body.url).toMatch(/^http:\/\/localhost:5173\/s\/[A-Za-z0-9]{12}$/);
     expect(calls).toHaveLength(0);
+    const row = db
+      .query("SELECT * FROM share_links WHERE token = ?")
+      .get(body.url.slice(-12)) as { objectKey: string } | undefined;
+    expect(row?.objectKey).toBe("users/alice/projects/plan.txt");
   });
 
   it("rejects a key escaping the shared folder with 400 out_of_scope", async () => {

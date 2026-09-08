@@ -14,6 +14,7 @@ import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import type { S3Client } from "@aws-sdk/client-s3";
 import {
+  assertKeyInScope,
   deleteObject,
   headObject,
   listObjects,
@@ -22,13 +23,19 @@ import {
 } from "../s3/client";
 import type { HeadResult } from "../s3/client";
 import type { ServerEnv } from "../server";
+import type { AppConfig } from "../config";
 import {
+  createShareLink,
   getUserById,
   listSharesByRecipient,
   searchContent,
   searchFileNames,
 } from "../db/repository";
-import type { ContentSearchHit, FileNameSearchHit } from "../db/repository";
+import type {
+  ContentSearchHit,
+  FileNameSearchHit,
+  ShareLinkLifetime,
+} from "../db/repository";
 import type { Database } from "bun:sqlite";
 import { parseSpace, resolveSpace } from "../scope";
 import type { ResolvedScope, SpaceRef } from "../scope";
@@ -44,6 +51,8 @@ export interface FileRouteDeps {
   listPageSize?: number;
   /** Database for resolving shared spaces. */
   db: Database;
+  /** App configuration; the WebAuthn origin is the short link's origin. */
+  config: AppConfig;
 }
 
 /** Lifetime of a download URL in seconds (15 minutes). */
@@ -58,17 +67,15 @@ const SEARCH_QUERY_MAX_LENGTH = 200;
 /** Lifetime of an upload (presigned PUT) URL in seconds (15 minutes). */
 const UPLOAD_URL_TTL_SECONDS = 15 * 60;
 
-/** Share link lifetimes in seconds, keyed by the contract's expiresIn enum. */
+/** Accepted share-link lifetimes (seconds), keyed by the contract's
+ * expiresIn enum. The values document each lifetime's duration; the
+ * stored row's expiresAt is computed by {@link createShareLink}, so a
+ * 30-day link is genuinely 30 days — there is no presigned-URL cap. */
 const SHARE_EXPIRIES_SECONDS: Record<string, number> = {
   "1h": 60 * 60,
   "24h": 24 * 60 * 60,
   "7d": 7 * 24 * 60 * 60,
-  // Nominal contract value is 30 days (2592000s), but SigV4 presigned GET
-  // URLs cannot outlive 7 days: the AWS SDK and OVHcloud's S3 gateway both
-  // refuse X-Amz-Expires above 604800 ("must be less than 604800 seconds"),
-  // so a 30-day link could never be signed or served. The 30d choice is
-  // signed at the provider maximum and expiresAt reflects that lifetime.
-  "30d": 7 * 24 * 60 * 60,
+  "30d": 30 * 24 * 60 * 60,
 };
 
 /** Default share expiry per the contract (7 days). */
@@ -236,7 +243,7 @@ function resolveRequestSpace(
  * @returns a Hono app with the file routes
  */
 export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
-  const { s3Client, requireUser, db } = deps;
+  const { s3Client, requireUser, db, config } = deps;
   const pageSize = deps.listPageSize ?? 1000;
 
   const app = new Hono<ServerEnv>();
@@ -603,20 +610,30 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
     const fullKey = scope.mountRelative ? scope.prefix + key : key;
 
     try {
-      // Scope enforcement lives here: presignedGetUrl rejects keys outside
-      // the effective scope prefix, mapped to a 400 below. No head request
-      // is made; a missing object is refused later by the storage provider
-      // (US4 scenario 5). Nothing is written to the database (FR-012): the
-      // link is generated, displayed, and expires naturally.
-      const url = await presignedGetUrl(
-        s3Client,
-        scope.bucket,
-        scope.prefix,
-        fullKey,
-        ttlSeconds,
+      // Scope enforcement lives here (constitution IV): the key must sit
+      // inside the effective scope prefix and carry no ".." segment,
+      // mapped to a 400 below. No storage request is made; a missing
+      // object is refused later by the storage provider (US4 scenario 5).
+      assertKeyInScope(scope.prefix, fullKey);
+      // The row is stored with the resolved bucket/key (D10) so the
+      // anonymous /s route can serve it without re-deriving scope, and
+      // with the creator as its owner (FR-010: the creator's gate has
+      // already passed).
+      const link = createShareLink(db, {
+        ownerUserId: user.id,
+        bucket: scope.bucket,
+        objectKey: fullKey,
+        expiresIn: expiry as ShareLinkLifetime,
+      });
+      // The displayed link points at the app's own origin (D5) and
+      // reveals nothing about storage (FR-003).
+      return c.json(
+        {
+          url: `${config.webauthn.origin}/s/${link.token}`,
+          expiresAt: link.expiresAt,
+        },
+        200,
       );
-      const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
-      return c.json({ url, expiresAt }, 200);
     } catch (error) {
       if (error instanceof RangeError) {
         return jsonError(
@@ -629,7 +646,6 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
       throw error;
     }
   });
-
   // Permanently delete one object within the space (US5, T047). Scope
   // enforcement comes first (constitution IV): headObject rejects keys
   // outside the effective scope prefix, mapped to a 400 below. A missing

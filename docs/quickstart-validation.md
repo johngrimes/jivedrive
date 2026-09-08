@@ -795,3 +795,82 @@ P@5 >= 0.45) plus two behavioral checks (corrupt PDF found by name at
 rank 1; both binary fixtures surface for "zephyrquill"), so a ranking or
 extraction regression fails the backend suite. Full backend suite green:
 464 pass / 0 fail (2026-08-30).
+
+## Feature 009 - Short share links (T025)
+
+Spec
+[`009-short-share-links/quickstart.md`](../.local/specs/009-short-share-links/quickstart.md)
+replaces presigned-URL share links with short app-origin links
+(`<origin>/s/<12-char base62 token>`): a stored `share_links` row resolves
+the token, the public `GET /s/:token` route 302-redirects to a fresh
+5-minute presigned GET URL, lifetimes (1h/24h/7d/30d) are honoured for
+their full duration, dead links render an identical friendly 410 page,
+expired rows are swept (startup + lazy on lookup), and regeneration is
+stable per (owner, file, lifetime) while active.
+
+Environment and method:
+
+- Live server: the e2e server (`backend/src/e2eServer.ts`) on scratch
+  port 5199 (`JIVEDRIVE_PORT`) because the user's vite dev server holds
+  5173; the mock S3 HTTP server on 5299. The e2e server seeds an
+  already-expired share link (`/s/exp1redshare`) for the dead-link specs.
+- Method: `e2e/share.spec.ts` drives the real UI in headless Chromium
+  (share modal, anonymous download in a clean context, dead-link page at
+  375/768/1280 px) via a throwaway Playwright config overriding
+  `baseURL`/`webServer` and `E2E_ORIGIN=http://localhost:5199`; backend
+  unit tests cover scope refusals, the rate-limit family, token
+  generation, repository semantics (sweep, cascade, dedupe) and the
+  per-lifetime `expiresAt` honesty.
+
+All checks ran green on 2026-09-05.
+
+### Scenario 1 - Generate a short link and download anonymously - PASS
+
+- `e2e/share.spec.ts` "US1": the share modal shows
+  `<origin>/s/<12-char token>` with no storage host, bucket, prefix or
+  object path; an anonymous (fresh) context downloads the file
+  byte-identical with the original filename, including a name with
+  spaces and special characters.
+
+### Scenario 2 - Honest expiry and the dead-link page - PASS
+
+- Route tests pin `expiresAt` exactly 1h/24h/7d/30d out; 30d is a full
+  2 592 000 s (the old silent 7-day cap is gone).
+- `e2e/share.spec.ts` "US2": the seeded expired token and a
+  never-issued token render the byte-identical 410 page at 375, 768 and
+  1280 px with no horizontal overflow; the expired row is lazily
+  deleted. A startup-sweep smoke test (file-backed DB, one expired row,
+  boot `main()`, row count 0) also passed.
+
+### Scenario 3 - Stable regeneration - PASS
+
+- Repository and route tests (FR-006): same owner + file + lifetime
+  while active returns the same token with no duplicate row; a second
+  lifetime yields a distinct concurrently-servable token; after expiry a
+  fresh token is minted.
+
+### Scenario 4 - Scope still enforced - PASS
+
+- Route tests: out-of-scope keys → 400 and unknown/foreign/revoked
+  shared spaces → 404 with no `share_links` row written (row count
+  asserted unchanged).
+
+### Scenario 5 - Abuse resistance - PASS
+
+- `rateLimit.test.ts`/`config.test.ts`: the `shareLinks` family limits
+  `/s/*` per IP from `JIVEDRIVE_RATE_LIMIT_SHARE_LINKS_*` without
+  touching the auth/files buckets; over-limit requests get a plain 429
+  that does not reveal token existence. The sweep test asserts the table
+  is empty of expired rows post-sweep.
+
+### Quality gate (T026, 2026-09-05)
+
+- Backend unit suite: 505 pass / 0 fail. Frontend unit suite: 96 pass /
+  0 fail (10 files). `tsc --noEmit` (backend + frontend): clean.
+  `eslint .`: clean. `prettier --check`: clean.
+- `e2e/share.spec.ts`: 7 pass / 0 fail. `e2e/browse.spec.ts` (FR-011
+  in-app download regression): pass.
+- Pre-existing, unrelated failure: `e2e/share-folder.spec.ts` US3
+  (share creation returns 401) fails identically on a clean `main`
+  checkout with the same spec and server, so it is not caused by this
+  feature; left untouched.

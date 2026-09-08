@@ -33,6 +33,12 @@ const LONG_USERNAME_SESSION_COOKIE = {
 };
 
 /** The 375px phone viewport used across the mobile assertions. */
+/**
+ * Short share links: `<app origin>/s/<12-char base62 token>` (spec 009,
+ * FR-001). Same hardcoded origin as the session cookies above.
+ */
+const SHORT_LINK_PATTERN = /^http:\/\/localhost:5173\/s\/[A-Za-z0-9]{12}$/;
+
 const MOBILE_VIEWPORT = { width: 375, height: 667 };
 
 /**
@@ -795,8 +801,9 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toContainText("data.csv");
     await expect(dialog.getByLabel("Share link")).toHaveValue(
-      /X-Amz-Signature/,
+      SHORT_LINK_PATTERN,
     );
+    const weekLink = await dialog.getByLabel("Share link").inputValue();
 
     // US4 sc.1: every control is visible and usable at 375px.
     const expiry = dialog.getByLabel("Link expires in");
@@ -810,7 +817,10 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     // The expiry select is usable: changing it regenerates the link.
     await expiry.selectOption({ label: "1 hour" });
     await expect(dialog.getByLabel("Share link")).toHaveValue(
-      /X-Amz-Expires=3600/,
+      SHORT_LINK_PATTERN,
+    );
+    expect(await dialog.getByLabel("Share link").inputValue()).not.toBe(
+      weekLink,
     );
 
     // FR-004: copy and done carry octicons while keeping their accessible
@@ -842,7 +852,7 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
       .click();
     await expect(dialog).toContainText("data.csv");
     await expect(dialog.getByLabel("Share link")).toHaveValue(
-      /X-Amz-Signature/,
+      SHORT_LINK_PATTERN,
     );
     await expectNoHorizontalOverflow(page);
     await dialog.getByRole("button", { name: "Done" }).click();

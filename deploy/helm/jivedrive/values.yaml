@@ -64,6 +64,9 @@ jivedrive:
     JIVEDRIVE_RATE_LIMIT_AUTH_BURST: "10"
     JIVEDRIVE_RATE_LIMIT_FILES_PER_MINUTE: "300"
     JIVEDRIVE_RATE_LIMIT_FILES_BURST: "100"
+    # /s/<token> anonymous share links likewise with shareLinks*.
+    JIVEDRIVE_RATE_LIMIT_SHARE_LINKS_PER_MINUTE: "60"
+    JIVEDRIVE_RATE_LIMIT_SHARE_LINKS_BURST: "30"
     # Background search indexing: seconds between per-user space scans and
     # the maximum object size (bytes) eligible for content extraction.
     JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS: "3600"

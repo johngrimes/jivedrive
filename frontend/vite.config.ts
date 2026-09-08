@@ -12,6 +12,7 @@ export default defineConfig({
       "/api": "http://localhost:3000",
       "/auth": "http://localhost:3000",
       "/healthcheck": "http://localhost:3000",
+      "/s": "http://localhost:3000",
     },
   },
 });

@@ -349,23 +349,28 @@ export type ShareExpiresIn = "1h" | "24h" | "7d" | "30d";
 
 /** Response of POST /api/files/share-url. */
 export interface ShareUrlResponse {
-  /** Presigned GET URL served directly by the storage provider. */
+  /**
+   * Short link of the form `<app origin>/s/<token>`. It reveals nothing
+   * about the storage provider, bucket, prefix or object key; opening it
+   * redirects to a freshly signed storage URL.
+   */
   url: string;
-  /** ISO 8601 timestamp of when the provider will refuse the link. */
+  /** ISO 8601 timestamp of when the link stops working. */
   expiresAt: string;
 }
 
 /**
- * Generate a fire-and-forget share link for an object in the user's space.
+ * Generate a share link for an object in the user's space.
  *
- * The link is served directly by the storage provider to anyone holding
- * it; JiveDrive never stores it (FR-012).
+ * The link is stored server-side only until its expiry: it is never
+ * listed and cannot be revoked early. The same file and lifetime while
+ * still active returns the same link.
  *
  * @param key - object key within the space (full key in the own space,
  *   relative to the mount in a shared space)
  * @param expiresIn - expiry choice, defaults to 7 days
  * @param space - the space the key lives in; defaults to the caller's own
- * @returns the presigned URL and its expiry timestamp
+ * @returns the short link and its expiry timestamp
  */
 export function postShareUrl(
   key: string,

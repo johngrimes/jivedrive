@@ -1,9 +1,9 @@
 /**
- * Share modal for a file (T044): expiry select, the generated presigned
- * link in a readonly input, and a copy button. Links are fire-and-forget
- * (FR-012): generated on demand, never stored, and regenerated whenever
- * the chosen expiry changes (US4 scenario 2). The storage provider
- * expires the link naturally - JiveDrive cannot revoke it early.
+ * Share modal for a file (T044): expiry select, the generated short link
+ * in a readonly input, and a copy button. The link points at the app's
+ * own `/s/<token>` endpoint and hides where the file is stored. The
+ * token record is stored only until the link expires: links are never
+ * listed and cannot be revoked early — they expire on their own.
  *
  * Rebuilt on daisyUI primitives (T013): `modal modal-open` overlay,
  * `modal-box` panel and `modal-backdrop` close button (research R5),
@@ -20,10 +20,7 @@ const EXPIRY_OPTIONS = [
   { value: "1h", label: "1 hour" },
   { value: "24h", label: "24 hours" },
   { value: "7d", label: "7 days (default)" },
-  // The nominal 30d choice cannot be signed: SigV4 presigned GET URLs are
-  // capped at 7 days, so the route signs it at the provider maximum. The
-  // label says so and the dialog shows the real expiry date.
-  { value: "30d", label: "30 days (7-day maximum)" },
+  { value: "30d", label: "30 days" },
 ] as const;
 
 /** A valid share expiry value. */
@@ -63,8 +60,7 @@ export function ShareModal({ file, space = "own", onClose }: ShareModalProps) {
 
   // The link is shown only when it matches the current selection, so
   // changing the expiry immediately shows the generating state and the
-  // effect below fetches a fresh link (US4 scenario 2). The route
-  // persists nothing (FR-012).
+  // effect below fetches the link for the new lifetime.
   const loading = link?.expiresIn !== expiresIn;
 
   useEffect(() => {
@@ -188,8 +184,8 @@ export function ShareModal({ file, space = "own", onClose }: ShareModalProps) {
         </div>
 
         <p className="text-xs opacity-70">
-          Presigned URL. Not stored by JiveDrive; cannot be revoked early - it
-          expires on its own.
+          Anyone with this link can download the file until it expires. Links
+          cannot be listed or revoked early - they expire on their own.
         </p>
       </div>
       <button

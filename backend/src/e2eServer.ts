@@ -203,13 +203,18 @@ function createMockS3Client(): S3Client {
   return client;
 }
 
+// The server's own base URL: the WebAuthn origin (and the origin short
+// share links are displayed against) must equal the address this server
+// actually serves, including when verification scripts move it to another
+// port via JIVEDRIVE_PORT.
+const port = process.env.JIVEDRIVE_PORT ?? "5173";
 const env: Record<string, string | undefined> = {
   ...process.env,
   NODE_ENV: "test",
   // Overridable so verification scripts can run this server on another
   // port with a file-backed database to inspect persistence; Playwright
   // leaves both unset and gets the defaults.
-  JIVEDRIVE_PORT: process.env.JIVEDRIVE_PORT ?? "5173",
+  JIVEDRIVE_PORT: port,
   JIVEDRIVE_DB_PATH: process.env.JIVEDRIVE_DB_PATH ?? ":memory:",
   JIVEDRIVE_MIGRATIONS_DIR: resolve(import.meta.dir, "../migrations"),
   // The mock S3 HTTP server on localhost:5299 is where the browser uploads
@@ -223,7 +228,7 @@ const env: Record<string, string | undefined> = {
     process.env.JIVEDRIVE_S3_SECRET_ACCESS_KEY ?? "test",
   JIVEDRIVE_WEBAUTHN_RP_ID: "localhost",
   JIVEDRIVE_WEBAUTHN_ORIGIN:
-    process.env.JIVEDRIVE_WEBAUTHN_ORIGIN ?? "http://localhost:5173",
+    process.env.JIVEDRIVE_WEBAUTHN_ORIGIN ?? `http://localhost:${port}`,
   // This test-only server serves every Playwright spec from one client
   // identity (127.0.0.1) in seconds, so the production defaults (auth
   // 20/min) would 429 mid-run. Override with generous values, keeping
@@ -271,6 +276,18 @@ const bob = createUser(db, {
   prefix: "users/bob/",
 });
 createSession(db, bob.id, { token: "bob-session" });
+
+// A third non-admin user dedicated to the short-share-link spec
+// (share.spec.ts): she receives alice's `projects` share and creates a
+// link from inside that shared mount (US1 scenario 3). No spec removes
+// her, and the suite runs fullyParallel, so she must not be anyone's
+// removal target (unlike bob, whom share-folder.spec US5 deletes).
+const erin = createUser(db, {
+  username: "erin",
+  bucket: "jivedrive-prod",
+  prefix: "users/erin/",
+});
+createSession(db, erin.id, { token: "erin-session" });
 
 // Bob's space: a root file and a same-named `projects` folder of his own,
 // so the US2 mount ("projects", shared by alice) renders alongside a
@@ -397,6 +414,26 @@ for (const suffix of ["", "-r1", "-r2"]) {
     expiresAt: future,
   });
 }
+
+// An already-expired share link for the dead-link e2e specs (US2): opening
+// /s/exp1redshare must render the friendly 410 page. The repository's
+// create path computes expiresAt from the current time, so the row is
+// inserted directly with a past expiry; migrateFromDir has already run
+// above, keeping the post-migration startup order intact. The target
+// object lives in bob's space so no other spec's row counts or dedupe
+// keys collide.
+seedObject("users/bob/expired-share-target.txt", "expired link target", 19);
+db.query(
+  "INSERT INTO share_links (token, ownerUserId, bucket, objectKey, expiresIn, expiresAt, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)",
+).run(
+  "exp1redshare",
+  bob.id,
+  "jivedrive-prod",
+  "users/bob/expired-share-target.txt",
+  "1h",
+  past,
+  past,
+);
 
 // Alice's space: four subfolders (docs, photos, empty, projects) and
 // seven root files — 11 root entries, more than two pages of the e2e

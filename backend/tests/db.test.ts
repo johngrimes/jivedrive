@@ -9,6 +9,7 @@ import {
   createInvite,
   createSession,
   createShare,
+  createShareLink,
   createUser,
   deleteCredential,
   deleteCredentialsByUser,
@@ -17,6 +18,7 @@ import {
   deleteSessionById,
   deleteSessionsByUser,
   deleteShare,
+  deleteShareLink,
   deleteUser,
   getCredentialById,
   getInviteByToken,
@@ -24,6 +26,7 @@ import {
   getSearchDoc,
   getSessionByToken,
   getShareById,
+  getShareLinkByToken,
   getUserById,
   getUserByUsername,
   listCredentialsByUser,
@@ -38,6 +41,8 @@ import {
   normalizePrefix,
   removeSearchDoc,
   searchFileNames,
+  findActiveShareLink,
+  sweepExpiredShareLinks,
   updateCredentialCounter,
   updateSessionLastUsed,
   upsertSearchDoc,
@@ -942,6 +947,353 @@ describe("shares", () => {
     expect(listSharesByRecipient(db, alice.id).map((s) => s.id)).toEqual([
       carolToAlice.id,
     ]);
+  });
+});
+
+describe("share links", () => {
+  it("creates a link with a 12-char token and computed expiresAt (T005)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const link = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/photos/cat.jpg",
+      expiresIn: "7d",
+      createdAt: "2026-09-01T00:00:00.000Z",
+    });
+
+    expect(link.token).toMatch(/^[A-Za-z0-9]{12}$/);
+    expect(link.ownerUserId).toBe(alice.id);
+    expect(link.bucket).toBe("jivedrive-prod");
+    expect(link.objectKey).toBe("users/alice/photos/cat.jpg");
+    expect(link.expiresIn).toBe("7d");
+    expect(link.createdAt).toBe("2026-09-01T00:00:00.000Z");
+    expect(link.expiresAt).toBe("2026-09-08T00:00:00.000Z");
+  });
+
+  it("computes expiresAt for every lifetime, 30d a full 30 days (FR-004)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const cases: Array<
+      [Parameters<typeof createShareLink>[1]["expiresIn"], string]
+    > = [
+      ["1h", "2026-09-01T01:00:00.000Z"],
+      ["24h", "2026-09-02T00:00:00.000Z"],
+      ["7d", "2026-09-08T00:00:00.000Z"],
+      ["30d", "2026-10-01T00:00:00.000Z"],
+    ];
+
+    for (const [expiresIn, expiresAt] of cases) {
+      const link = createShareLink(db, {
+        ownerUserId: alice.id,
+        bucket: "jivedrive-prod",
+        objectKey: `users/alice/${expiresIn}.txt`,
+        expiresIn,
+        createdAt: "2026-09-01T00:00:00.000Z",
+      });
+      expect(link.expiresAt).toBe(expiresAt);
+    }
+  });
+
+  it("looks a link up by token and returns null when missing", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const link = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/photos/cat.jpg",
+      expiresIn: "7d",
+    });
+
+    expect(getShareLinkByToken(db, link.token)?.objectKey).toBe(
+      "users/alice/photos/cat.jpg",
+    );
+    expect(getShareLinkByToken(db, "no such token")).toBeNull();
+  });
+
+  it("treats an expired row as a miss", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const expired = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/old.txt",
+      expiresIn: "1h",
+      createdAt: "2026-09-01T00:00:00.000Z",
+    });
+    const active = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/new.txt",
+      expiresIn: "30d",
+      createdAt: "2026-09-01T00:00:00.000Z",
+    });
+    const now = new Date("2026-09-01T02:00:00.000Z");
+
+    // Expired and unknown tokens are indistinguishable (FR-005).
+    expect(getShareLinkByToken(db, expired.token, now)).toBeNull();
+    expect(getShareLinkByToken(db, active.token, now)?.token).toBe(
+      active.token,
+    );
+  });
+
+  it("sweeps only expired rows and reports how many it deleted", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const expired = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/old.txt",
+      expiresIn: "1h",
+      createdAt: "2026-08-31T00:00:00.000Z",
+    });
+    const active = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/new.txt",
+      expiresIn: "30d",
+      createdAt: "2026-08-31T00:00:00.000Z",
+    });
+    const now = new Date("2026-09-01T00:00:00.000Z");
+
+    expect(sweepExpiredShareLinks(db, now)).toBe(1);
+    expect(getShareLinkByToken(db, expired.token, now)).toBeNull();
+    expect(getShareLinkByToken(db, active.token, now)?.token).toBe(
+      active.token,
+    );
+    // A second sweep has nothing left to delete.
+    expect(sweepExpiredShareLinks(db, now)).toBe(0);
+  });
+
+  it("deletes a link by token", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const link = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/photos/cat.jpg",
+      expiresIn: "7d",
+    });
+
+    deleteShareLink(db, link.token);
+
+    expect(getShareLinkByToken(db, link.token)).toBeNull();
+  });
+
+  it("cascades link deletion when the owner is deleted (FR-008)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    const aliceLink = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/a.txt",
+      expiresIn: "7d",
+    });
+    const bobLink = createShareLink(db, {
+      ownerUserId: bob.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/bob/b.txt",
+      expiresIn: "7d",
+    });
+
+    deleteUser(db, bob.id);
+
+    expect(getShareLinkByToken(db, bobLink.token)).toBeNull();
+    expect(getShareLinkByToken(db, aliceLink.token)?.token).toBe(
+      aliceLink.token,
+    );
+  });
+
+  it("retries a token collision and succeeds on a fresh draw", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const existing = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/a.txt",
+      expiresIn: "7d",
+    });
+    let draws = 0;
+
+    const link = createShareLink(
+      db,
+      {
+        ownerUserId: alice.id,
+        bucket: "jivedrive-prod",
+        objectKey: "users/alice/b.txt",
+        expiresIn: "7d",
+      },
+      {
+        tokenFactory: () => {
+          draws += 1;
+          return draws === 1 ? existing.token : "freshToken12";
+        },
+      },
+    );
+
+    expect(draws).toBe(2);
+    expect(link.token).toBe("freshToken12");
+  });
+
+  it("gives up after bounded retries when every draw collides", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const existing = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/a.txt",
+      expiresIn: "7d",
+    });
+    let draws = 0;
+
+    expect(() =>
+      createShareLink(
+        db,
+        {
+          ownerUserId: alice.id,
+          bucket: "jivedrive-prod",
+          objectKey: "users/alice/b.txt",
+          expiresIn: "7d",
+        },
+        {
+          tokenFactory: () => {
+            draws += 1;
+            return existing.token;
+          },
+        },
+      ),
+    ).toThrow();
+    // At least three attempts before giving up.
+    expect(draws).toBeGreaterThanOrEqual(3);
+  });
+  it("returns the same active link for the same owner, file and lifetime (FR-006)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const key = {
+      ownerUserId: alice.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/photos/cat.jpg",
+      expiresIn: "7d" as const,
+    };
+    const first = createShareLink(db, {
+      ...key,
+      createdAt: "2026-09-01T00:00:00.000Z",
+    });
+    const second = createShareLink(db, {
+      ...key,
+      // Reopening the modal minutes later must not mint a new token.
+      createdAt: "2026-09-04T12:00:00.000Z",
+    });
+
+    // The existing row is returned unchanged, with its remaining
+    // lifetime; no duplicate record is created.
+    expect(second).toEqual(first);
+    const rows = db.query("SELECT COUNT(*) AS n FROM share_links").get() as {
+      n: number;
+    };
+    expect(rows.n).toBe(1);
+  });
+
+  it("keeps distinct links per lifetime, both concurrently servable (FR-006)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const key = {
+      ownerUserId: alice.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/photos/cat.jpg",
+    };
+    const short = createShareLink(db, {
+      ...key,
+      expiresIn: "1h",
+      createdAt: "2026-09-01T00:00:00.000Z",
+    });
+    const long = createShareLink(db, {
+      ...key,
+      expiresIn: "30d",
+      createdAt: "2026-09-01T00:00:00.000Z",
+    });
+
+    // A different lifetime is a different link, and both work at once.
+    expect(long.token).not.toBe(short.token);
+    const now = new Date("2026-09-01T00:30:00.000Z");
+    expect(getShareLinkByToken(db, short.token, now)?.token).toBe(short.token);
+    expect(getShareLinkByToken(db, long.token, now)?.token).toBe(long.token);
+    const rows = db.query("SELECT COUNT(*) AS n FROM share_links").get() as {
+      n: number;
+    };
+    expect(rows.n).toBe(2);
+    // Returning to the earlier lifetime re-shows the first link while
+    // it is still active (US3 scenario 3).
+    const again = createShareLink(db, {
+      ...key,
+      expiresIn: "1h",
+      createdAt: "2026-09-01T00:45:00.000Z",
+    });
+    expect(again.token).toBe(short.token);
+  });
+
+  it("mints a fresh token once the previous link expired (FR-006)", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const key = {
+      ownerUserId: alice.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/photos/cat.jpg",
+      expiresIn: "1h" as const,
+    };
+    const expired = createShareLink(db, {
+      ...key,
+      createdAt: "2026-09-01T00:00:00.000Z",
+    });
+    const fresh = createShareLink(db, {
+      ...key,
+      createdAt: "2026-09-01T02:00:00.000Z",
+    });
+
+    // Regeneration after expiry replaces the dead row: one row, new
+    // token, old token no longer serves.
+    expect(fresh.token).not.toBe(expired.token);
+    expect(fresh.expiresAt).toBe("2026-09-01T03:00:00.000Z");
+    const rows = db.query("SELECT COUNT(*) AS n FROM share_links").get() as {
+      n: number;
+    };
+    expect(rows.n).toBe(1);
+    expect(
+      getShareLinkByToken(
+        db,
+        expired.token,
+        new Date("2026-09-01T02:00:00.000Z"),
+      ),
+    ).toBeNull();
+  });
+  it("finds the active link for a dedupe key and misses expired or unknown keys", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const key = {
+      ownerUserId: alice.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/a.txt",
+      expiresIn: "7d" as const,
+    };
+    const link = createShareLink(db, {
+      ...key,
+      createdAt: "2026-09-01T00:00:00.000Z",
+    });
+
+    expect(
+      findActiveShareLink(db, key, new Date("2026-09-05T00:00:00.000Z")),
+    ).toEqual(link);
+    // The expiry boundary itself is already a miss, same rule as
+    // getShareLinkByToken (FR-005).
+    expect(
+      findActiveShareLink(db, key, new Date("2026-09-08T00:00:00.000Z")),
+    ).toBeNull();
+    // A different file or lifetime is a different dedupe key (D4).
+    expect(
+      findActiveShareLink(db, { ...key, objectKey: "users/alice/b.txt" }),
+    ).toBeNull();
+    expect(findActiveShareLink(db, { ...key, expiresIn: "1h" })).toBeNull();
   });
 });
 
