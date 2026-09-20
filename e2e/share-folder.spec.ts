@@ -1,4 +1,5 @@
 import {
+  downloadFromPopup,
   expectNoHorizontalOverflow,
   expectSignedInAs,
   readStream,
@@ -189,9 +190,9 @@ test("US2: bob browses and downloads the projects folder shared by alice", async
   await expect(breadcrumbs).toContainText("docs");
   await expect(breadcrumbs).toContainText("Shared by alice");
 
-  const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Download" }).click();
-  const download = await downloadPromise;
+  const download = await downloadFromPopup(page, () =>
+    page.getByRole("button", { name: "Download" }).click(),
+  );
   const content = await readStream(await download.createReadStream());
   expect(content.toString()).toBe("%PDF-1.4 report");
 
@@ -224,18 +225,22 @@ test("US3: bob uploads, overwrites and deletes a file in the projects folder sha
     });
     expect([201, 409]).toContain(shareRes.status());
 
-    // Retry-safe: remove any notes.txt left behind by a failed earlier
-    // attempt so this test always starts from seed state (US3 sc.1).
+    // Retry-safe: remove any mountfile.txt left behind by a failed earlier
+    // attempt so this test always starts from seed state (US3 sc.1). The
+    // name must not contain any other spec's search queries ("notes",
+    // "pic", "report", "plan"), or bob's search results here would gain a
+    // second shared row and break search.spec's strict-mode locators.
+    const fileName = "mountfile.txt";
     const seeded = await aliceApi.get("/api/files?prefix=projects&space=own");
     expect(seeded.status()).toBe(200);
     const seededBody = (await seeded.json()) as {
       folders: string[];
       files: Array<{ name: string }>;
     };
-    if (seededBody.files.some((file) => file.name === "notes.txt")) {
+    if (seededBody.files.some((file) => file.name === fileName)) {
       const cleanup = await aliceApi.delete(
         `/api/files?key=${encodeURIComponent(
-          "users/alice/projects/notes.txt",
+          "users/alice/projects/mountfile.txt",
         )}&space=own`,
       );
       expect(cleanup.status()).toBe(204);
@@ -257,13 +262,21 @@ test("US3: bob uploads, overwrites and deletes a file in the projects folder sha
     await expect(mountRow).toBeVisible();
     await mountRow.getByRole("link").click();
     await expect(page).toHaveURL(/space=shared/);
+    // The router commits the URL eagerly and the new view inside a
+    // React transition: the UploadControl can still hold the root/own
+    // props here. Wait for the committed mount view ("Shared by
+    // alice" breadcrumb only renders in it) before uploading, or the
+    // upload-url POST races the transition and lands in bob's own root.
+    const breadcrumbs = page.getByRole("navigation", {
+      name: "Breadcrumbs",
+    });
+    await expect(breadcrumbs).toContainText("Shared by alice");
 
-    // US3 sc.1: bob uploads notes.txt into the shared folder.
-    const fileName = "notes.txt";
+    // US3 sc.1: bob uploads mountfile.txt into the shared folder.
     await page.locator('input[type="file"]').setInputFiles({
       name: fileName,
       mimeType: "text/plain",
-      buffer: Buffer.from("project notes v1\n"),
+      buffer: Buffer.from("project mountdoc v1\n"),
     });
     // Visibility of system status (constitution V): an uploading
     // indicator with progress, then explicit success feedback.
@@ -276,7 +289,7 @@ test("US3: bob uploads, overwrites and deletes a file in the projects folder sha
 
     // The object landed under alice's prefix: her own listing of
     // projects (the single source of truth, quickstart scenario 3) shows
-    // notes.txt too.
+    // mountfile.txt too.
     const afterUpload = await aliceApi.get(
       "/api/files?prefix=projects&space=own",
     );
@@ -294,7 +307,7 @@ test("US3: bob uploads, overwrites and deletes a file in the projects folder sha
     await page.locator('input[type="file"]').setInputFiles({
       name: fileName,
       mimeType: "text/plain",
-      buffer: Buffer.from("project notes v2\n"),
+      buffer: Buffer.from("project mountdoc v2\n"),
     });
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toContainText(fileName);
@@ -310,13 +323,13 @@ test("US3: bob uploads, overwrites and deletes a file in the projects folder sha
 
     // The replacement content is what the sharer's object now holds:
     // downloading from the mount returns v2.
-    const downloadPromise = page.waitForEvent("download");
-    await row.getByRole("button", { name: "Download" }).click();
-    const download = await downloadPromise;
+    const download = await downloadFromPopup(page, () =>
+      row.getByRole("button", { name: "Download" }).click(),
+    );
     const content = await readStream(await download.createReadStream());
-    expect(content.toString()).toBe("project notes v2\n");
+    expect(content.toString()).toBe("project mountdoc v2\n");
 
-    // US3 sc.4: bob deletes notes.txt; it disappears from the mount...
+    // US3 sc.4: bob deletes mountfile.txt; it disappears from the mount...
     await row.getByRole("button", { name: "Delete" }).click();
     const deleteDialog = page.getByRole("alertdialog");
     await expect(deleteDialog).toContainText(fileName);
@@ -587,14 +600,15 @@ test("responsive: bob's mount view is usable with no overflow at 375, 768 and 12
     await expectNoHorizontalOverflow(page);
 
     // At the narrowest width the download control actually works: the
-    // mount-relative presigned URL returns the sharer's bytes (US2 sc.2).
+    // mount-relative presigned URL opens in a new window and returns the
+    // sharer's bytes (US2 sc.2).
     if (viewport.width === 375) {
-      const downloadPromise = page.waitForEvent("download");
-      await page
-        .locator("li.list-row", { hasText: "report.pdf" })
-        .getByRole("button", { name: "Download" })
-        .click();
-      const download = await downloadPromise;
+      const download = await downloadFromPopup(page, () =>
+        page
+          .locator("li.list-row", { hasText: "report.pdf" })
+          .getByRole("button", { name: "Download" })
+          .click(),
+      );
       const content = await readStream(await download.createReadStream());
       expect(content.toString()).toBe("%PDF-1.4 report");
     }
