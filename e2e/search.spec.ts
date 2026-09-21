@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import type { BrowserContext, Page } from "@playwright/test";
 import {
+  downloadFromPopup,
   expectNoHorizontalOverflow,
   expectSignedInAs,
   readStream,
@@ -267,11 +268,11 @@ test("US3: a recipient's search shows the shared label and downloads from the sh
   // covered by share-folder.spec; search resolves the share live).
   await startSignedInAs(page, context, "alice", "browse-session");
   const shareRes = await page.request.post("/api/shares", {
-    data: { folder: "docs/", recipientUsername: "bob" },
+    data: { folder: "docs/", recipientUsername: "flo" },
   });
   expect([201, 409]).toContain(shareRes.status());
 
-  await startSignedInAs(page, context, "bob", "bob-session");
+  await startSignedInAs(page, context, "flo", "flo-session");
   await search(page, "notes");
 
   // The sharer's indexed file appears labelled "Shared by alice" (US3
@@ -281,12 +282,11 @@ test("US3: a recipient's search shows the shared label and downloads from the sh
   await expect(row).toContainText("Shared by alice");
 
   // Download from the result is issued against the shared space and
-  // succeeds (US3 sc.3).
-  const downloadPromise = page.waitForEvent("download");
-  await row.getByRole("button", { name: "Download" }).click();
-  const content = await readStream(
-    await (await downloadPromise).createReadStream(),
+  // succeeds (US3 sc.3): the presigned URL opens in a new window.
+  const download = await downloadFromPopup(page, () =>
+    row.getByRole("button", { name: "Download" }).click(),
   );
+  const content = await readStream(await download.createReadStream());
   expect(content.toString()).toBe("hello from notes");
 });
 
@@ -296,7 +296,7 @@ test("US3: revoking the share removes its search results immediately", async ({
 }) => {
   await startSignedInAs(page, context, "alice", "browse-session");
   const shareRes = await page.request.post("/api/shares", {
-    data: { folder: "photos/", recipientUsername: "bob" },
+    data: { folder: "photos/", recipientUsername: "flo" },
   });
   expect([201, 409]).toContain(shareRes.status());
   const sharesBody = (await (
@@ -304,11 +304,11 @@ test("US3: revoking the share removes its search results immediately", async ({
   ).json()) as ListSharesBody;
   const share = sharesBody.outgoing.find(
     (entry) =>
-      entry.folderName === "photos" && entry.recipient.username === "bob",
+      entry.folderName === "photos" && entry.recipient.username === "flo",
   );
   expect(share).toBeDefined();
 
-  await startSignedInAs(page, context, "bob", "bob-session");
+  await startSignedInAs(page, context, "flo", "flo-session");
   await search(page, "pic");
   const row = page.locator("li.list-row", { hasText: "pic.jpg" });
   await expect(row).toBeVisible({ timeout: INDEX_TIMEOUT });
@@ -320,7 +320,7 @@ test("US3: revoking the share removes its search results immediately", async ({
   const revokeRes = await page.request.delete(`/api/shares/${share?.id}`);
   expect(revokeRes.status()).toBe(204);
 
-  await startSignedInAs(page, context, "bob", "bob-session");
+  await startSignedInAs(page, context, "flo", "flo-session");
   await search(page, "pic");
   await expect(page.getByText(/No files match/)).toBeVisible({
     timeout: INDEX_TIMEOUT,
@@ -334,7 +334,7 @@ test("US3: a non-recipient's search never returns the sharer's files", async ({
 }) => {
   await startSignedInAs(page, context, "alice", "browse-session");
   const shareRes = await page.request.post("/api/shares", {
-    data: { folder: "docs/", recipientUsername: "bob" },
+    data: { folder: "docs/", recipientUsername: "flo" },
   });
   expect([201, 409]).toContain(shareRes.status());
 

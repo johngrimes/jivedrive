@@ -289,6 +289,18 @@ const erin = createUser(db, {
 });
 createSession(db, erin.id, { token: "erin-session" });
 
+// A fourth non-admin user dedicated to search.spec's US3 share tests:
+// she receives alice's `docs` and `photos` shares and searches inside
+// them. bob is not usable here: share-folder.spec US5 deletes him while
+// the suite runs fullyParallel, and removing a user cascades his
+// incoming shares away mid-test.
+const flo = createUser(db, {
+  username: "flo",
+  bucket: "jivedrive-prod",
+  prefix: "users/flo/",
+});
+createSession(db, flo.id, { token: "flo-session" });
+
 // Bob's space: a root file and a same-named `projects` folder of his own,
 // so the US2 mount ("projects", shared by alice) renders alongside a
 // folder bob already owns (US2 collision scenario).

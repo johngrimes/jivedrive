@@ -312,7 +312,10 @@ export function FilesPage() {
     setActionError(null);
     try {
       const { url } = await getDownloadUrl(file.key, fileSpace);
-      window.location.assign(url);
+      // Open in a new window so the browser renders the file (or, for
+      // types it cannot display, downloads it) without losing the
+      // user's place in the listing.
+      window.open(url, "_blank");
     } catch (err) {
       const apiError = err as ApiClientError;
       setActionError(

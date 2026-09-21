@@ -1,25 +1,28 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import {
+  downloadFromPopup,
   expectNoHorizontalOverflow,
   expectSignedInAs,
   readStream,
 } from "./helpers";
 
 /**
- * Read the body of a download triggered by the given row's Download action.
+ * Read the body of a download triggered by the given row's Download
+ * action: the app opens the presigned URL in a new window, so the
+ * download is captured from that popup.
  *
  * @param page - the page
  * @param rowText - text identifying the file row
  * @returns the download and its content
  */
 async function downloadFromRow(page: Page, rowText: string) {
-  const downloadPromise = page.waitForEvent("download");
-  await page
-    .locator("li.list-row", { hasText: rowText })
-    .getByRole("button", { name: "Download" })
-    .click();
-  const download = await downloadPromise;
+  const download = await downloadFromPopup(page, () =>
+    page
+      .locator("li.list-row", { hasText: rowText })
+      .getByRole("button", { name: "Download" })
+      .click(),
+  );
   const content = await readStream(await download.createReadStream());
   return { download, content };
 }

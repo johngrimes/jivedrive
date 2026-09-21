@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { BrowserContext, Locator, Page, TestInfo } from "@playwright/test";
 import {
+  downloadFromPopup,
   enableVirtualAuthenticator,
   expectNoHorizontalOverflow,
   expectSignedInAs,
@@ -180,13 +181,14 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     await expect(page.getByText("notes.txt")).toBeVisible();
 
     // US2 sc.4: the icon button triggers the same download the text link
-    // did: the browser fetches the presigned URL and gets the bytes.
-    const downloadPromise = page.waitForEvent("download");
-    await page
-      .locator("li.list-row", { hasText: "notes.txt" })
-      .getByRole("button", { name: "Download" })
-      .click();
-    const download = await downloadPromise;
+    // did: the browser opens the presigned URL in a new window and gets
+    // the bytes there.
+    const download = await downloadFromPopup(page, () =>
+      page
+        .locator("li.list-row", { hasText: "notes.txt" })
+        .getByRole("button", { name: "Download" })
+        .click(),
+    );
     const content = await readStream(await download.createReadStream());
     expect(download.suggestedFilename()).toBe("notes.txt");
     expect(download.url()).toContain("localhost:5299");

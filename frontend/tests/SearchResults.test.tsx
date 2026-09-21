@@ -296,6 +296,29 @@ async function renderFilesPage(
   return { fetchMock, container };
 }
 
+describe("Files page download opens a new window", () => {
+  it("opens a listing row's presigned URL in a new window", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const { container } = await renderFilesPage({
+      results: [],
+      capped: false,
+    });
+
+    const row = Array.from(container.querySelectorAll("li.list-row")).find(
+      (el) => el.textContent?.includes("notes.txt"),
+    ) as HTMLElement;
+    expect(row).toBeDefined();
+    await act(async () => {
+      row
+        .querySelector('button[aria-label="Download"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(open).toHaveBeenCalledWith("https://storage.test/object", "_blank");
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("Files page search wiring (T009/T012)", () => {
   it("swaps the folder listing for results on submit and restores it on clear", async () => {
     const { container } = await renderFilesPage({
@@ -520,6 +543,25 @@ describe("SearchResults shared results (T020)", () => {
       ),
       expect.anything(),
     );
+  });
+
+  it("opens the result's presigned URL in a new window on download", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const { container } = await renderFilesPage({
+      results: [sharedResult],
+      capped: false,
+    });
+    await submitSearch(container);
+
+    const row = container.querySelector("li.list-row") as HTMLElement;
+    await act(async () => {
+      (
+        row.querySelector('button[aria-label="Download plan.txt"]') ??
+        row.querySelector("button")
+      )?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(open).toHaveBeenCalledWith("https://storage.test/object", "_blank");
   });
 
   it("navigates into the shared space from a result click", async () => {

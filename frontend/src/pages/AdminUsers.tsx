@@ -728,7 +728,7 @@ export function AdminUsersPage() {
                           {scan.state}
                         </span>
                       </td>
-                      <td className="hidden whitespace-nowrap md:table-cell">
+                      <td className="hidden md:table-cell">
                         {scan.state === "idle"
                           ? "Never"
                           : scan.finishedAt

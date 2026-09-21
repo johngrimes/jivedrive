@@ -79,16 +79,17 @@ async function createInvite(page: Page, username: string): Promise<void> {
 
 /**
  * A username unique to this test attempt. The e2e server keeps one in-memory
- * database for the whole run, retries included, and invite creation rejects a
- * duplicate pending/expired invite (409); a retry after a failed attempt that
- * created the invite must therefore not reuse that username.
+ * database for the whole run, retries included, and invite creation rejects
+ * a duplicate pending/expired invite (409). Seeded users (e.g. erin) and
+ * other parallel specs collide with a bare base name, so every attempt —
+ * not just retries — carries a distinct suffix.
  *
  * @param base - the readable base username
  * @param testInfo - test info providing the retry count
  * @returns the attempt-unique username
  */
 function inviteUsername(base: string, testInfo: TestInfo): string {
-  return testInfo.retry > 0 ? `${base}-r${testInfo.retry}` : base;
+  return `${base}-r${testInfo.retry}`;
 }
 
 /**

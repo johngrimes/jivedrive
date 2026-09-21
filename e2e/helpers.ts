@@ -1,5 +1,10 @@
 import { expect } from "@playwright/test";
-import type { BrowserContext, CDPSession, Page } from "@playwright/test";
+import type {
+  BrowserContext,
+  CDPSession,
+  Download,
+  Page,
+} from "@playwright/test";
 
 /**
  * Enable a virtual WebAuthn authenticator on the page's context so passkey
@@ -118,4 +123,26 @@ export async function readStream(
     chunks.push(Buffer.from(chunk as Uint8Array));
   }
   return Buffer.concat(chunks);
+}
+
+/**
+ * Run a download click and capture the download it triggers. The app
+ * opens the presigned URL in a new window (window.open); the mock S3
+ * serves attachment disposition, so Chromium abandons the popup and
+ * attributes the download to the original page. Race both attributions:
+ * the download may be reported on the popup or on the main page.
+ *
+ * @param page - the page the download button lives on
+ * @param click - performs the actual click
+ * @returns the download the new window produced
+ */
+export async function downloadFromPopup(
+  page: Page,
+  click: () => Promise<void>,
+): Promise<Download> {
+  const popupPromise = page.waitForEvent("popup");
+  const pageDownload = page.waitForEvent("download");
+  await click();
+  const popup = await popupPromise;
+  return Promise.race([pageDownload, popup.waitForEvent("download")]);
 }
