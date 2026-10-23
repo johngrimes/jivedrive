@@ -15,7 +15,9 @@ import type { Context, MiddlewareHandler } from "hono";
 import type { S3Client } from "@aws-sdk/client-s3";
 import {
   assertKeyInScope,
+  createFolderMarker,
   deleteObject,
+  folderExists,
   headObject,
   listObjects,
   presignedGetUrl,
@@ -66,6 +68,9 @@ const SEARCH_QUERY_MAX_LENGTH = 200;
 
 /** Lifetime of an upload (presigned PUT) URL in seconds (15 minutes). */
 const UPLOAD_URL_TTL_SECONDS = 15 * 60;
+
+/** Maximum folder name length in characters (code points), after trimming. */
+const FOLDER_NAME_MAX_LENGTH = 255;
 
 /** Accepted share-link lifetimes (seconds), keyed by the contract's
  * expiresIn enum. The values document each lifetime's duration; the
@@ -562,6 +567,98 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
       { url, key: scope.mountRelative ? key.slice(scope.prefix.length) : key },
       200,
     );
+  });
+
+  // Create a folder (issue #11) by writing a zero-byte "<folder>/" marker
+  // object, so an empty folder persists. Anywhere the caller can upload,
+  // including a shared folder. The name is trimmed and otherwise stored
+  // verbatim; it must be a single path segment of at most 255 characters.
+  // Any object under the folder key (a marker or nested files) means the
+  // folder exists: 409. A file named like the folder does not conflict:
+  // S3 keeps "X" and "X/" distinct and the listing shows both.
+  app.post("/folders", async (c) => {
+    const user = c.get("user");
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return jsonError(c, 400, "Invalid JSON body", "bad_request");
+    }
+    const {
+      space: spaceValue,
+      folder,
+      name: rawName,
+    } = (body ?? {}) as { space?: unknown; folder?: unknown; name?: unknown };
+    const scope = resolveRequestSpace(
+      c,
+      db,
+      user,
+      spaceValue === undefined || typeof spaceValue === "string"
+        ? spaceValue
+        : null,
+    );
+    if (scope instanceof Response) return scope;
+    if (typeof folder !== "string" || typeof rawName !== "string") {
+      return jsonError(c, 400, "folder and name are required", "bad_request");
+    }
+    if (!isSafeRelativePrefix(folder)) {
+      return jsonError(
+        c,
+        400,
+        "The folder must stay within your space",
+        "invalid_folder",
+      );
+    }
+    const name = rawName.trim();
+    if (name === "" || name === "." || name === ".." || name.includes("/")) {
+      return jsonError(
+        c,
+        400,
+        'The folder name must not be empty, "." or "..", or contain "/"',
+        "invalid_folder_name",
+      );
+    }
+    if ([...name].length > FOLDER_NAME_MAX_LENGTH) {
+      return jsonError(
+        c,
+        400,
+        `The folder name must be at most ${FOLDER_NAME_MAX_LENGTH} characters`,
+        "invalid_folder_name",
+      );
+    }
+
+    // Scope enforcement (constitution IV): the parent folder is validated
+    // above and the name is a single segment, so the key stays inside the
+    // effective scope; the S3 helpers assert it again before any call.
+    const normalizedFolder =
+      folder === "" ? "" : folder.replace(/\/+$/, "") + "/";
+    const relativePrefix = normalizedFolder + name + "/";
+    const folderKey = scope.prefix + relativePrefix;
+
+    try {
+      if (await folderExists(s3Client, scope.bucket, scope.prefix, folderKey)) {
+        return jsonError(
+          c,
+          409,
+          `A folder named "${name}" already exists`,
+          "already_exists",
+        );
+      }
+      await createFolderMarker(s3Client, scope.bucket, scope.prefix, folderKey);
+    } catch (error) {
+      if (error instanceof RangeError) {
+        return jsonError(
+          c,
+          400,
+          "The folder is outside your space",
+          "out_of_scope",
+        );
+      }
+      throw error;
+    }
+    // The prefix is relative to the space (mount-relative in a shared
+    // space), the same shape the listing's `prefix` parameter takes.
+    return c.json({ name, prefix: relativePrefix }, 201);
   });
 
   app.post("/share-url", async (c) => {

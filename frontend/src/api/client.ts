@@ -327,6 +327,36 @@ export function postUploadUrl(
   });
 }
 
+/** Response of POST /api/files/folders. */
+export interface CreateFolderResponse {
+  /** The folder name as stored (trimmed). */
+  name: string;
+  /** The new folder's prefix relative to the space, ending with "/". */
+  prefix: string;
+}
+
+/**
+ * Create a folder inside a folder of a space. The server writes a
+ * zero-byte marker object, so the folder persists while empty.
+ *
+ * @param folder - parent folder relative to the space ("" for the root)
+ * @param name - folder name; trimmed server-side, must be a single segment
+ * @param space - the space to create in; defaults to the caller's own
+ * @returns the stored name and the new folder's relative prefix
+ * @throws {ApiClientError} on failure; a 409 carries code "already_exists",
+ *   an invalid name code "invalid_folder_name"
+ */
+export function createFolder(
+  folder: string,
+  name: string,
+  space: Space = "own",
+): Promise<CreateFolderResponse> {
+  return apiFetch<CreateFolderResponse>("/api/files/folders", {
+    method: "POST",
+    body: JSON.stringify({ folder, name, space }),
+  });
+}
+
 /**
  * Obtain a short-lived presigned GET URL that downloads a file.
  *

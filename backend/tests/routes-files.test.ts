@@ -1772,3 +1772,248 @@ describe("shared-space upload and delete (T026)", () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe("POST /api/files/folders", () => {
+  /**
+   * A handler for a folder that does not exist yet: the existence probe
+   * lists nothing and the marker PUT succeeds.
+   */
+  function newFolderHandler(): (name: string) => unknown {
+    return (name) => {
+      if (name === "ListObjectsV2Command") return { IsTruncated: false };
+      expect(name).toBe("PutObjectCommand");
+      return {};
+    };
+  }
+
+  /** POST a create-folder request with a signed-in session cookie. */
+  async function postFolder(
+    app: TestApp,
+    body: unknown,
+    cookie = aliceCookie,
+  ): Promise<Response> {
+    return app.request("/api/files/folders", {
+      method: "POST",
+      headers: { cookie, "Content-Type": "application/json" },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+  }
+
+  it("creates a folder marker at the root of the own space", async () => {
+    const { app, calls } = createFilesApp(newFolderHandler());
+
+    const res = await postFolder(app, { folder: "", name: "Reports" });
+
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ name: "Reports", prefix: "Reports/" });
+    // Probe first, then exactly one zero-byte marker write.
+    expect(calls.map((call) => call.name)).toEqual([
+      "ListObjectsV2Command",
+      "PutObjectCommand",
+    ]);
+    expect(calls[0]?.input).toMatchObject({
+      Bucket: bucket,
+      Prefix: "users/alice/Reports/",
+    });
+    expect(calls[1]?.input).toMatchObject({
+      Bucket: bucket,
+      Key: "users/alice/Reports/",
+      ContentLength: 0,
+    });
+  });
+
+  it("creates a nested folder, normalising the parent folder", async () => {
+    const { app, calls } = createFilesApp(newFolderHandler());
+
+    for (const folder of ["docs", "docs/", "docs//"]) {
+      const res = await postFolder(app, { folder, name: "2026" });
+      expect(res.status).toBe(201);
+      expect(await res.json()).toEqual({ name: "2026", prefix: "docs/2026/" });
+    }
+    const keys = calls
+      .filter((call) => call.name === "PutObjectCommand")
+      .map((call) => call.input.Key);
+    expect(keys).toEqual([
+      "users/alice/docs/2026/",
+      "users/alice/docs/2026/",
+      "users/alice/docs/2026/",
+    ]);
+  });
+
+  it("trims the name and keeps spaces and special characters verbatim", async () => {
+    const { app, calls } = createFilesApp(newFolderHandler());
+
+    const res = await postFolder(app, { folder: "", name: "  My stuff #1?  " });
+
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({
+      name: "My stuff #1?",
+      prefix: "My stuff #1?/",
+    });
+    expect(calls[1]?.input.Key).toBe("users/alice/My stuff #1?/");
+  });
+
+  it("refuses a name already used by a folder without writing", async () => {
+    const { app, calls } = createFilesApp((name) => {
+      expect(name).toBe("ListObjectsV2Command");
+      // A folder made only of nested files (no marker) still exists.
+      return {
+        Contents: [{ Key: "users/alice/docs/a.txt" }],
+        IsTruncated: true,
+      };
+    });
+
+    const res = await postFolder(app, { folder: "", name: "docs" });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: 'A folder named "docs" already exists',
+      code: "already_exists",
+    });
+    expect(calls.map((call) => call.name)).toEqual(["ListObjectsV2Command"]);
+  });
+
+  it("allows a folder named like an existing file (S3 keeps X and X/ apart)", async () => {
+    const { app, calls } = createFilesApp(newFolderHandler());
+
+    const res = await postFolder(app, { folder: "", name: "notes.txt" });
+
+    expect(res.status).toBe(201);
+    // The probe looks under "notes.txt/" only, never at the file key.
+    expect(calls[0]?.input.Prefix).toBe("users/alice/notes.txt/");
+  });
+
+  it("rejects invalid names without touching storage", async () => {
+    const { app, calls } = createFilesApp(newFolderHandler());
+
+    for (const name of [
+      "",
+      "   ",
+      ".",
+      "..",
+      " .. ",
+      "a/b",
+      "/",
+      "trailing/",
+      "x".repeat(256),
+    ]) {
+      const res = await postFolder(app, { folder: "", name });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "invalid_folder_name" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("accepts a name of exactly 255 characters, counted after trimming", async () => {
+    const { app } = createFilesApp(newFolderHandler());
+
+    const longest = "é".repeat(255);
+    const res = await postFolder(app, { folder: "", name: ` ${longest} ` });
+
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ name: longest, prefix: `${longest}/` });
+  });
+
+  it("rejects a parent folder that escapes the space without touching storage", async () => {
+    const { app, calls } = createFilesApp(newFolderHandler());
+
+    for (const folder of ["../bob", "/etc", "a/../../bob", ".."]) {
+      const res = await postFolder(app, { folder, name: "x" });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "invalid_folder" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects a malformed request body", async () => {
+    const { app, calls } = createFilesApp(newFolderHandler());
+
+    const badBodies: unknown[] = [
+      {},
+      { folder: "" },
+      { name: "x" },
+      { folder: 1, name: "x" },
+      { folder: "", name: 7 },
+      { folder: "", name: "x", space: 5 },
+      "not json",
+    ];
+    for (const body of badBodies) {
+      const res = await postFolder(app, body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "bad_request" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("requires a signed-in session", async () => {
+    const { app, calls } = createFilesApp(newFolderHandler());
+
+    const res = await app.request("/api/files/folders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder: "", name: "x" }),
+    });
+
+    expect(res.status).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("creates a folder inside a shared folder with the sharer's full key", async () => {
+    const { app, calls, shareId } = createSharedApp(newFolderHandler());
+
+    const res = await postFolder(
+      app,
+      { space: `shared:${shareId}`, folder: "docs", name: "drafts" },
+      bobCookie,
+    );
+
+    expect(res.status).toBe(201);
+    // Mount-relative prefix: the sharer's internal prefix never leaks (R2).
+    expect(await res.json()).toEqual({
+      name: "drafts",
+      prefix: "docs/drafts/",
+    });
+    expect(calls[0]?.input.Prefix).toBe("users/alice/projects/docs/drafts/");
+    expect(calls[1]?.input).toMatchObject({
+      Bucket: bucket,
+      Key: "users/alice/projects/docs/drafts/",
+    });
+  });
+
+  it("refuses foreign, unknown and malformed spaces without touching storage", async () => {
+    const { app, calls, foreignShareId } = createSharedApp(newFolderHandler());
+
+    for (const space of [`shared:${foreignShareId}`, "shared:nope"]) {
+      const res = await postFolder(
+        app,
+        { space, folder: "", name: "x" },
+        bobCookie,
+      );
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ code: "not_found" });
+    }
+    const malformed = await postFolder(
+      app,
+      { space: "shared:", folder: "", name: "x" },
+      bobCookie,
+    );
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toMatchObject({ code: "bad_request" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects a parent folder that escapes the shared folder", async () => {
+    const { app, calls, shareId } = createSharedApp(newFolderHandler());
+
+    for (const folder of ["..", "../x", "a/../../b"]) {
+      const res = await postFolder(
+        app,
+        { space: `shared:${shareId}`, folder, name: "x" },
+        bobCookie,
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "invalid_folder" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+});

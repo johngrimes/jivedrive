@@ -263,3 +263,56 @@ export async function presignedPutUrl(
     },
   );
 }
+
+/**
+ * Report whether a folder exists: true when at least one object (a
+ * folder marker or any nested object) sits under the folder key. The
+ * probe is recursive (no delimiter) and reads a single key.
+ *
+ * @param client - S3 client
+ * @param bucket - bucket name
+ * @param userPrefix - the user's normalised prefix
+ * @param folderKey - full folder key, ending with "/"
+ * @returns true when any object exists under the folder key
+ * @throws {RangeError} when the key is outside the user's prefix
+ */
+export async function folderExists(
+  client: S3Client,
+  bucket: string,
+  userPrefix: string,
+  folderKey: string,
+): Promise<boolean> {
+  assertKeyInScope(userPrefix, folderKey);
+  const output = await client.send(
+    new ListObjectsV2Command({ Bucket: bucket, Prefix: folderKey, MaxKeys: 1 }),
+  );
+  return (output.Contents?.length ?? 0) > 0;
+}
+
+/**
+ * Create a folder by writing a zero-byte marker object at the folder key.
+ * S3 has no folders: the marker makes an empty folder appear in its
+ * parent's listing (as a common prefix) and is hidden from its own.
+ *
+ * @param client - S3 client
+ * @param bucket - bucket name
+ * @param userPrefix - the user's normalised prefix
+ * @param folderKey - full folder key, ending with "/"
+ * @throws {RangeError} when the key is outside the user's prefix
+ */
+export async function createFolderMarker(
+  client: S3Client,
+  bucket: string,
+  userPrefix: string,
+  folderKey: string,
+): Promise<void> {
+  assertKeyInScope(userPrefix, folderKey);
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: folderKey,
+      Body: "",
+      ContentLength: 0,
+    }),
+  );
+}
