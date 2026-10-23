@@ -15,6 +15,7 @@ import { useSession } from "../auth/sessionContext";
 import { DeleteDialog } from "../components/DeleteDialog";
 import { Breadcrumbs, FileListing } from "../components/FileListing";
 import type { MountRow } from "../components/FileListing";
+import { MoveDialog } from "../components/MoveDialog";
 import { SearchResults } from "../components/SearchResults";
 import { ShareModal } from "../components/ShareModal";
 import { NewFolderControl } from "../components/NewFolderControl";
@@ -91,6 +92,19 @@ export function FilesPage() {
   const [retryKey, setRetryKey] = useState(0);
   const [shareFile, setShareFile] = useState<FileEntry | null>(null);
   const [deleteFile, setDeleteFile] = useState<FileEntry | null>(null);
+  /**
+   * The file whose move dialog is open, with the space it lives in and
+   * its current folder relative to that space ("" or "a/b/"), or null.
+   */
+  const [moveTarget, setMoveTarget] = useState<{
+    file: FileEntry;
+    space: Space;
+    folder: string;
+  } | null>(null);
+  /** Inline success message for the last completed move, or null. */
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  /** Bumped after a move from search results to re-run the search. */
+  const [searchRun, setSearchRun] = useState(0);
   const [shares, setShares] = useState<ListSharesResponse | null>(null);
   /** The folder (base name) whose share dialog is open, or null. */
   const [shareFolder, setShareFolder] = useState<string | null>(null);
@@ -115,6 +129,7 @@ export function FilesPage() {
     setListing(null);
     setListingPrefix(null);
     setError(null);
+    setActionSuccess(null);
   }
   /**
    * Re-fetch the shares list after an add or revoke in the share dialog.
@@ -311,6 +326,7 @@ export function FilesPage() {
     fileSpace: Space,
   ): Promise<void> {
     setActionError(null);
+    setActionSuccess(null);
     try {
       const { url } = await getDownloadUrl(file.key, fileSpace);
       // Open in a new window so the browser renders the file (or, for
@@ -335,6 +351,7 @@ export function FilesPage() {
     event.preventDefault();
     const q = queryInput.trim();
     if (q === "") return;
+    setActionSuccess(null);
     setQuery(q);
   }
 
@@ -353,6 +370,49 @@ export function FilesPage() {
       return;
     }
     navigate(result.space, result.path === "" ? "" : `${result.path}/`);
+  }
+
+  /**
+   * Name a space's root for the move dialog and its success message:
+   * "Home" for the own space, the mount's folder name for a share.
+   *
+   * @param target - the space
+   * @returns the root label
+   */
+  function spaceRootName(target: Space): string {
+    if (target === "own") return "Home";
+    const id = target.slice("shared:".length);
+    return (
+      (shares?.incoming ?? []).find((share) => share.id === id)?.folderName ??
+      "Shared folder"
+    );
+  }
+
+  /**
+   * Report a completed move and refresh the view: the folder listing
+   * re-fetches (the file leaves it) and an active search re-runs.
+   *
+   * @param fileName - the moved file's name
+   * @param target - the space the move happened in
+   * @param destination - the destination folder ("" for the root)
+   */
+  function handleMoved(
+    fileName: string,
+    target: Space,
+    destination: string,
+  ): void {
+    const segments = destination.split("/").filter(Boolean);
+    const label =
+      target === "own"
+        ? segments.length === 0
+          ? "Home"
+          : segments.join("/")
+        : [spaceRootName(target), ...segments].join("/");
+    setMoveTarget(null);
+    setActionError(null);
+    setActionSuccess(`Moved "${fileName}" to ${label}`);
+    refreshListing();
+    setSearchRun((run) => run + 1);
   }
 
   if (sessionLoading) {
@@ -412,7 +472,10 @@ export function FilesPage() {
             <button
               type="button"
               className="btn min-h-11"
-              onClick={() => setQuery(null)}
+              onClick={() => {
+                setActionSuccess(null);
+                setQuery(null);
+              }}
             >
               Clear
             </button>
@@ -430,6 +493,11 @@ export function FilesPage() {
         {actionError && (
           <p className="alert alert-error mb-3" role="alert">
             {actionError}
+          </p>
+        )}
+        {actionSuccess && (
+          <p className="alert alert-success mb-3 break-all" role="status">
+            {actionSuccess}
           </p>
         )}
 
@@ -473,17 +541,26 @@ export function FilesPage() {
             onDownload={(file) => void handleDownload(file, space)}
             onShare={(file) => {
               setDialogSpace(space);
+              setActionSuccess(null);
               setShareFile(file);
+            }}
+            onMove={(file) => {
+              setActionSuccess(null);
+              setMoveTarget({ file, space, folder: prefix });
             }}
             onDelete={(file) => {
               setDialogSpace(space);
+              setActionSuccess(null);
               setDeleteFile(file);
             }}
             onLoadMore={() => void loadMore()}
             onRetry={retry}
             onShareFolder={
               space === "own"
-                ? (folder) => setShareFolder(prefix + folder + "/")
+                ? (folder) => {
+                    setActionSuccess(null);
+                    setShareFolder(prefix + folder + "/");
+                  }
                 : undefined
             }
             sharedFolders={sharedFolders}
@@ -492,6 +569,7 @@ export function FilesPage() {
           />
         ) : (
           <SearchResults
+            key={searchRun}
             query={query}
             onOpenResult={openResult}
             onDownload={(result) =>
@@ -499,10 +577,20 @@ export function FilesPage() {
             }
             onShare={(result) => {
               setDialogSpace(result.space);
+              setActionSuccess(null);
               setShareFile(asFileEntry(result));
+            }}
+            onMove={(result) => {
+              setActionSuccess(null);
+              setMoveTarget({
+                file: asFileEntry(result),
+                space: result.space,
+                folder: result.path === "" ? "" : `${result.path}/`,
+              });
             }}
             onDelete={(result) => {
               setDialogSpace(result.space);
+              setActionSuccess(null);
               setDeleteFile(asFileEntry(result));
             }}
             onShareFolder={(result) => setShareFolder(result.key)}
@@ -538,6 +626,18 @@ export function FilesPage() {
             refreshListing();
           }}
           onClose={() => setDeleteFile(null)}
+        />
+      )}
+      {moveTarget && (
+        <MoveDialog
+          file={moveTarget.file}
+          space={moveTarget.space}
+          folder={moveTarget.folder}
+          rootLabel={spaceRootName(moveTarget.space)}
+          onMoved={(destination) =>
+            handleMoved(moveTarget.file.name, moveTarget.space, destination)
+          }
+          onClose={() => setMoveTarget(null)}
         />
       )}
     </div>

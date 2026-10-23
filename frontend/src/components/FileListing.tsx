@@ -4,7 +4,7 @@
  *
  * Rebuilt on daisyUI primitives (T011): breadcrumbs, table, link, btn,
  * skeleton, alert (US2). Folder rows are links (they navigate); file rows
- * carry button Download/Share/Delete actions with octicons — icon+text at
+ * carry button Download/Share/Move/Delete actions with octicons — icon+text at
  * `sm` and up, icon-only below with the accessible name on the button
  * (FR-007). Size and Modified relocate below `sm` into a secondary line
  * under the file name (FR-005) and return to their own columns at `sm`+,
@@ -15,6 +15,7 @@ import {
   DownloadIcon,
   FileDirectoryFillIcon,
   FileIcon,
+  FileMovedIcon,
   HomeIcon,
   PeopleIcon,
   ShareAndroidIcon,
@@ -206,6 +207,11 @@ export interface FileListingProps {
    * prop).
    */
   onDelete?: (file: FileEntry) => void;
+  /**
+   * Open the move dialog for a file. Optional: without a handler no
+   * move button renders.
+   */
+  onMove?: (file: FileEntry) => void;
   /** Load the next page. */
   onLoadMore: () => void;
   /** Retry the failed initial load. */
@@ -250,6 +256,7 @@ export function FileListing({
   hasParent,
   onOpenFolder,
   onDownload,
+  onMove,
   onShare,
   onDelete,
   onLoadMore,
@@ -381,6 +388,17 @@ export function FileListing({
                 <ShareAndroidIcon aria-hidden="true" />
                 <span className="hidden sm:inline">Share</span>
               </button>
+              {onMove && (
+                <button
+                  type="button"
+                  className="btn btn-accent btn-sm btn-soft min-h-11"
+                  aria-label="Move"
+                  onClick={() => onMove(file)}
+                >
+                  <FileMovedIcon aria-hidden="true" />
+                  <span className="hidden sm:inline">Move</span>
+                </button>
+              )}
               {onDelete && (
                 <button
                   type="button"

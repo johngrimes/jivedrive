@@ -14,6 +14,7 @@ import {
   DownloadIcon,
   FileDirectoryFillIcon,
   FileIcon,
+  FileMovedIcon,
   PeopleIcon,
   ShareAndroidIcon,
   TrashIcon,
@@ -32,6 +33,8 @@ export interface SearchResultsProps {
   onDownload?: (result: SearchResult) => void;
   /** Open the share-link modal for a file result. */
   onShare?: (result: SearchResult) => void;
+  /** Open the move dialog for a file result, within the result's space. */
+  onMove?: (result: SearchResult) => void;
   /** Open the delete confirmation for a file result. */
   onDelete?: (result: SearchResult) => void;
   /**
@@ -110,6 +113,7 @@ export function SearchResults({
   onOpenResult,
   onDownload,
   onShare,
+  onMove,
   onDelete,
   onSessionExpired,
   onShareFolder,
@@ -291,6 +295,17 @@ export function SearchResults({
                     >
                       <ShareAndroidIcon aria-hidden="true" />
                       <span className="hidden sm:inline">Share</span>
+                    </button>
+                  )}
+                  {result.match !== "folder" && onMove && (
+                    <button
+                      type="button"
+                      className="btn btn-accent btn-sm btn-soft min-h-11"
+                      aria-label={`Move ${result.name}`}
+                      onClick={() => onMove(result)}
+                    >
+                      <FileMovedIcon aria-hidden="true" />
+                      <span className="hidden sm:inline">Move</span>
                     </button>
                   )}
                   {result.match !== "folder" && onDelete && (

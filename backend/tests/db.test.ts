@@ -38,6 +38,7 @@ import {
   listUsers,
   refreshInvite,
   markInviteClaimed,
+  moveObjectRecords,
   normalizePrefix,
   removeSearchDoc,
   searchFileNames,
@@ -1629,6 +1630,154 @@ describe("searchFileNames (T010)", () => {
     // LIKE wildcards in the query stay literal.
     expect(searchFileNames(db, alice.id, "%")).toEqual([]);
     expect(searchFileNames(db, alice.id, "_")).toEqual([]);
+  });
+});
+
+describe("moveObjectRecords", () => {
+  const bucket = "jivedrive-prod";
+  const fromKey = "users/alice/inbox/report.pdf";
+  const toKey = "users/alice/archive/report.pdf";
+
+  it("points every share link of the moved object at its new key, keeping the tokens", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    // A recipient of a shared folder can mint links on the owner's
+    // objects, so links of every creator must follow the object.
+    const bob = seedUser(db, { username: "bob", prefix: "users/bob/" });
+    const aliceLink = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket,
+      objectKey: fromKey,
+      expiresIn: "7d",
+    });
+    const bobLink = createShareLink(db, {
+      ownerUserId: bob.id,
+      bucket,
+      objectKey: fromKey,
+      expiresIn: "1h",
+    });
+    const unrelated = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket,
+      objectKey: "users/alice/inbox/other.pdf",
+      expiresIn: "7d",
+    });
+
+    moveObjectRecords(db, { bucket, ownerUserId: alice.id, fromKey, toKey });
+
+    expect(getShareLinkByToken(db, aliceLink.token)?.objectKey).toBe(toKey);
+    expect(getShareLinkByToken(db, bobLink.token)?.objectKey).toBe(toKey);
+    expect(getShareLinkByToken(db, unrelated.token)?.objectKey).toBe(
+      "users/alice/inbox/other.pdf",
+    );
+    // The rekeyed link is the one the share-url dedupe finds next time.
+    expect(
+      findActiveShareLink(db, {
+        ownerUserId: alice.id,
+        bucket,
+        objectKey: toKey,
+        expiresIn: "7d",
+      })?.token,
+    ).toBe(aliceLink.token);
+  });
+
+  it("drops stale links already pointing at the destination key so they cannot serve the moved file", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    // A link minted for a since-deleted file at the destination key, with
+    // the same dedupe tuple as the moving object's link.
+    const stale = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket,
+      objectKey: toKey,
+      expiresIn: "7d",
+    });
+    const moving = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket,
+      objectKey: fromKey,
+      expiresIn: "7d",
+    });
+    // The same key in another bucket is a different object.
+    const otherBucket = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket: "other-bucket",
+      objectKey: toKey,
+      expiresIn: "7d",
+    });
+
+    moveObjectRecords(db, { bucket, ownerUserId: alice.id, fromKey, toKey });
+
+    expect(getShareLinkByToken(db, stale.token)).toBeNull();
+    expect(getShareLinkByToken(db, moving.token)?.objectKey).toBe(toKey);
+    expect(getShareLinkByToken(db, otherBucket.token)?.objectKey).toBe(toKey);
+  });
+
+  it("rekeys the owner's search entry so the extracted text is found at the new key", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob", prefix: "users/bob/" });
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: fromKey,
+      etag: '"r"',
+      size: 10,
+      fileName: "report.pdf",
+      body: "quarterly figures",
+    });
+    // A stale entry for a since-deleted object at the destination key.
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: toKey,
+      etag: '"old"',
+      size: 5,
+      fileName: "report.pdf",
+      body: "obsolete draft",
+    });
+    // Another user's index is keyed independently and stays untouched.
+    upsertSearchDoc(db, {
+      userId: bob.id,
+      key: fromKey,
+      etag: '"b"',
+      size: 1,
+      fileName: "report.pdf",
+      body: "bob text",
+    });
+
+    moveObjectRecords(db, { bucket, ownerUserId: alice.id, fromKey, toKey });
+
+    expect(getSearchDoc(db, alice.id, fromKey)).toBeNull();
+    expect(getSearchDoc(db, alice.id, toKey)).toEqual({
+      fileName: "report.pdf",
+      body: "quarterly figures",
+    });
+    expect(listSearchIndex(db, alice.id).map((e) => [e.key, e.etag])).toEqual([
+      [toKey, '"r"'],
+    ]);
+    expect(searchFileNames(db, alice.id, "report")).toEqual([
+      { key: toKey, fileName: "report.pdf" },
+    ]);
+    expect(getSearchDoc(db, bob.id, fromKey)?.body).toBe("bob text");
+  });
+
+  it("leaves the index without a destination entry when the object was never indexed", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: toKey,
+      etag: '"old"',
+      size: 5,
+      fileName: "report.pdf",
+      body: "obsolete draft",
+    });
+
+    moveObjectRecords(db, { bucket, ownerUserId: alice.id, fromKey, toKey });
+
+    // The stale destination text must not be attributed to the moved
+    // object; the next scan indexes it afresh.
+    expect(listSearchIndex(db, alice.id)).toEqual([]);
+    expect(searchFileNames(db, alice.id, "report")).toEqual([]);
   });
 });
 

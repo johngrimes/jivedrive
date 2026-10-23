@@ -592,6 +592,49 @@ describe("SearchResults shared results (T020)", () => {
   });
 });
 
+describe("SearchResults move action", () => {
+  it("renders a Move button per result that calls onMove with the result", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ results: [nestedResult], capped: false }),
+        ),
+    );
+    const onMove = vi.fn();
+    const container = renderResults({ onMove });
+    await flush();
+
+    const button = container.querySelector(
+      'button[aria-label="Move Q3-Report.pdf"]',
+    ) as HTMLButtonElement | null;
+    expect(button).not.toBeNull();
+    expect(button?.textContent).toContain("Move");
+    act(() => {
+      button?.click();
+    });
+    expect(onMove).toHaveBeenCalledWith(nestedResult);
+  });
+
+  it("renders no Move button when no handler is provided", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ results: [nestedResult], capped: false }),
+        ),
+    );
+    const container = renderResults();
+    await flush();
+
+    expect(
+      container.querySelector('button[aria-label="Move Q3-Report.pdf"]'),
+    ).toBeNull();
+  });
+});
+
 describe("SearchResults folder results (#13)", () => {
   /** An own-space folder match, nested one level. */
   const ownFolder: SearchResult = {
@@ -639,6 +682,7 @@ describe("SearchResults folder results (#13)", () => {
       onDownload: () => {},
       onShare: () => {},
       onDelete: () => {},
+      onMove: () => {},
       onShareFolder: () => {},
     });
     await flush();
@@ -655,6 +699,9 @@ describe("SearchResults folder results (#13)", () => {
     ).toBeNull();
     expect(
       folderRow.querySelector('button[aria-label="Delete old plans"]'),
+    ).toBeNull();
+    expect(
+      folderRow.querySelector('button[aria-label="Move old plans"]'),
     ).toBeNull();
     expect(
       folderRow.querySelectorAll('button[aria-label="Share old plans"]'),

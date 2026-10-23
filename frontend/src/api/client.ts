@@ -439,6 +439,37 @@ export async function deleteFile(
   );
 }
 
+/** Response of POST /api/files/move. */
+export interface MoveFileResponse {
+  /** The file's new key, in the same form as the request key. */
+  key: string;
+}
+
+/**
+ * Move a file into another folder of the same space. The server copies
+ * the object to the destination, then deletes the source; share links
+ * and the search index follow the file. Moves never cross spaces.
+ *
+ * @param key - object key within the space (full key in the own space,
+ *   relative to the mount in a shared space)
+ * @param folder - destination folder relative to the space root ("" for
+ *   the root), the same form as {@link postUploadUrl}'s folder
+ * @param space - the space the file lives in; defaults to the caller's own
+ * @returns the file's new key
+ * @throws {ApiClientError} on failure; a 409 carries code "already_exists"
+ *   when a file with the same name is already in the destination
+ */
+export function moveFile(
+  key: string,
+  folder: string,
+  space: Space = "own",
+): Promise<MoveFileResponse> {
+  return apiFetch<MoveFileResponse>("/api/files/move", {
+    method: "POST",
+    body: JSON.stringify({ space, key, folder }),
+  });
+}
+
 /** Identity-only view of a user, for the share recipient picker (contract UserSummary). */
 export interface UserSummary {
   id: string;

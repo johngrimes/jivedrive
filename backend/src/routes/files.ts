@@ -15,6 +15,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import type { S3Client } from "@aws-sdk/client-s3";
 import {
   assertKeyInScope,
+  copyObject,
   createFolderMarker,
   deleteObject,
   folderExists,
@@ -30,6 +31,7 @@ import {
   createShareLink,
   getUserById,
   listSharesByRecipient,
+  moveObjectRecords,
   searchContent,
   searchFileNames,
   searchFolderNames,
@@ -267,6 +269,56 @@ function resolveRequestSpace(
     );
   }
   return scope;
+}
+
+/**
+ * Delete a moved file's source after it was copied to its destination.
+ *
+ * A failed delete may still have taken effect (e.g. the response was
+ * lost), so the source is checked before rolling back: deleting the copy
+ * while the source is already gone would destroy the file. If the source
+ * is gone the move is complete and nothing is thrown. If it still exists
+ * the copy is deleted and the delete error is rethrown. If its state
+ * cannot be determined, the copy is kept (the file may sit in both places
+ * but is never lost) and the delete error is rethrown.
+ *
+ * @param client - S3 client
+ * @param scope - effective scope holding both keys
+ * @param fromKey - full key of the source object
+ * @param toKey - full key of the copy
+ * @throws the source delete error when the move did not complete
+ */
+async function removeMovedSource(
+  client: S3Client,
+  scope: ResolvedScope,
+  fromKey: string,
+  toKey: string,
+): Promise<void> {
+  try {
+    await deleteObject(client, scope.bucket, scope.prefix, fromKey);
+    return;
+  } catch (deleteError) {
+    let sourceRemains: boolean;
+    try {
+      sourceRemains =
+        (await headObject(client, scope.bucket, scope.prefix, fromKey)) !==
+        null;
+    } catch (headError) {
+      console.error(
+        "Move: source state unknown; copy kept at",
+        toKey,
+        headError,
+      );
+      throw deleteError;
+    }
+    if (!sourceRemains) return;
+    try {
+      await deleteObject(client, scope.bucket, scope.prefix, toKey);
+    } catch (rollbackError) {
+      console.error("Move rollback failed; copy left at", toKey, rollbackError);
+    }
+    throw deleteError;
+  }
 }
 
 /**
@@ -849,6 +901,133 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
 
     await deleteObject(s3Client, scope.bucket, scope.prefix, fullKey);
     return c.body(null, 204);
+  });
+
+  // Move one file to another folder of the same space (#14). Storage has
+  // no rename, so the move is a server-side copy followed by a delete of
+  // the source. Scope enforcement comes first (constitution IV): the
+  // source key and the destination folder must both stay inside the
+  // effective scope; moves never cross spaces. The destination key keeps
+  // the source's base name. A file already at the destination is never
+  // overwritten (409). If deleting the source fails after the copy, the
+  // copy is removed again only when the source is confirmed to still
+  // exist (see removeMovedSource), so a failed move never loses the file.
+  // Only once storage reflects the move are the records keyed by the
+  // object (share links, search index) carried over to the new key.
+  app.post("/move", async (c) => {
+    const user = c.get("user");
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return jsonError(c, 400, "Invalid JSON body", "bad_request");
+    }
+    const {
+      space: spaceValue,
+      key,
+      folder,
+    } = (body ?? {}) as { space?: unknown; key?: unknown; folder?: unknown };
+    const scope = resolveRequestSpace(
+      c,
+      db,
+      user,
+      spaceValue === undefined || typeof spaceValue === "string"
+        ? spaceValue
+        : null,
+    );
+    if (scope instanceof Response) return scope;
+    // A key ending in "/" names a folder marker, not a file.
+    if (
+      typeof key !== "string" ||
+      key === "" ||
+      key.endsWith("/") ||
+      typeof folder !== "string"
+    ) {
+      return jsonError(
+        c,
+        400,
+        "A file key and a destination folder are required",
+        "bad_request",
+      );
+    }
+    if (!isSafeRelativePrefix(folder)) {
+      return jsonError(
+        c,
+        400,
+        "The folder must stay within your space",
+        "invalid_folder",
+      );
+    }
+
+    // Keys are relative to the mount in a shared space (R2).
+    const fromKey = scope.mountRelative ? scope.prefix + key : key;
+    try {
+      assertKeyInScope(scope.prefix, fromKey);
+    } catch (error) {
+      if (error instanceof RangeError) {
+        return jsonError(
+          c,
+          400,
+          "The key is outside your space",
+          "out_of_scope",
+        );
+      }
+      throw error;
+    }
+    const fileName = fromKey.slice(fromKey.lastIndexOf("/") + 1);
+    const normalizedFolder =
+      folder === "" ? "" : folder.replace(/\/+$/, "") + "/";
+    const toKey = scope.prefix + normalizedFolder + fileName;
+    if (toKey === fromKey) {
+      return jsonError(
+        c,
+        400,
+        "The file is already in that folder",
+        "same_folder",
+      );
+    }
+
+    const source = await headObject(
+      s3Client,
+      scope.bucket,
+      scope.prefix,
+      fromKey,
+    );
+    if (source === null) {
+      return jsonError(c, 404, "The file does not exist", "not_found");
+    }
+    const existing = await headObject(
+      s3Client,
+      scope.bucket,
+      scope.prefix,
+      toKey,
+    );
+    if (existing !== null) {
+      return jsonError(
+        c,
+        409,
+        `A file named "${fileName}" already exists in that folder`,
+        "already_exists",
+      );
+    }
+
+    await copyObject(s3Client, scope.bucket, scope.prefix, fromKey, toKey);
+    await removeMovedSource(s3Client, scope, fromKey, toKey);
+
+    moveObjectRecords(db, {
+      bucket: scope.bucket,
+      ownerUserId: scope.ownerUserId,
+      fromKey,
+      toKey,
+    });
+    // Same key form as the request: mount-relative in a shared space so
+    // the sharer's internal prefix never leaks into the SPA (R2).
+    return c.json(
+      {
+        key: scope.mountRelative ? toKey.slice(scope.prefix.length) : toKey,
+      },
+      200,
+    );
   });
 
   return app;

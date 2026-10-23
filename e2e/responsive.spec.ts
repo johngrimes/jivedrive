@@ -32,6 +32,12 @@ const LONG_USERNAME_SESSION_COOKIE = {
   value: "longname-session",
   url: "http://localhost:5173",
 };
+/** Milo's pre-seeded session: the user dedicated to the move specs. */
+const MILO_SESSION_COOKIE = {
+  name: "jivedrive_session",
+  value: "milo-session",
+  url: "http://localhost:5173",
+};
 
 /** The 375px phone viewport used across the mobile assertions. */
 /**
@@ -134,7 +140,7 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     // FR-007 / US2 sc.1: the actions are buttons with accessible names
     // identical to today's text labels, icon-only below sm (the label span
     // is not visible, the icon svg is).
-    for (const action of ["Download", "Share", "Delete"]) {
+    for (const action of ["Download", "Share", "Move", "Delete"]) {
       const button = row.getByRole("button", { name: action });
       await expect(button).toBeVisible();
       await expect(button.locator("svg")).toBeVisible();
@@ -157,7 +163,7 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
 
     // FR-008 / US2 sc.1: every action control keeps a touch target at
     // least 44px tall (the daisyUI btn sizing mechanism).
-    for (const action of ["Download", "Share", "Delete"]) {
+    for (const action of ["Download", "Share", "Move", "Delete"]) {
       const button = row.getByRole("button", { name: action });
       await expect(button).toBeVisible();
       const box = await button.boundingBox();
@@ -924,6 +930,71 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     await expectNoHorizontalOverflow(page);
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog).toHaveCount(0);
+  });
+
+  test("the move dialog at 375px cancels without moving, moves on confirm, and stays scroll-free in both themes", async ({
+    page,
+    context,
+  }) => {
+    // Milo's move-responsive/ tree is dedicated to this test (seeded in
+    // e2eServer.ts); a unique file per attempt keeps retries safe.
+    await context.addCookies([MILO_SESSION_COOKIE]);
+    await page.setViewportSize(MOBILE_VIEWPORT);
+    const fileName = `responsive-move-${Date.now()}.txt`;
+    const uploadRes = await page.request.post("/api/files/upload-url", {
+      data: {
+        folder: "move-responsive/",
+        fileName,
+        overwrite: false,
+        space: "own",
+      },
+    });
+    expect(uploadRes.status()).toBe(200);
+    const { url } = (await uploadRes.json()) as { url: string };
+    expect((await page.request.put(url, { data: "move me" })).status()).toBe(
+      200,
+    );
+    await page.goto("/files?prefix=move-responsive%2F");
+    await expectSignedInAs(page, "milo");
+    const row = page.locator("li.list-row", { hasText: fileName });
+    await expect(row).toBeVisible();
+
+    // The dialog opens with a usable folder list and Cancel/Move here.
+    await row.getByRole("button", { name: "Move", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText(fileName);
+    const cancel = dialog.getByRole("button", { name: "Cancel" });
+    const moveHere = dialog.getByRole("button", { name: "Move here" });
+    const dest = dialog
+      .getByRole("list", { name: "Folders" })
+      .getByRole("button", { name: "Dest", exact: true });
+    for (const control of [cancel, moveHere, dest]) {
+      await expect(control).toBeVisible();
+      expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    }
+    await expect(cancel.locator("svg")).toBeVisible();
+    await expect(moveHere.locator("svg")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    // Cancel closes the dialog without moving: the row stays.
+    await cancel.click();
+    await expect(dialog).toHaveCount(0);
+    await expect(row).toBeVisible();
+
+    // Dark theme: reopen, move into Dest; the row leaves the listing.
+    await page.emulateMedia({ colorScheme: "dark" });
+    await row.getByRole("button", { name: "Move", exact: true }).click();
+    await expect(dialog).toContainText(fileName);
+    await expectNoHorizontalOverflow(page);
+    await dest.click();
+    await expect(moveHere).toBeEnabled();
+    await moveHere.click();
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      page.getByText(`Moved "${fileName}" to move-responsive/Dest`),
+    ).toBeVisible();
+    await expect(row).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
   });
 
   test("the overwrite confirmation at 375px skips without replacing, replaces on confirm, and stays scroll-free in both themes", async ({
