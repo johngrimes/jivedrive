@@ -291,6 +291,39 @@ test("US3: a recipient's search shows the shared label and downloads from the sh
   expect(content.toString()).toBe("hello from notes");
 });
 
+test("US3: a shared result's name stays readable beside its badges at 375px", async ({
+  page,
+  context,
+}) => {
+  // rowan receives a folder from the 28-character username (seeded in
+  // e2eServer.ts), so his result carries a long "Shared by" label.
+  await page.setViewportSize({ width: 375, height: 667 });
+  await startSignedInAs(page, context, "rowan", "rowan-session");
+  const row = page.locator("li.list-row", { hasText: "agenda.txt" });
+  await expect(async () => {
+    await page.goto("/files");
+    await search(page, "agenda");
+    await expect(row).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: INDEX_TIMEOUT });
+
+  // The name shows in full; the badges sit clear of the ⋯ trigger and
+  // the page never widens.
+  const name = row.getByText("agenda.txt", { exact: true });
+  const nameFits = await name.evaluate(
+    (el) => el.scrollWidth <= el.clientWidth,
+  );
+  expect(nameFits).toBe(true);
+  const triggerLeft = (await row
+    .getByRole("button", { name: "Actions for agenda.txt" })
+    .boundingBox())!.x;
+  for (const badge of await row.locator(".badge").all()) {
+    const box = (await badge.boundingBox())!;
+    expect(box.x + box.width).toBeLessThanOrEqual(triggerLeft);
+  }
+  await expect(row).toContainText("Shared by this-username-is-really-long");
+  await expectNoHorizontalOverflow(page);
+});
+
 test("US3: revoking the share removes its search results immediately", async ({
   page,
   context,

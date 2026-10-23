@@ -401,10 +401,10 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     expect((await name.boundingBox())!.width).toBeGreaterThanOrEqual(64);
     const badge = mountRow.locator(".badge");
     await expect(badge).toBeVisible();
-    const rowBox = (await mountRow.boundingBox())!;
+    const linkBox = (await mountRow.getByRole("link").boundingBox())!;
     const badgeBox = (await badge.boundingBox())!;
     expect(badgeBox.x + badgeBox.width).toBeLessThanOrEqual(
-      rowBox.x + rowBox.width,
+      linkBox.x + linkBox.width,
     );
     await expectNoHorizontalOverflow(page);
 

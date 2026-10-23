@@ -223,23 +223,25 @@ export function SearchResults({
                     <FileIcon aria-hidden="true" className="shrink-0" />
                   )}
                   <div className="min-w-0">
+                    {/* flex-wrap: badges that do not fit beside the name
+                        wrap below it, so the name keeps the full width. */}
                     <a
-                      className="link inline-flex max-w-full items-center gap-2 font-semibold no-underline"
+                      className="link inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 font-semibold no-underline"
                       href="#"
                       onClick={(event) => {
                         event.preventDefault();
                         onOpenResult(result);
                       }}
                     >
-                      <span className="truncate">{result.name}</span>
+                      <span className="max-w-full truncate">{result.name}</span>
                       <span className="badge badge-ghost badge-sm shrink-0">
                         {MATCH_LABELS[result.match]}
                       </span>
                       {/* Shared mounts carry the sharer's label (US3,
-                          FR-010); own-space rows show none. It shrinks
-                          with an ellipsis alongside the name. */}
+                          FR-010); own-space rows show none. A label longer
+                          than the line truncates with an ellipsis. */}
                       {result.sharedBy && (
-                        <span className="badge badge-secondary badge-sm min-w-0">
+                        <span className="badge badge-secondary badge-sm min-w-0 max-w-full">
                           <span className="truncate">
                             Shared by {result.sharedBy}
                           </span>
