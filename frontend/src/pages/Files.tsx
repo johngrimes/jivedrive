@@ -431,7 +431,7 @@ export function FilesPage() {
             abandon the batch mid-way (issue #12). */}
         <div className="mb-3 flex items-center justify-end gap-4">
           {query === null && (
-            <span className="mr-auto text-sm opacity-70">
+            <span className="mr-auto shrink-0 whitespace-nowrap text-sm opacity-70">
               {itemCount} {itemCount === 1 ? "item" : "items"}
             </span>
           )}
