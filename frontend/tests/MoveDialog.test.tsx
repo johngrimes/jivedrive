@@ -349,6 +349,65 @@ describe("MoveDialog", () => {
     expect(button(container, "Load more folders")).toBeUndefined();
   });
 
+  it("offers Load more instead of an empty state when a page has no folders but more pages", async () => {
+    stubApi({
+      "GET /api/files?prefix=docs%2F&space=own": folderListing([], "c1"),
+      "GET /api/files?prefix=docs%2F&cursor=c1&space=own": folderListing([
+        "Late",
+      ]),
+    });
+    const container = await renderDialog();
+
+    expect(container.textContent).not.toContain("No subfolders");
+    await click(button(container, "Load more folders"));
+    expect(folderList(container).textContent).toContain("Late");
+  });
+
+  it("ignores a load-more failure that lands after navigating to another folder", async () => {
+    const { promise: pendingMore, reject } = Promise.withResolvers<Response>();
+    stubApi({
+      "GET /api/files?prefix=docs%2F&space=own": folderListing(["A"], "c1"),
+      "GET /api/files?prefix=docs%2F&cursor=c1&space=own": () => pendingMore,
+      "GET /api/files?prefix=docs%2FA%2F&space=own": folderListing(["Deep"]),
+    });
+    const container = await renderDialog();
+
+    await click(button(container, "Load more folders"));
+    await click(button(folderList(container), "A"));
+    expect(folderList(container).textContent).toContain("Deep");
+
+    await act(async () => {
+      reject(new Error("Network down"));
+    });
+    await flush();
+
+    // The newer folder's listing stands; the stale failure is dropped.
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(folderList(container).textContent).toContain("Deep");
+  });
+
+  it("ignores a load-more page that lands after navigating to another folder", async () => {
+    const { promise: pendingMore, resolve } = Promise.withResolvers<Response>();
+    stubApi({
+      "GET /api/files?prefix=docs%2F&space=own": folderListing(["A"], "c1"),
+      "GET /api/files?prefix=docs%2F&cursor=c1&space=own": () => pendingMore,
+      "GET /api/files?prefix=docs%2FA%2F&space=own": folderListing(["Deep"]),
+    });
+    const container = await renderDialog();
+
+    await click(button(container, "Load more folders"));
+    await click(button(folderList(container), "A"));
+    await act(async () => {
+      resolve(
+        jsonResponse({ folders: ["Stale"], files: [], nextCursor: null }),
+      );
+    });
+    await flush();
+
+    expect(folderList(container).textContent).toContain("Deep");
+    expect(folderList(container).textContent).not.toContain("Stale");
+  });
+
   it("moves within a shared space, rooted at the mount", async () => {
     const onMoved = vi.fn();
     const fetchMock = stubApi({
@@ -450,6 +509,48 @@ async function renderFilesPage(
   return container;
 }
 
+/**
+ * Type a query into the Files page search box and submit it.
+ *
+ * @param container - the rendered page
+ * @param query - the query to submit
+ */
+async function submitSearch(
+  container: HTMLElement,
+  query: string,
+): Promise<void> {
+  const input = container.querySelector(
+    'input[type="search"]',
+  ) as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set?.call(input, query);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    container
+      .querySelector('form[role="search"]')
+      ?.dispatchEvent(new Event("submit", { bubbles: true }));
+  });
+  await flush();
+}
+
+/**
+ * The listing row for a file.
+ *
+ * @param container - the rendered page
+ * @param name - the file name
+ * @returns the row element
+ */
+function fileRowOf(container: HTMLElement, name: string): HTMLElement {
+  const row = Array.from(container.querySelectorAll("li.list-row")).find((el) =>
+    el.textContent?.includes(name),
+  ) as HTMLElement | undefined;
+  expect(row).toBeDefined();
+  return row as HTMLElement;
+}
 describe("Files page move wiring", () => {
   it("moves a listing row, shows a success alert and refreshes the listing", async () => {
     let rootListings = 0;
@@ -522,22 +623,7 @@ describe("Files page move wiring", () => {
       "POST /api/files/move": () =>
         Promise.resolve(jsonResponse({ key: "users/alice/Q3-Report.pdf" })),
     });
-    const input = container.querySelector(
-      'input[type="search"]',
-    ) as HTMLInputElement;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        "value",
-      )?.set?.call(input, "report");
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    await act(async () => {
-      container
-        .querySelector('form[role="search"]')
-        ?.dispatchEvent(new Event("submit", { bubbles: true }));
-    });
-    await flush();
+    await submitSearch(container, "report");
     expect(searches).toBe(1);
 
     await click(button(container, "Move Q3-Report.pdf"));
@@ -553,5 +639,117 @@ describe("Files page move wiring", () => {
       'Moved "Q3-Report.pdf" to Home',
     );
     expect(searches).toBe(2);
+    // Clearing the search is a new action: the stale alert goes.
+    await click(button(container, "Clear"));
+    expect(container.querySelector(".alert-success")).toBeNull();
+  });
+
+  describe("clears the success alert when another action starts", () => {
+    /** A root file that stays in the listing after the move. */
+    const keepFile = {
+      key: "users/alice/keep.txt",
+      name: "keep.txt",
+      size: 8,
+      lastModified: "2026-08-10T12:00:00.000Z",
+    };
+
+    /**
+     * Render the page and move notes.txt into docs/, leaving the success
+     * alert showing.
+     *
+     * @returns the container holding the page
+     */
+    async function afterMove(): Promise<HTMLElement> {
+      const container = await renderFilesPage({
+        "GET /api/files?space=own": () =>
+          Promise.resolve(
+            jsonResponse({
+              folders: ["docs"],
+              files: [
+                {
+                  ...keepFile,
+                  key: "users/alice/notes.txt",
+                  name: "notes.txt",
+                },
+                keepFile,
+              ],
+              nextCursor: null,
+            }),
+          ),
+        "GET /api/files?prefix=docs%2F&space=own": folderListing([]),
+        "POST /api/files/move": () =>
+          Promise.resolve(jsonResponse({ key: "users/alice/docs/notes.txt" })),
+        "GET /api/files/download-url?key=users%2Falice%2Fkeep.txt&space=own":
+          () =>
+            Promise.resolve(jsonResponse({ url: "https://storage.test/o" })),
+        "GET /api/files/search?q=report": () =>
+          Promise.resolve(jsonResponse({ results: [], capped: false })),
+        "POST /api/files/share-url": () => never(),
+      });
+      await click(button(fileRowOf(container, "notes.txt"), "Move"));
+      const dialog = container.querySelector('[role="dialog"]') as HTMLElement;
+      await click(button(folderList(dialog), "docs"));
+      await click(button(dialog, "Move here"));
+      expect(container.querySelector(".alert-success")).not.toBeNull();
+      return container;
+    }
+
+    it("on download", async () => {
+      vi.spyOn(window, "open").mockReturnValue(null);
+      const container = await afterMove();
+      await click(button(fileRowOf(container, "keep.txt"), "Download"));
+      expect(container.querySelector(".alert-success")).toBeNull();
+    });
+
+    it("on opening Share", async () => {
+      const container = await afterMove();
+      await click(button(fileRowOf(container, "keep.txt"), "Share"));
+      expect(container.querySelector(".alert-success")).toBeNull();
+    });
+
+    it("on opening Delete", async () => {
+      const container = await afterMove();
+      await click(button(fileRowOf(container, "keep.txt"), "Delete"));
+      expect(container.querySelector(".alert-success")).toBeNull();
+    });
+
+    it("on submitting a new search", async () => {
+      const container = await afterMove();
+      await submitSearch(container, "report");
+      expect(container.querySelector(".alert-success")).toBeNull();
+    });
+  });
+
+  it("clears the success alert when opening Share or Delete on a search row", async () => {
+    const container = await renderFilesPage({
+      "GET /api/files?space=own": folderListing(["projects"]),
+      "GET /api/files?prefix=projects%2F&space=own": folderListing([]),
+      "GET /api/files/search?q=report": () =>
+        Promise.resolve(
+          jsonResponse({ results: [searchResult], capped: false }),
+        ),
+      "POST /api/files/move": () =>
+        Promise.resolve(jsonResponse({ key: "users/alice/Q3-Report.pdf" })),
+      "POST /api/files/share-url": () => never(),
+    });
+    await submitSearch(container, "report");
+
+    /** Move the result to the root so the success alert shows. */
+    async function moveToRoot(): Promise<void> {
+      await click(button(container, "Move Q3-Report.pdf"));
+      const dialog = container.querySelector('[role="dialog"]') as HTMLElement;
+      await click(button(crumbs(dialog), "Home"));
+      await click(button(dialog, "Move here"));
+      expect(container.querySelector(".alert-success")).not.toBeNull();
+    }
+
+    await moveToRoot();
+    await click(button(container, "Delete Q3-Report.pdf"));
+    expect(container.querySelector(".alert-success")).toBeNull();
+    await click(button(container, "Cancel"));
+
+    await moveToRoot();
+    await click(button(container, "Share Q3-Report.pdf"));
+    expect(container.querySelector(".alert-success")).toBeNull();
   });
 });

@@ -239,6 +239,56 @@ function resolveRequestSpace(
 }
 
 /**
+ * Delete a moved file's source after it was copied to its destination.
+ *
+ * A failed delete may still have taken effect (e.g. the response was
+ * lost), so the source is checked before rolling back: deleting the copy
+ * while the source is already gone would destroy the file. If the source
+ * is gone the move is complete and nothing is thrown. If it still exists
+ * the copy is deleted and the delete error is rethrown. If its state
+ * cannot be determined, the copy is kept (the file may sit in both places
+ * but is never lost) and the delete error is rethrown.
+ *
+ * @param client - S3 client
+ * @param scope - effective scope holding both keys
+ * @param fromKey - full key of the source object
+ * @param toKey - full key of the copy
+ * @throws the source delete error when the move did not complete
+ */
+async function removeMovedSource(
+  client: S3Client,
+  scope: ResolvedScope,
+  fromKey: string,
+  toKey: string,
+): Promise<void> {
+  try {
+    await deleteObject(client, scope.bucket, scope.prefix, fromKey);
+    return;
+  } catch (deleteError) {
+    let sourceRemains: boolean;
+    try {
+      sourceRemains =
+        (await headObject(client, scope.bucket, scope.prefix, fromKey)) !==
+        null;
+    } catch (headError) {
+      console.error(
+        "Move: source state unknown; copy kept at",
+        toKey,
+        headError,
+      );
+      throw deleteError;
+    }
+    if (!sourceRemains) return;
+    try {
+      await deleteObject(client, scope.bucket, scope.prefix, toKey);
+    } catch (rollbackError) {
+      console.error("Move rollback failed; copy left at", toKey, rollbackError);
+    }
+    throw deleteError;
+  }
+}
+
+/**
  * Create the file route module mounted under /api/files.
  *
  * @param deps - S3 client, auth middleware, database and page size
@@ -699,8 +749,9 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
   // source key and the destination folder must both stay inside the
   // effective scope; moves never cross spaces. The destination key keeps
   // the source's base name. A file already at the destination is never
-  // overwritten (409). If the source cannot be deleted after the copy,
-  // the copy is removed again so the file does not end up in two places.
+  // overwritten (409). If deleting the source fails after the copy, the
+  // copy is removed again only when the source is confirmed to still
+  // exist (see removeMovedSource), so a failed move never loses the file.
   // Only once storage reflects the move are the records keyed by the
   // object (share links, search index) carried over to the new key.
   app.post("/move", async (c) => {
@@ -801,21 +852,7 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
     }
 
     await copyObject(s3Client, scope.bucket, scope.prefix, fromKey, toKey);
-    try {
-      await deleteObject(s3Client, scope.bucket, scope.prefix, fromKey);
-    } catch (error) {
-      // Roll back the copy; the original failure is what gets reported.
-      try {
-        await deleteObject(s3Client, scope.bucket, scope.prefix, toKey);
-      } catch (rollbackError) {
-        console.error(
-          "Move rollback failed; copy left at",
-          toKey,
-          rollbackError,
-        );
-      }
-      throw error;
-    }
+    await removeMovedSource(s3Client, scope, fromKey, toKey);
 
     moveObjectRecords(db, {
       bucket: scope.bucket,

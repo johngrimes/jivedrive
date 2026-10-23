@@ -156,15 +156,22 @@ export function MoveDialog({
   /**
    * Append the next page of subfolders of the current destination. A
    * failure turns the list into its error state, whose Retry reloads it.
+   * A page or failure that lands after the user navigated elsewhere (or
+   * retried) is dropped, so it never clobbers the newer listing.
    */
   async function loadMore(): Promise<void> {
     if (state.status !== "done" || !state.nextCursor || loadingMore) return;
     const { folder: pageFolder, retry, nextCursor } = state;
+    const isSamePage = (prev: FolderState): boolean =>
+      prev.status === "done" &&
+      prev.folder === pageFolder &&
+      prev.retry === retry &&
+      prev.nextCursor === nextCursor;
     setLoadingMore(true);
     try {
       const page = await listFiles(pageFolder, space, nextCursor);
       setFetched((prev) =>
-        prev.status === "done" && prev.folder === pageFolder
+        prev.status === "done" && isSamePage(prev)
           ? {
               ...prev,
               folders: [...prev.folders, ...page.folders],
@@ -173,12 +180,16 @@ export function MoveDialog({
           : prev,
       );
     } catch (err) {
-      setFetched({
-        status: "error",
-        folder: pageFolder,
-        retry,
-        message: messageOf(err, "Could not load folders."),
-      });
+      setFetched((prev) =>
+        isSamePage(prev)
+          ? {
+              status: "error",
+              folder: pageFolder,
+              retry,
+              message: messageOf(err, "Could not load folders."),
+            }
+          : prev,
+      );
     } finally {
       setLoadingMore(false);
     }
@@ -297,11 +308,13 @@ export function MoveDialog({
           </div>
         )}
 
-        {state.status === "done" && state.folders.length === 0 && (
-          <p className="flex min-h-11 items-center text-sm opacity-70">
-            No subfolders here.
-          </p>
-        )}
+        {state.status === "done" &&
+          state.folders.length === 0 &&
+          !state.nextCursor && (
+            <p className="flex min-h-11 items-center text-sm opacity-70">
+              No subfolders here.
+            </p>
+          )}
 
         {state.status === "done" && state.folders.length > 0 && (
           <ul
@@ -341,7 +354,7 @@ export function MoveDialog({
         )}
 
         {error && (
-          <p className="alert alert-error mt-4" role="alert">
+          <p className="alert alert-error mt-4 break-all" role="alert">
             {error}
           </p>
         )}

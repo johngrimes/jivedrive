@@ -365,3 +365,57 @@ test("the move dialog is fully usable at 375px without horizontal scroll", async
   await expect(fileRow(page, name)).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 });
+
+/**
+ * Assert an element's content fits its box horizontally (no clipped or
+ * scrollable overflow inside a fixed-position modal, which the page-level
+ * check cannot see).
+ *
+ * @param locator - the element to measure
+ */
+async function expectFitsWidth(locator: Locator): Promise<void> {
+  const { scrollWidth, clientWidth } = await locator.evaluate((el) => ({
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+}
+
+test("long unbroken file names wrap at 375px in the collision error and the success alert", async ({
+  page,
+  context,
+}) => {
+  await page.setViewportSize({ width: 375, height: 667 });
+  await openAsMilo(page, context, "");
+  // Seeded in e2eServer.ts: the same 50+ char name (no spaces or
+  // hyphens) in move-long/ and move-long/Clash/.
+  const clashing = "IMG_20261024_123456789_HDR_edited_final_version_2.jpg";
+  const name = `PXL_20261024_123456789_HDR_edited_final_version_${Date.now()}.jpg`;
+  await uploadFile(page, "move-long/", name);
+  await page.goto("/files?prefix=move-long%2F");
+
+  // The collision error names the file in the dialog without overflow.
+  const clashDialog = await openMove(page, fileRow(page, clashing), clashing);
+  await enterFolder(clashDialog, "Clash");
+  await clashDialog.getByRole("button", { name: "Move here" }).click();
+  const alert = clashDialog.getByRole("alert");
+  await expect(alert).toContainText(`A file named "${clashing}" already`);
+  await expectNoHorizontalOverflow(page);
+  await expectFitsWidth(clashDialog);
+  await expectFitsWidth(alert);
+  await clashDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(clashDialog).toHaveCount(0);
+
+  // Moving a long-named file into a nested folder: the success alert
+  // wraps the name instead of widening the page.
+  const dialog = await openMove(page, fileRow(page, name), name);
+  await expectFitsWidth(dialog);
+  await enterFolder(dialog, "Deep");
+  await enterFolder(dialog, "Nested");
+  await dialog.getByRole("button", { name: "Move here" }).click();
+  await expect(dialog).toHaveCount(0);
+  const success = page.locator(".alert-success");
+  await expect(success).toHaveText(`Moved "${name}" to move-long/Deep/Nested`);
+  await expectNoHorizontalOverflow(page);
+  await expectFitsWidth(success);
+});

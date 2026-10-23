@@ -325,6 +325,7 @@ export function FilesPage() {
     fileSpace: Space,
   ): Promise<void> {
     setActionError(null);
+    setActionSuccess(null);
     try {
       const { url } = await getDownloadUrl(file.key, fileSpace);
       // Open in a new window so the browser renders the file (or, for
@@ -349,6 +350,7 @@ export function FilesPage() {
     event.preventDefault();
     const q = queryInput.trim();
     if (q === "") return;
+    setActionSuccess(null);
     setQuery(q);
   }
 
@@ -463,7 +465,10 @@ export function FilesPage() {
             <button
               type="button"
               className="btn min-h-11"
-              onClick={() => setQuery(null)}
+              onClick={() => {
+                setActionSuccess(null);
+                setQuery(null);
+              }}
             >
               Clear
             </button>
@@ -484,7 +489,7 @@ export function FilesPage() {
           </p>
         )}
         {actionSuccess && (
-          <p className="alert alert-success mb-3" role="status">
+          <p className="alert alert-success mb-3 break-all" role="status">
             {actionSuccess}
           </p>
         )}
@@ -515,6 +520,7 @@ export function FilesPage() {
               onDownload={(file) => void handleDownload(file, space)}
               onShare={(file) => {
                 setDialogSpace(space);
+                setActionSuccess(null);
                 setShareFile(file);
               }}
               onMove={(file) => {
@@ -523,13 +529,17 @@ export function FilesPage() {
               }}
               onDelete={(file) => {
                 setDialogSpace(space);
+                setActionSuccess(null);
                 setDeleteFile(file);
               }}
               onLoadMore={() => void loadMore()}
               onRetry={retry}
               onShareFolder={
                 space === "own"
-                  ? (folder) => setShareFolder(prefix + folder + "/")
+                  ? (folder) => {
+                      setActionSuccess(null);
+                      setShareFolder(prefix + folder + "/");
+                    }
                   : undefined
               }
               sharedFolders={sharedFolders}
@@ -547,6 +557,7 @@ export function FilesPage() {
             }
             onShare={(result) => {
               setDialogSpace(result.space);
+              setActionSuccess(null);
               setShareFile(asFileEntry(result));
             }}
             onMove={(result) => {
@@ -559,6 +570,7 @@ export function FilesPage() {
             }}
             onDelete={(result) => {
               setDialogSpace(result.space);
+              setActionSuccess(null);
               setDeleteFile(asFileEntry(result));
             }}
             onSessionExpired={() => void refresh()}

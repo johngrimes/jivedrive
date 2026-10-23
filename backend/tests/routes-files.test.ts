@@ -1350,18 +1350,88 @@ describe("POST /api/files/move", () => {
     });
 
     expect(res.status).toBe(500);
-    // The failed move is rolled back: the copy at the destination is
-    // deleted so the file is not left in two places.
+    // The source is still there, so the failed move is rolled back: the
+    // copy at the destination is deleted so the file is not left in two
+    // places.
     expect(calls.map((c) => [c.name, c.input.Key])).toEqual([
       ["HeadObjectCommand", "users/alice/inbox/report.pdf"],
       ["HeadObjectCommand", "users/alice/archive/report.pdf"],
       ["CopyObjectCommand", "users/alice/archive/report.pdf"],
       ["DeleteObjectCommand", "users/alice/inbox/report.pdf"],
+      ["HeadObjectCommand", "users/alice/inbox/report.pdf"],
       ["DeleteObjectCommand", "users/alice/archive/report.pdf"],
     ]);
     expect(getShareLinkByToken(db, link.token)?.objectKey).toBe(
       "users/alice/inbox/report.pdf",
     );
+  });
+
+  it("completes the move when the source delete reports an error but the source is gone", async () => {
+    // The delete took effect but its response was lost: deleting the copy
+    // now would destroy the only remaining copy of the file.
+    const existing = ["users/alice/inbox/report.pdf"];
+    const { app, db, calls } = createFilesApp((name, input) => {
+      if (name === "DeleteObjectCommand") {
+        existing.splice(existing.indexOf(String(input.Key)), 1);
+        throw new Error("connection reset");
+      }
+      return storage(existing)(name, input);
+    });
+    const alice = getUserByUsername(db, "alice")!;
+    const link = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket,
+      objectKey: "users/alice/inbox/report.pdf",
+      expiresIn: "7d",
+    });
+
+    const res = await postMove(app, {
+      key: "users/alice/inbox/report.pdf",
+      folder: "archive",
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      key: "users/alice/archive/report.pdf",
+    });
+    expect(calls.map((c) => [c.name, c.input.Key])).toEqual([
+      ["HeadObjectCommand", "users/alice/inbox/report.pdf"],
+      ["HeadObjectCommand", "users/alice/archive/report.pdf"],
+      ["CopyObjectCommand", "users/alice/archive/report.pdf"],
+      ["DeleteObjectCommand", "users/alice/inbox/report.pdf"],
+      ["HeadObjectCommand", "users/alice/inbox/report.pdf"],
+    ]);
+    expect(getShareLinkByToken(db, link.token)?.objectKey).toBe(
+      "users/alice/archive/report.pdf",
+    );
+  });
+
+  it("keeps the copy when the source's state cannot be checked after a failed delete", async () => {
+    let sourceDeleteFailed = false;
+    const { app, calls } = createFilesApp((name, input) => {
+      if (name === "DeleteObjectCommand") {
+        sourceDeleteFailed = true;
+        throw new Error("delete failed");
+      }
+      if (name === "HeadObjectCommand" && sourceDeleteFailed) {
+        throw new Error("storage unavailable");
+      }
+      return storage(["users/alice/inbox/report.pdf"])(name, input);
+    });
+
+    const res = await postMove(app, {
+      key: "users/alice/inbox/report.pdf",
+      folder: "archive",
+    });
+
+    expect(res.status).toBe(500);
+    // Without knowing whether the source survived, the copy is never
+    // removed: the file may end up in two places but is never lost.
+    expect(
+      calls
+        .filter((c) => c.name === "DeleteObjectCommand")
+        .map((c) => c.input.Key),
+    ).toEqual(["users/alice/inbox/report.pdf"]);
   });
 
   it("requires a signed-in session", async () => {

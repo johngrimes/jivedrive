@@ -534,7 +534,8 @@ seedObject("users/alice/empty/", "", 0);
 // tests never race each other. Folders exist through the keep.txt
 // objects inside them; the tests upload their own uniquely named files
 // to move. move-collide/ holds a same-named file in Inner/ for the
-// refused-collision test (which never moves anything).
+// refused-collision test (which never moves anything); move-long/ does
+// the same with a 50+ char unbroken name for the 375px wrap test.
 for (const key of [
   "move-sub/Reports/keep.txt",
   "move-root/deep/keep.txt",
@@ -544,6 +545,9 @@ for (const key of [
   "move-mobile/Dest/keep.txt",
   "move-responsive/Dest/keep.txt",
   "move-shared/inbox/keep.txt",
+  "move-long/IMG_20261024_123456789_HDR_edited_final_version_2.jpg",
+  "move-long/Clash/IMG_20261024_123456789_HDR_edited_final_version_2.jpg",
+  "move-long/Deep/Nested/keep.txt",
 ]) {
   seedObject(`users/milo/${key}`, `seeded ${key}`);
 }
