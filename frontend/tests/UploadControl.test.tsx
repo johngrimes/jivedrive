@@ -416,6 +416,15 @@ describe("UploadControl", () => {
     expect(FakeXHR.instances).toHaveLength(1);
   });
 
+  it("labels a single-file upload without a batch counter", async () => {
+    stubUploadApi();
+    FakeXHR.hold = true;
+    const container = await renderUpload();
+    await chooseFiles(container, ["a.txt"]);
+
+    expect(feedback(container, "status")).toBe("Uploading a.txt... 0%");
+  });
+
   it("offers a multi-select picker", async () => {
     const container = await renderUpload();
     expect(fileInput(container).multiple).toBe(true);

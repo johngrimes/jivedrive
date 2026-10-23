@@ -209,6 +209,39 @@ test("uploads several selected files in one go, counting through the batch", asy
   await expectNoHorizontalOverflow(page);
 });
 
+test("a batch keeps going and reports back while search results replace the listing", async ({
+  page,
+  context,
+}) => {
+  await openFreshFolder(page, context, "searching");
+
+  const names = ["s1.txt", "s2.txt", "s3.txt"];
+  await chooseFiles(
+    page,
+    names.map((name) => ({ name, content: `content of ${name}` })),
+  );
+  await expect(page.getByText("Uploading s1.txt (1 of 3)")).toBeVisible();
+
+  // Searching mid-batch swaps the listing for results; the batch's
+  // progress stays on screen and the picker stays locked.
+  await page
+    .getByRole("searchbox", { name: "Search files" })
+    .fill("no-such-file-anywhere");
+  await page.getByRole("button", { name: "Search" }).click();
+  await expect(page.getByRole("button", { name: "Clear" })).toBeVisible();
+  await expect(page.getByText(/Uploading s\d\.txt \(\d of 3\)/)).toBeVisible();
+  await expect(page.locator('input[type="file"]')).toBeDisabled();
+
+  // Back on the listing, the batch has finished every file and says so.
+  await page.getByRole("button", { name: "Clear" }).click();
+  await expect(
+    page.getByText("Uploaded 3 files", { exact: true }),
+  ).toBeVisible();
+  for (const name of names) {
+    await expect(page.locator("li.list-row", { hasText: name })).toBeVisible();
+  }
+});
+
 test("a batch with conflicts and a failure: skip one, replace the rest, and summarise", async ({
   page,
   context,
@@ -230,9 +263,9 @@ test("a batch with conflicts and a failure: skip one, replace the rest, and summ
     { name: "a.txt", content: v2 },
     { name: "b.txt", content: v2 },
     { name: "c.txt", content: v2 },
-    { name: "d.txt", content: v2 },
     // The mock S3 layer rejects this name with a 500.
     { name: "broken.txt", content: v2 },
+    { name: "d.txt", content: v2 },
   ]);
 
   // The first conflict asks about a.txt alone: Skip keeps it.
@@ -251,8 +284,9 @@ test("a batch with conflicts and a failure: skip one, replace the rest, and summ
   await applyToRemaining.check();
   await dialog.getByRole("button", { name: "Replace" }).click();
 
-  // The failure does not stop the batch: d.txt still uploads, and the
-  // summary reports the counts and names the failed file.
+  // The failure does not stop the batch: d.txt, picked after broken.txt,
+  // still uploads, and the summary reports the counts and names the
+  // failed file.
   const summary = page.getByRole("alert");
   await expect(summary).toContainText("Uploaded 3 of 5 files, skipped 1");
   await expect(summary).toContainText('Could not upload "broken.txt"');
