@@ -874,3 +874,42 @@ All checks ran green on 2026-09-05.
   (share creation returns 401) fails identically on a clean `main`
   checkout with the same spec and server, so it is not caused by this
   feature; left untouched.
+
+## Issue #11 - Folder creation
+
+A "New folder" toolbar button opens a dialog. `POST /api/files/folders`
+(`{space?, folder, name}`) writes a zero-byte `<folder>/<name>/` marker
+object, so the folder persists while empty. It works in the own space and
+inside a folder shared with the caller, at any depth. The name is trimmed;
+an empty name, `.`, `..`, a name containing `/` or one longer than 255
+characters is refused with 400 `invalid_folder_name`. A name already used
+by a folder (any object under `<name>/`) is refused with 409
+`already_exists`; a file with the same name does not conflict. On success
+the dialog closes, a "Created folder" message shows and the listing
+refreshes.
+
+Environment and method: the e2e server (mock S3, in-memory database) with
+dedicated users `nora` (creator, recipient of `team`) and `otto` (sharer
+of `team`), driven through headless Chromium.
+
+What was validated:
+
+- `e2e/folders.spec.ts`: create at the root (trimmed name, success
+  message, row appears, survives reload, opens empty); nested create and
+  the 409 inside the dialog with the name kept; blank name cannot be
+  submitted, `a/b` shows the server error; a recipient creates inside
+  `team` and otto sees it in his own space; toolbar and dialog fit
+  375/768/1280 px with no horizontal overflow.
+- Backend contract: `backend/tests/routes-files.test.ts`
+  ("POST /api/files/folders") covers own/shared keys, normalisation,
+  validation, the 409, scope escapes and foreign/unknown spaces with no
+  storage call; `backend/tests/s3.test.ts` covers `folderExists` and
+  `createFolderMarker`, including the scope assertion.
+- UI behaviour: `frontend/tests/NewFolderControl.test.tsx`.
+
+Commands run:
+
+```bash
+bun run test
+bun run test:e2e
+```

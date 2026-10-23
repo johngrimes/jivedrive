@@ -1324,7 +1324,7 @@ export interface FileNameSearchHit {
  * @param limit - maximum number of hits to return
  * @param keyPrefix - when given, only keys under this prefix match
  *   (shared-scope search, US3): the prefix is the sharer's effective
- *   mount prefix, and LIKE wildcards in it stay literal
+ *   mount prefix, compared case-exactly
  * @returns hits in relevance order (FTS rank; name order for LIKE)
  */
 export function searchFileNames(
@@ -1334,28 +1334,24 @@ export function searchFileNames(
   limit = 50,
   keyPrefix?: string,
 ): FileNameSearchHit[] {
-  // Shared scopes (US3) constrain hits to the mount prefix; the prefix
-  // is folder text the sharer controls, so LIKE wildcards stay literal.
-  const prefixClause = keyPrefix ? " AND i.key LIKE ? ESCAPE '\\'" : "";
-  const prefixArgs = keyPrefix
-    ? [`${keyPrefix.replace(/([\\%_])/g, "\\$1")}%`]
-    : [];
+  // Shared scopes (US3) constrain hits to the mount prefix.
+  const prefix = keyPrefixFilter("i.key", keyPrefix);
   if (query.length < 3) {
     // Trigram MATCH sees nothing for 1-2 character queries: fall back to
     // a case-insensitive LIKE (ASCII), with wildcards kept literal.
     const pattern = `%${query.replace(/([\\%_])/g, "\\$1")}%`;
     return db
       .query(
-        `SELECT i.key AS key, d.fileName AS fileName FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ?${prefixClause} AND d.fileName LIKE ? ESCAPE '\\' ORDER BY d.fileName LIMIT ?`,
+        `SELECT i.key AS key, d.fileName AS fileName FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ?${prefix.clause} AND d.fileName LIKE ? ESCAPE '\\' ORDER BY d.fileName LIMIT ?`,
       )
-      .all(userId, ...prefixArgs, pattern, limit) as FileNameSearchHit[];
+      .all(userId, ...prefix.args, pattern, limit) as FileNameSearchHit[];
   }
   const phrase = `fileName : "${query.replace(/"/g, '""')}"`;
   return db
     .query(
-      `SELECT i.key AS key, d.fileName AS fileName FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ?${prefixClause} AND search_docs MATCH ? ORDER BY rank LIMIT ?`,
+      `SELECT i.key AS key, d.fileName AS fileName FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ?${prefix.clause} AND search_docs MATCH ? ORDER BY rank LIMIT ?`,
     )
-    .all(userId, ...prefixArgs, phrase, limit) as FileNameSearchHit[];
+    .all(userId, ...prefix.args, phrase, limit) as FileNameSearchHit[];
 }
 
 /** One content match of a search query. */
@@ -1386,7 +1382,7 @@ export interface ContentSearchHit {
  * @param query - the (already trimmed, non-empty) search query
  * @param limit - maximum number of hits to return
  * @param keyPrefix - when given, only keys under this prefix match
- *   (shared-scope search, US3); LIKE wildcards in it stay literal
+ *   (shared-scope search, US3), compared case-exactly
  * @returns hits in relevance order (FTS rank)
  */
 export function searchContent(
@@ -1399,14 +1395,121 @@ export function searchContent(
   if (query.length < 3) {
     return [];
   }
-  const prefixClause = keyPrefix ? " AND i.key LIKE ? ESCAPE '\\'" : "";
-  const prefixArgs = keyPrefix
-    ? [`${keyPrefix.replace(/([\\%_])/g, "\\$1")}%`]
-    : [];
+  const prefix = keyPrefixFilter("i.key", keyPrefix);
   const phrase = `body : "${query.replace(/"/g, '""')}"`;
   return db
     .query(
-      `SELECT i.key AS key, d.fileName AS fileName, snippet(search_docs, 1, '<mark>', '</mark>', '…', 64) AS snippet FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ?${prefixClause} AND search_docs MATCH ? ORDER BY rank LIMIT ?`,
+      `SELECT i.key AS key, d.fileName AS fileName, snippet(search_docs, 1, '<mark>', '</mark>', '…', 64) AS snippet FROM search_docs d JOIN search_index i ON i.rowid = d.rowid WHERE i.userId = ?${prefix.clause} AND search_docs MATCH ? ORDER BY rank LIMIT ?`,
     )
-    .all(userId, ...prefixArgs, phrase, limit) as ContentSearchHit[];
+    .all(userId, ...prefix.args, phrase, limit) as ContentSearchHit[];
+}
+
+/** One folder-name match of a search query. */
+export interface FolderSearchHit {
+  /** Full folder key including the owner's storage prefix and trailing "/". */
+  key: string;
+  /** Base name of the folder (its last path segment). */
+  name: string;
+}
+
+/**
+ * Replace the stored folder set of one user's space with `keys` (folder
+ * search, #13): folders absent from `keys` are deleted, new ones are
+ * inserted, and unchanged rows are left alone, so a stable space causes
+ * no writes. Runs in one transaction.
+ *
+ * @param db - database connection
+ * @param userId - owner of the space
+ * @param keys - every folder key in the space: full keys including the
+ *   storage prefix, each ending in "/"
+ */
+export function syncSearchFolders(
+  db: Database,
+  userId: string,
+  keys: Iterable<string>,
+): void {
+  const wanted = new Set(keys);
+  const sync = db.transaction(() => {
+    const stored = db
+      .query("SELECT key FROM search_folders WHERE userId = ?")
+      .all(userId) as Array<{ key: string }>;
+    const remove = db.query(
+      "DELETE FROM search_folders WHERE userId = ? AND key = ?",
+    );
+    for (const { key } of stored) {
+      if (!wanted.delete(key)) remove.run(userId, key);
+    }
+    // `wanted` now holds only the keys not yet stored.
+    const insert = db.query(
+      "INSERT INTO search_folders (userId, key, name, nameFolded) VALUES (?, ?, ?, ?)",
+    );
+    for (const key of wanted) {
+      const trimmed = key.slice(0, -1);
+      const name = trimmed.slice(trimmed.lastIndexOf("/") + 1);
+      insert.run(userId, key, name, name.toLowerCase());
+    }
+  });
+  sync();
+}
+
+/**
+ * Find one user's folders whose base name contains the query (folder
+ * search, #13): a case-insensitive substring match on the name only,
+ * never on parent segments. Case is folded with Unicode rules (the
+ * stored `nameFolded` against the lower-cased query), like the trigram
+ * filename index, so "übersicht" finds "Übersicht". Rows outside the
+ * owner's space are never returned (constitution IV).
+ *
+ * @param db - database connection
+ * @param userId - owner of the space to search
+ * @param query - the (already trimmed, non-empty) search query
+ * @param limit - maximum number of hits to return
+ * @param keyPrefix - when given, only folders at or under this prefix
+ *   match, compared case-exactly: the route passes each scope's prefix
+ *   (the caller's own storage prefix, or a share's mount prefix — so
+ *   the mount root itself is a candidate)
+ * @returns hits ordered by folded name, then key
+ */
+export function searchFolderNames(
+  db: Database,
+  userId: string,
+  query: string,
+  limit = 50,
+  keyPrefix?: string,
+): FolderSearchHit[] {
+  const prefix = keyPrefixFilter("key", keyPrefix);
+  return db
+    .query(
+      `SELECT key, name FROM search_folders WHERE userId = ?${prefix.clause} AND instr(nameFolded, ?) > 0 ORDER BY nameFolded, key LIMIT ?`,
+    )
+    .all(
+      userId,
+      ...prefix.args,
+      query.toLowerCase(),
+      limit,
+    ) as FolderSearchHit[];
+}
+
+/**
+ * Build the SQL restricting `column` to keys that start with
+ * `keyPrefix`, compared case-exactly. LIKE must not be used for this:
+ * it folds ASCII case, so a mount prefix "projects/" would also admit a
+ * sibling "Projects/" folder outside the share (constitution IV).
+ *
+ * @param column - the key column to restrict
+ * @param keyPrefix - the required key prefix; absent or "" restricts
+ *   nothing
+ * @returns a clause to append after the WHERE conditions, and its
+ *   positional arguments
+ */
+function keyPrefixFilter(
+  column: string,
+  keyPrefix: string | undefined,
+): { clause: string; args: string[] } {
+  return keyPrefix
+    ? {
+        clause: ` AND substr(${column}, 1, length(?)) = ?`,
+        args: [keyPrefix, keyPrefix],
+      }
+    : { clause: "", args: [] };
 }

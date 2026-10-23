@@ -5,13 +5,17 @@
  * the folder listing; mobile-first: each row is one column with large
  * (min-h-11) touch targets, the folder path renders as a second line
  * under the name (FR-015), and action labels collapse to icons below
- * `sm` exactly like the listing rows (FR-003).
+ * `sm` exactly like the listing rows (FR-003). Folder matches (#13)
+ * render like listing folder rows: a folder icon, and Share as the only
+ * action, offered in the caller's own space only.
  */
 import { useEffect, useRef, useState } from "react";
 import {
   DownloadIcon,
+  FileDirectoryFillIcon,
   FileIcon,
   FileMovedIcon,
+  PeopleIcon,
   ShareAndroidIcon,
   TrashIcon,
 } from "@primer/octicons-react";
@@ -23,16 +27,22 @@ import { LoadingSkeleton } from "./FileListing";
 export interface SearchResultsProps {
   /** The submitted query (already trimmed and non-empty). */
   query: string;
-  /** Open the containing folder of a result (restores the listing). */
+  /** Open a result: a folder itself, or a file's containing folder. */
   onOpenResult: (result: SearchResult) => void;
-  /** Start a download for a result, issued against its space. */
+  /** Start a download for a file result, issued against its space. */
   onDownload?: (result: SearchResult) => void;
-  /** Open the share modal for a result. */
+  /** Open the share-link modal for a file result. */
   onShare?: (result: SearchResult) => void;
-  /** Open the move dialog for a result, within the result's space. */
+  /** Open the move dialog for a file result, within the result's space. */
   onMove?: (result: SearchResult) => void;
-  /** Open the delete confirmation for a result. */
+  /** Open the delete confirmation for a file result. */
   onDelete?: (result: SearchResult) => void;
+  /**
+   * Open the folder share dialog for an own-space folder result. Folders
+   * from a shared mount never get the button: a recipient cannot
+   * re-share (006 FR-015).
+   */
+  onShareFolder?: (result: SearchResult) => void;
   /** Called on 401 so the page can refresh the (expired) session. */
   onSessionExpired?: () => void;
 }
@@ -53,6 +63,7 @@ type SearchState =
 
 /** Human-readable label per match type. */
 const MATCH_LABELS: Record<SearchResult["match"], string> = {
+  folder: "Folder",
   name: "Name match",
   content: "Content match",
 };
@@ -105,6 +116,7 @@ export function SearchResults({
   onMove,
   onDelete,
   onSessionExpired,
+  onShareFolder,
 }: SearchResultsProps) {
   const [fetched, setFetched] = useState<SearchState>({ status: "loading" });
   const [retryKey, setRetryKey] = useState(0);
@@ -187,7 +199,7 @@ export function SearchResults({
       {state.status === "done" && state.results.length === 0 && (
         <div className="py-10 text-center text-base-content/70">
           <p className="text-lg font-semibold text-base-content/80">
-            No files match “{query}”
+            No files or folders match “{query}”
           </p>
           <p className="mt-2 text-sm">
             Try a different name, or check the spelling.
@@ -204,7 +216,14 @@ export function SearchResults({
                 key={`${result.space}:${result.key}`}
               >
                 <div className="flex grow gap-3 items-center min-w-0">
-                  <FileIcon aria-hidden="true" />
+                  {result.match === "folder" ? (
+                    <FileDirectoryFillIcon
+                      aria-hidden="true"
+                      className="shrink-0"
+                    />
+                  ) : (
+                    <FileIcon aria-hidden="true" />
+                  )}
                   <div className="min-w-0">
                     <a
                       className="link inline-flex items-center gap-2 font-semibold no-underline"
@@ -227,7 +246,7 @@ export function SearchResults({
                       )}
                     </a>
                     {/* The containing folder (FR-003): breadcrumb-style
-                        path; "Home" for a file at the space root. */}
+                        path; "Home" at the space root. */}
                     <p className="text-sm opacity-70 truncate">
                       {result.path === ""
                         ? "Home"
@@ -243,7 +262,20 @@ export function SearchResults({
                   </div>
                 </div>
                 <div className="flex gap-3">
-                  {onDownload && (
+                  {result.match === "folder" &&
+                    result.space === "own" &&
+                    onShareFolder && (
+                      <button
+                        type="button"
+                        className="btn btn-accent btn-sm btn-soft min-h-11"
+                        aria-label={`Share ${result.name}`}
+                        onClick={() => onShareFolder(result)}
+                      >
+                        <PeopleIcon aria-hidden="true" />
+                        <span className="hidden sm:inline">Share</span>
+                      </button>
+                    )}
+                  {result.match !== "folder" && onDownload && (
                     <button
                       type="button"
                       className="btn btn-accent btn-sm btn-soft min-h-11"
@@ -254,7 +286,7 @@ export function SearchResults({
                       <span className="hidden sm:inline">Download</span>
                     </button>
                   )}
-                  {onShare && (
+                  {result.match !== "folder" && onShare && (
                     <button
                       type="button"
                       className="btn btn-accent btn-sm btn-soft min-h-11"
@@ -265,7 +297,7 @@ export function SearchResults({
                       <span className="hidden sm:inline">Share</span>
                     </button>
                   )}
-                  {onMove && (
+                  {result.match !== "folder" && onMove && (
                     <button
                       type="button"
                       className="btn btn-accent btn-sm btn-soft min-h-11"
@@ -276,7 +308,7 @@ export function SearchResults({
                       <span className="hidden sm:inline">Move</span>
                     </button>
                   )}
-                  {onDelete && (
+                  {result.match !== "folder" && onDelete && (
                     <button
                       type="button"
                       className="btn btn-accent btn-sm btn-soft min-h-11"

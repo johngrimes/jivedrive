@@ -18,6 +18,7 @@ import type { MountRow } from "../components/FileListing";
 import { MoveDialog } from "../components/MoveDialog";
 import { SearchResults } from "../components/SearchResults";
 import { ShareModal } from "../components/ShareModal";
+import { NewFolderControl } from "../components/NewFolderControl";
 import { UploadControl } from "../components/UploadControl";
 import { ShareDialog } from "../components/ShareDialog";
 
@@ -355,13 +356,19 @@ export function FilesPage() {
   }
 
   /**
-   * Open a search result's containing folder: navigating clears the
-   * query, which restores the folder listing (FR-003, US1 sc.4).
+   * Open a search result: a folder opens itself, a file its containing
+   * folder. Navigating clears the query, which restores the folder
+   * listing (FR-003, US1 sc.4).
    *
    * @param result - the clicked result
    */
   function openResult(result: SearchResult): void {
     setQuery(null);
+    if (result.match === "folder") {
+      // A folder's key is its space-relative prefix ("" opens a mount).
+      navigate(result.space, result.key);
+      return;
+    }
     navigate(result.space, result.path === "" ? "" : `${result.path}/`);
   }
 
@@ -456,8 +463,8 @@ export function FilesPage() {
           <input
             type="search"
             className="input input-bordered grow min-h-11"
-            aria-label="Search files"
-            placeholder="Search files by name"
+            aria-label="Search files and folders"
+            placeholder="Search files and folders"
             value={queryInput}
             onChange={(event) => setQueryInput(event.target.value)}
           />
@@ -496,10 +503,18 @@ export function FilesPage() {
 
         {query === null ? (
           <>
-            <div className="mb-3 flex items-center justify-between gap-4">
-              <span className="text-sm opacity-70">
+            {/* One wrapping row: the count, then the actions pushed to
+                the right; feedback lines wrap below at full width. */}
+            <div className="mb-3 flex flex-wrap items-start justify-end gap-2">
+              <span className="mr-auto min-h-10 content-center whitespace-nowrap text-sm opacity-70">
                 {itemCount} {itemCount === 1 ? "item" : "items"}
               </span>
+              <NewFolderControl
+                folder={prefix}
+                space={space}
+                onCreated={refreshListing}
+                onSessionExpired={() => void refresh()}
+              />
               <UploadControl
                 folder={prefix}
                 space={space}
@@ -573,6 +588,7 @@ export function FilesPage() {
               setActionSuccess(null);
               setDeleteFile(asFileEntry(result));
             }}
+            onShareFolder={(result) => setShareFolder(result.key)}
             onSessionExpired={() => void refresh()}
           />
         )}
