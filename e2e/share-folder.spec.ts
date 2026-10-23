@@ -175,7 +175,7 @@ test("US2: bob browses and downloads the projects folder shared by alice", async
   ).toBeVisible();
   // US3: the mount is writable — the upload control is present and file
   // rows carry delete actions (T027), both scoped to the sharer's folder.
-  await expect(page.getByText("Upload file", { exact: true })).toBeVisible();
+  await expect(page.getByText("Upload files", { exact: true })).toBeVisible();
   await expect(
     page
       .locator("li.list-row", { hasText: "plan.txt" })
@@ -579,7 +579,7 @@ test("responsive: bob's mount view is usable with no overflow at 375, 768 and 12
     // The read/write controls are usable: upload, download and delete
     // are all present, and the row actions keep 44px+ touch targets
     // (min-h-11, constitution VI).
-    await expect(page.getByText("Upload file", { exact: true })).toBeVisible();
+    await expect(page.getByText("Upload files", { exact: true })).toBeVisible();
     const planRow = page.locator("li.list-row", { hasText: "plan.txt" });
     for (const action of ["Download", "Delete"]) {
       const button = planRow.getByRole("button", { name: action });

@@ -501,11 +501,14 @@ export function FilesPage() {
           </p>
         )}
 
-        {query === null ? (
-          <>
-            {/* One wrapping row: the count, then the actions pushed to
-                the right; feedback lines wrap below at full width. */}
-            <div className="mb-3 flex flex-wrap items-start justify-end gap-2">
+        {/* One wrapping row: the count, then the actions pushed to the
+            right; feedback lines wrap below at full width. The row stays
+            mounted while search results show: an upload batch lives in the
+            upload control, so unmounting it would abandon the batch mid-way
+            (issue #12). */}
+        <div className="mb-3 flex flex-wrap items-start justify-end gap-2">
+          {query === null && (
+            <>
               <span className="mr-auto min-h-10 content-center whitespace-nowrap text-sm opacity-70">
                 {itemCount} {itemCount === 1 ? "item" : "items"}
               </span>
@@ -515,53 +518,55 @@ export function FilesPage() {
                 onCreated={refreshListing}
                 onSessionExpired={() => void refresh()}
               />
-              <UploadControl
-                folder={prefix}
-                space={space}
-                onUploaded={refreshListing}
-                onSessionExpired={() => void refresh()}
-              />
-            </div>
+            </>
+          )}
+          <UploadControl
+            folder={prefix}
+            space={space}
+            onUploaded={refreshListing}
+            onSessionExpired={() => void refresh()}
+          />
+        </div>
 
-            <FileListing
-              folders={listing?.folders ?? []}
-              files={listing?.files ?? []}
-              loading={fetching}
-              loadingMore={loadingMore}
-              nextCursor={listing?.nextCursor ?? null}
-              error={error}
-              hasParent={prefix !== "" || space !== "own"}
-              onOpenFolder={(folder) => navigate(space, prefix + folder + "/")}
-              onDownload={(file) => void handleDownload(file, space)}
-              onShare={(file) => {
-                setDialogSpace(space);
-                setActionSuccess(null);
-                setShareFile(file);
-              }}
-              onMove={(file) => {
-                setActionSuccess(null);
-                setMoveTarget({ file, space, folder: prefix });
-              }}
-              onDelete={(file) => {
-                setDialogSpace(space);
-                setActionSuccess(null);
-                setDeleteFile(file);
-              }}
-              onLoadMore={() => void loadMore()}
-              onRetry={retry}
-              onShareFolder={
-                space === "own"
-                  ? (folder) => {
-                      setActionSuccess(null);
-                      setShareFolder(prefix + folder + "/");
-                    }
-                  : undefined
-              }
-              sharedFolders={sharedFolders}
-              mounts={mounts}
-              onOpenMount={(mountId) => navigate(`shared:${mountId}`, "")}
-            />
-          </>
+        {query === null ? (
+          <FileListing
+            folders={listing?.folders ?? []}
+            files={listing?.files ?? []}
+            loading={fetching}
+            loadingMore={loadingMore}
+            nextCursor={listing?.nextCursor ?? null}
+            error={error}
+            hasParent={prefix !== "" || space !== "own"}
+            onOpenFolder={(folder) => navigate(space, prefix + folder + "/")}
+            onDownload={(file) => void handleDownload(file, space)}
+            onShare={(file) => {
+              setDialogSpace(space);
+              setActionSuccess(null);
+              setShareFile(file);
+            }}
+            onMove={(file) => {
+              setActionSuccess(null);
+              setMoveTarget({ file, space, folder: prefix });
+            }}
+            onDelete={(file) => {
+              setDialogSpace(space);
+              setActionSuccess(null);
+              setDeleteFile(file);
+            }}
+            onLoadMore={() => void loadMore()}
+            onRetry={retry}
+            onShareFolder={
+              space === "own"
+                ? (folder) => {
+                    setActionSuccess(null);
+                    setShareFolder(prefix + folder + "/");
+                  }
+                : undefined
+            }
+            sharedFolders={sharedFolders}
+            mounts={mounts}
+            onOpenMount={(mountId) => navigate(`shared:${mountId}`, "")}
+          />
         ) : (
           <SearchResults
             key={searchRun}
