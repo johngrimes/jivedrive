@@ -432,13 +432,14 @@ test("folder search ranks folders first and a folder result opens the folder its
 }) => {
   await search(page, "report");
 
-  // docs/reports matches by its own name and ranks above both
-  // report.pdf file name matches.
+  // docs/reports matches by its own name and ranks above the report.pdf
+  // file name matches. (Other specs upload more "report" files into the
+  // shared server, so the file count is not pinned.)
   const first = page.locator("li.list-row").first();
   await expect(first).toContainText("reports", { timeout: INDEX_TIMEOUT });
   await expect(first).toContainText("Folder");
   await expect(first).toContainText("docs");
-  await expect(page.getByText("Name match")).toHaveCount(2);
+  await expect(page.locator("li.list-row").nth(1)).toContainText("Name match");
   // A folder row carries no file actions.
   await expect(first.getByRole("button", { name: /Download/ })).toHaveCount(0);
   await expect(first.getByRole("button", { name: /Delete/ })).toHaveCount(0);
@@ -496,19 +497,21 @@ test("a recipient finds a shared folder's root and subfolders and opens them in 
   page,
   context,
 }) => {
+  // flo is search.spec's dedicated recipient: bob is deleted mid-run by
+  // share-folder.spec US5 (see e2eServer.ts).
   await startSignedInAs(page, context, "alice", "browse-session");
   const photosShare = await page.request.post("/api/shares", {
-    data: { folder: "photos/", recipientUsername: "bob" },
+    data: { folder: "photos/", recipientUsername: "flo" },
   });
   expect([201, 409]).toContain(photosShare.status());
   const docsShare = await page.request.post("/api/shares", {
-    data: { folder: "docs/", recipientUsername: "bob" },
+    data: { folder: "docs/", recipientUsername: "flo" },
   });
   expect([201, 409]).toContain(docsShare.status());
 
   try {
     // The mount root itself matches by name and opens the share's root.
-    await startSignedInAs(page, context, "bob", "bob-session");
+    await startSignedInAs(page, context, "flo", "flo-session");
     await search(page, "photos");
     const mount = page.locator("li.list-row", { hasText: "Shared by alice" });
     await expect(mount).toContainText("photos", { timeout: INDEX_TIMEOUT });
@@ -538,14 +541,14 @@ test("a recipient finds a shared folder's root and subfolders and opens them in 
     await deep.getByRole("link", { name: /quarterly/ }).click();
     await expect(page.getByText("summary.txt")).toBeVisible();
   } finally {
-    // Leave bob's root mounts as the other specs expect them.
+    // Revoke the photos share again, as the US3 revocation test does.
     await startSignedInAs(page, context, "alice", "browse-session");
     const shares = (await (
       await page.request.get("/api/shares")
     ).json()) as ListSharesBody;
     const share = shares.outgoing.find(
       (entry) =>
-        entry.folderName === "photos" && entry.recipient.username === "bob",
+        entry.folderName === "photos" && entry.recipient.username === "flo",
     );
     if (share) await page.request.delete(`/api/shares/${share.id}`);
   }
