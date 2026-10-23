@@ -480,10 +480,13 @@ test("an own folder result shares the folder, usable at mobile and tablet widths
     await expectNoHorizontalOverflow(page);
 
     await row.getByRole("button", { name: "Share photos" }).click();
-    const dialog = page.getByRole("dialog", { name: "Share photos" });
+    const dialog = page.getByRole("alertdialog", { name: "Share photos" });
     await expect(dialog).toBeVisible();
     await expectNoHorizontalOverflow(page);
-    await dialog.getByRole("button", { name: "Close" }).first().click();
+    // The backdrop closes the dialog; click its corner, clear of the box.
+    await page
+      .getByRole("button", { name: "Close" })
+      .click({ position: { x: 5, y: 5 } });
     await expect(dialog).toHaveCount(0);
     await page.getByRole("button", { name: "Clear" }).click();
   }
