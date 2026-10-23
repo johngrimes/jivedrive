@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 import type { Page, BrowserContext } from "@playwright/test";
-import { expectNoHorizontalOverflow, expectSignedInAs } from "./helpers";
+import {
+  chooseRowAction,
+  expectNoHorizontalOverflow,
+  expectSignedInAs,
+} from "./helpers";
 
 /**
  * Start signed in with the pre-seeded session (no WebAuthn ceremony) and
@@ -40,10 +44,10 @@ async function openPhotos(page: Page, context: BrowserContext): Promise<void> {
  * @returns the delete dialog locator
  */
 async function openDelete(page: Page, rowText: string) {
-  await page
-    .locator("li.list-row", { hasText: rowText })
-    .getByRole("button", { name: "Delete" })
-    .click();
+  await chooseRowAction(
+    page.locator("li.list-row", { hasText: rowText }),
+    "Delete",
+  );
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toContainText(rowText);
   return dialog;

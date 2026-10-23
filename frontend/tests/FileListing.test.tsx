@@ -48,6 +48,36 @@ function rows(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll("li.list-row"));
 }
 
+/** A row's actions-menu trigger, or null when the row has no actions. */
+function actionsTrigger(
+  container: HTMLElement,
+  name: string,
+): HTMLButtonElement | null {
+  return container.querySelector(`button[aria-label="Actions for ${name}"]`);
+}
+
+/**
+ * Open a row's actions menu and list its item labels in order.
+ *
+ * @param container - the rendered listing
+ * @param name - the row's file or folder name
+ * @returns the menu's item labels
+ */
+function openActions(container: HTMLElement, name: string): string[] {
+  act(() => actionsTrigger(container, name)?.click());
+  return Array.from(
+    container.querySelectorAll(`ul[aria-label="Actions for ${name}"] button`),
+  ).map((item) => item.textContent ?? "");
+}
+
+/** Click an item in a row's (already open) actions menu. */
+function chooseAction(container: HTMLElement, name: string, label: string) {
+  const item = Array.from(
+    container.querySelectorAll(`ul[aria-label="Actions for ${name}"] button`),
+  ).find((button) => button.textContent === label) as HTMLButtonElement;
+  act(() => item.click());
+}
+
 afterEach(() => {
   document.body.innerHTML = "";
 });
@@ -70,18 +100,16 @@ describe("FileListing mounts (T023)", () => {
     );
     expect(mountRow).toBeDefined();
     expect(mountRow?.textContent).toContain("projects");
-    // FR-015: a received folder row never carries a share button, even
-    // when the own-space handler is present for own folders.
-    expect(mountRow?.querySelector('[aria-label="Share projects"]')).toBeNull();
 
     const ownRow = rows(container).find(
       (row) => !row.textContent?.includes("Shared by"),
     );
     expect(ownRow).toBeDefined();
     expect(ownRow?.textContent).toContain("projects");
-    expect(
-      ownRow?.querySelector('[aria-label="Share projects"]'),
-    ).not.toBeNull();
+    expect(openActions(ownRow!, "projects")).toEqual(["Share"]);
+    // FR-015: a received folder row never carries an actions menu, even
+    // when the own-space handler is present for own folders.
+    expect(mountRow?.querySelector("button")).toBeNull();
   });
 
   it("renders two same-named mounts from different sharers, each labelled", () => {
@@ -142,71 +170,83 @@ describe("FileListing mounts (T023)", () => {
     expect(container.textContent).not.toContain("Your space is empty");
   });
 
-  it("renders no share buttons on folder rows when none is provided (shared view, FR-015)", () => {
+  it("renders no actions menu on folder rows when no share handler is provided (shared view, FR-015)", () => {
     const container = renderListing({
       folders: ["docs", "photos"],
       onShareFolder: undefined,
     });
 
     expect(rows(container)).toHaveLength(2);
-    expect(container.querySelector('[aria-label="Share docs"]')).toBeNull();
-    expect(container.querySelector('[aria-label="Share photos"]')).toBeNull();
+    expect(actionsTrigger(container, "docs")).toBeNull();
+    expect(actionsTrigger(container, "photos")).toBeNull();
   });
 
-  it("renders no delete button on file rows when none is provided (shared view)", () => {
-    const onShare = vi.fn();
-    const container = renderListing({
-      files: [fileEntry],
-      onShare,
-    });
+  it("offers folder Share from the folder row's menu", () => {
+    const onShareFolder = vi.fn();
+    const container = renderListing({ folders: ["docs"], onShareFolder });
 
-    // Download and Share stay; Delete is absent in this phase.
-    expect(container.querySelector('[aria-label="Download"]')).not.toBeNull();
-    expect(container.querySelector('[aria-label="Share"]')).not.toBeNull();
-    expect(container.querySelector('[aria-label="Delete"]')).toBeNull();
-  });
-
-  it("keeps the delete button when a handler is provided (own view)", () => {
-    const container = renderListing({
-      files: [fileEntry],
-      onDelete: () => {},
-    });
-
-    expect(container.querySelector('[aria-label="Delete"]')).not.toBeNull();
+    expect(openActions(container, "docs")).toEqual(["Share"]);
+    chooseAction(container, "docs", "Share");
+    expect(onShareFolder).toHaveBeenCalledWith("docs");
   });
 });
 
-describe("FileListing move action", () => {
-  it("renders a Move button on file rows that calls onMove with the file", () => {
-    const onMove = vi.fn();
+describe("FileListing file actions menu", () => {
+  it("puts every file action behind one trigger, in order", () => {
+    const container = renderListing({
+      files: [fileEntry],
+      onMove: () => {},
+      onDelete: () => {},
+    });
+
+    const row = rows(container)[0]!;
+    // The row's only button is the menu trigger.
+    expect(row.querySelectorAll("button")).toHaveLength(1);
+    expect(openActions(container, "plan.txt")).toEqual([
+      "Download",
+      "Share",
+      "Move",
+      "Delete",
+    ]);
+  });
+
+  it("omits Move and Delete when no handlers are provided (shared view)", () => {
+    const container = renderListing({ files: [fileEntry] });
+
+    expect(openActions(container, "plan.txt")).toEqual(["Download", "Share"]);
+  });
+
+  it.each([
+    ["Download", "onDownload"],
+    ["Share", "onShare"],
+    ["Move", "onMove"],
+    ["Delete", "onDelete"],
+  ] as const)("%s calls %s with the file", (label, handler) => {
+    const spy = vi.fn();
     const container = renderListing({
       folders: ["docs"],
       files: [fileEntry],
-      onMove,
+      onMove: () => {},
+      onDelete: () => {},
+      [handler]: spy,
     });
 
-    const buttons = container.querySelectorAll('[aria-label="Move"]');
-    // Only the file row carries the action: folders cannot be moved.
-    expect(buttons).toHaveLength(1);
+    openActions(container, "plan.txt");
+    chooseAction(container, "plan.txt", label);
+    expect(spy).toHaveBeenCalledWith(fileEntry);
+  });
+
+  it("downloads the file when its name is clicked", () => {
+    const onDownload = vi.fn();
+    const container = renderListing({ files: [fileEntry], onDownload });
+
+    const link = rows(container)[0]!.querySelector("a");
+    expect(link?.textContent).toBe("plan.txt");
     act(() => {
-      (buttons[0] as HTMLButtonElement).click();
+      link?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
     });
-    expect(onMove).toHaveBeenCalledWith(fileEntry);
-  });
-
-  it("hides the Move label text below sm, like the other actions", () => {
-    const container = renderListing({ files: [fileEntry], onMove: () => {} });
-
-    const button = container.querySelector('[aria-label="Move"]');
-    expect(button?.className).toContain("min-h-11");
-    const label = button?.querySelector("span");
-    expect(label?.textContent).toBe("Move");
-    expect(label?.className).toContain("hidden sm:inline");
-  });
-
-  it("renders no Move button when no handler is provided", () => {
-    const container = renderListing({ files: [fileEntry] });
-
-    expect(container.querySelector('[aria-label="Move"]')).toBeNull();
+    expect(onDownload).toHaveBeenCalledWith(fileEntry);
   });
 });

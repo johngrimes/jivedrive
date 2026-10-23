@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import type { BrowserContext, Page } from "@playwright/test";
 import {
+  chooseRowAction,
   downloadFromPopup,
   expectNoHorizontalOverflow,
   expectSignedInAs,
@@ -284,7 +285,7 @@ test("US3: a recipient's search shows the shared label and downloads from the sh
   // Download from the result is issued against the shared space and
   // succeeds (US3 sc.3): the presigned URL opens in a new window.
   const download = await downloadFromPopup(page, () =>
-    row.getByRole("button", { name: "Download" }).click(),
+    chooseRowAction(row, "Download"),
   );
   const content = await readStream(await download.createReadStream());
   expect(content.toString()).toBe("hello from notes");
@@ -399,7 +400,7 @@ test("US4: an admin reindex makes an upload searchable and a deletion disappear"
 
   // alice deletes the file; a second admin reindex drops it from the
   // index without waiting for the next scheduled scan (US4 sc.3).
-  await row.getByRole("button", { name: "Delete" }).click();
+  await chooseRowAction(row, "Delete");
   const dialog = page.getByRole("alertdialog");
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(dialog).toHaveCount(0);
@@ -440,9 +441,17 @@ test("folder search ranks folders first and a folder result opens the folder its
   await expect(first).toContainText("Folder");
   await expect(first).toContainText("docs");
   await expect(page.locator("li.list-row").nth(1)).toContainText("Name match");
-  // A folder row carries no file actions.
-  await expect(first.getByRole("button", { name: /Download/ })).toHaveCount(0);
-  await expect(first.getByRole("button", { name: /Delete/ })).toHaveCount(0);
+  // A folder row's menu offers only the folder Share, no file actions.
+  await first.getByRole("button", { name: "Actions for reports" }).click();
+  await expect(
+    first
+      .getByRole("list", { name: "Actions for reports" })
+      .getByRole("button"),
+  ).toHaveText(["Share"]);
+  await page.keyboard.press("Escape");
+  await expect(
+    first.getByRole("list", { name: "Actions for reports" }),
+  ).toHaveCount(0);
 
   await first.getByRole("link", { name: /reports/ }).click();
 
@@ -480,7 +489,7 @@ test("an own folder result shares the folder, usable at mobile and tablet widths
     await expect(row).toContainText("Folder", { timeout: INDEX_TIMEOUT });
     await expectNoHorizontalOverflow(page);
 
-    await row.getByRole("button", { name: "Share photos" }).click();
+    await chooseRowAction(row, "Share");
     const dialog = page.getByRole("alertdialog", { name: "Share photos" });
     await expect(dialog).toBeVisible();
     await expectNoHorizontalOverflow(page);

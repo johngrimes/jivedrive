@@ -2,25 +2,22 @@
  * File listing components: breadcrumbs, the folder/file table, empty state
  * and loading skeletons, plus human-readable formatting helpers (T036).
  *
- * Rebuilt on daisyUI primitives (T011): breadcrumbs, table, link, btn,
- * skeleton, alert (US2). Folder rows are links (they navigate); file rows
- * carry button Download/Share/Move/Delete actions with octicons — icon+text at
- * `sm` and up, icon-only below with the accessible name on the button
- * (FR-007). Size and Modified relocate below `sm` into a secondary line
- * under the file name (FR-005) and return to their own columns at `sm`+,
- * so the table fits 375px without horizontal scrolling (FR-009).
+ * Rebuilt on daisyUI primitives (T011): breadcrumbs, list, link, skeleton,
+ * alert (US2). Folder names are links that open the folder; file names are
+ * links that download the file. Each row's actions (file Download/Share/
+ * Move/Delete, own-folder Share) sit behind one "⋯" RowActionsMenu, so a
+ * row stays a single line that fits 375px without horizontal scrolling
+ * (FR-007, FR-009).
  */
 import type { FileEntry } from "../api/client";
 import {
-  DownloadIcon,
   FileDirectoryFillIcon,
   FileIcon,
-  FileMovedIcon,
   HomeIcon,
   PeopleIcon,
-  ShareAndroidIcon,
-  TrashIcon,
 } from "@primer/octicons-react";
+import { RowActionsMenu } from "./RowActionsMenu";
+import { fileRowActions } from "./fileRowActions";
 
 /** Props for {@link Breadcrumbs}. */
 export interface BreadcrumbsProps {
@@ -196,20 +193,18 @@ export interface FileListingProps {
   hasParent: boolean;
   /** Open a folder by its base name. */
   onOpenFolder: (folder: string) => void;
-  /** Start a download for a file. */
+  /** Start a download for a file (its name link and menu item). */
   onDownload: (file: FileEntry) => void;
   /** Open the share modal for a file. */
   onShare: (file: FileEntry) => void;
   /**
-   * Open the delete confirmation dialog for a file. Optional: shared
-   * spaces pass no handler this phase, so no delete button renders and
-   * no action can mutate the wrong space (T027 adds it with a space
-   * prop).
+   * Open the delete confirmation dialog for a file. Optional: without a
+   * handler the row's menu offers no Delete.
    */
   onDelete?: (file: FileEntry) => void;
   /**
-   * Open the move dialog for a file. Optional: without a handler no
-   * move button renders.
+   * Open the move dialog for a file. Optional: without a handler the
+   * row's menu offers no Move.
    */
   onMove?: (file: FileEntry) => void;
   /** Load the next page. */
@@ -218,7 +213,7 @@ export interface FileListingProps {
   onRetry: () => void;
   /**
    * Open the share dialog for a folder (R13). Optional: received folder
-   * rows pass no handler, so they render no share button (FR-015: a
+   * rows pass no handler, so they render no actions menu (FR-015: a
    * recipient cannot re-share).
    */
   onShareFolder?: (folder: string) => void;
@@ -292,125 +287,85 @@ export function FileListing({
       <ul className="list">
         {folders.map((folder) => (
           <li
-            className="list-row flex flex-wrap justify-end md:justify-start md:flex-nowrap gap-3 items-center overflow-hidden"
+            className="list-row flex items-center gap-3"
             key={`folder:${folder}`}
           >
-            <div className="flex grow gap-3 items-center">
-              <a
-                className="link inline-flex items-center gap-3 font-semibold no-underline"
-                href="#"
-                onClick={(event) => {
-                  event.preventDefault();
-                  onOpenFolder(folder);
-                }}
-              >
-                <FileDirectoryFillIcon
-                  aria-hidden="true"
-                  className="shrink-0"
-                />
-                {folder}
-                {sharedFolders?.includes(folder) && (
-                  <span className="badge badge-neutral badge-sm">Shared</span>
-                )}
-              </a>
-            </div>
-            {onShareFolder && (
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  className="btn btn-accent btn-sm btn-soft min-h-11"
-                  aria-label={`Share ${folder}`}
-                  onClick={() => onShareFolder(folder)}
-                >
-                  <PeopleIcon aria-hidden="true" />
-                  <span className="hidden sm:inline">Share</span>
-                </button>
-              </div>
-            )}
+            <a
+              className="link inline-flex min-w-0 grow items-center gap-3 font-semibold no-underline"
+              href="#"
+              onClick={(event) => {
+                event.preventDefault();
+                onOpenFolder(folder);
+              }}
+            >
+              <FileDirectoryFillIcon aria-hidden="true" className="shrink-0" />
+              <span className="truncate">{folder}</span>
+              {sharedFolders?.includes(folder) && (
+                <span className="badge badge-neutral badge-sm">Shared</span>
+              )}
+            </a>
+            <RowActionsMenu
+              name={folder}
+              actions={
+                onShareFolder
+                  ? [
+                      {
+                        label: "Share",
+                        icon: <PeopleIcon aria-hidden="true" />,
+                        onSelect: () => onShareFolder(folder),
+                      },
+                    ]
+                  : []
+              }
+            />
           </li>
         ))}
         {mounts?.map((mount) => (
           <li
-            className="list-row flex flex-wrap justify-end md:justify-start md:flex-nowrap gap-3 items-center overflow-hidden"
+            className="list-row flex items-center gap-3"
             key={`mount:${mount.id}`}
           >
-            <div className="flex grow gap-3 items-center">
-              <a
-                className="link inline-flex items-center gap-3 font-semibold no-underline"
-                href="#"
-                onClick={(event) => {
-                  event.preventDefault();
-                  onOpenMount?.(mount.id);
-                }}
-              >
-                <FileDirectoryFillIcon
-                  aria-hidden="true"
-                  className="shrink-0"
-                />
-                {mount.folderName}
-                {/* FR-008: the label disambiguates a mount from a
-                    same-named own folder; no share button (FR-015) and
-                    no "Shared" chip on received rows. */}
-                <span className="badge badge-ghost badge-sm">
-                  Shared by {mount.sharerUsername}
-                </span>
-              </a>
-            </div>
+            <a
+              className="link inline-flex min-w-0 grow items-center gap-3 font-semibold no-underline"
+              href="#"
+              onClick={(event) => {
+                event.preventDefault();
+                onOpenMount?.(mount.id);
+              }}
+            >
+              <FileDirectoryFillIcon aria-hidden="true" className="shrink-0" />
+              <span className="truncate">{mount.folderName}</span>
+              {/* FR-008: the label disambiguates a mount from a
+                  same-named own folder; no actions menu (FR-015) and
+                  no "Shared" chip on received rows. */}
+              <span className="badge badge-ghost badge-sm shrink-0">
+                Shared by {mount.sharerUsername}
+              </span>
+            </a>
           </li>
         ))}
         {files.map((file) => (
-          <li
-            className="list-row flex flex-wrap justify-end md:justify-start md:flex-nowrap gap-3 items-center overflow-hidden"
-            key={file.key}
-          >
-            <div className="flex grow gap-3 items-center">
-              <FileIcon aria-hidden="true" />
-              <span className="truncate w-2xs md:w-auto md:max-w-md">
-                {file.name}
-              </span>
-            </div>
-            <div className="flex gap-3">
-              <button
-                type="button"
-                className="btn btn-accent btn-sm btn-soft min-h-11"
-                aria-label="Download"
-                onClick={() => onDownload(file)}
-              >
-                <DownloadIcon aria-hidden="true" />
-                <span className="hidden sm:inline">Download</span>
-              </button>
-              <button
-                type="button"
-                className="btn btn-accent btn-sm btn-soft min-h-11"
-                aria-label="Share"
-                onClick={() => onShare(file)}
-              >
-                <ShareAndroidIcon aria-hidden="true" />
-                <span className="hidden sm:inline">Share</span>
-              </button>
-              {onMove && (
-                <button
-                  type="button"
-                  className="btn btn-accent btn-sm btn-soft min-h-11"
-                  aria-label="Move"
-                  onClick={() => onMove(file)}
-                >
-                  <FileMovedIcon aria-hidden="true" />
-                  <span className="hidden sm:inline">Move</span>
-                </button>
-              )}
-              {onDelete && (
-                <button
-                  type="button"
-                  className="btn btn-accent btn-sm btn-soft min-h-11"
-                  aria-label="Delete"
-                  onClick={() => onDelete(file)}
-                >
-                  <TrashIcon aria-hidden="true" />
-                  <span className="hidden sm:inline">Delete</span>
-                </button>
-              )}
-            </div>
+          <li className="list-row flex items-center gap-3" key={file.key}>
+            <a
+              className="link inline-flex min-w-0 grow items-center gap-3 no-underline"
+              href="#"
+              onClick={(event) => {
+                event.preventDefault();
+                onDownload(file);
+              }}
+            >
+              <FileIcon aria-hidden="true" className="shrink-0" />
+              <span className="truncate">{file.name}</span>
+            </a>
+            <RowActionsMenu
+              name={file.name}
+              actions={fileRowActions({
+                onDownload: () => onDownload(file),
+                onShare: () => onShare(file),
+                onMove: onMove && (() => onMove(file)),
+                onDelete: onDelete && (() => onDelete(file)),
+              })}
+            />
           </li>
         ))}
       </ul>

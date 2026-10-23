@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { Browser, BrowserContext, Download, Page } from "@playwright/test";
 import {
+  chooseRowAction,
   expectNoHorizontalOverflow,
   expectSignedInAs,
   readStream,
@@ -50,10 +51,10 @@ async function startSignedIn(
  * @returns the share dialog locator
  */
 async function openShare(page: Page, rowText: string) {
-  await page
-    .locator("li.list-row", { hasText: rowText })
-    .getByRole("button", { name: "Share" })
-    .click();
+  await chooseRowAction(
+    page.locator("li.list-row", { hasText: rowText }),
+    "Share",
+  );
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toContainText(rowText);
   await expect(dialog.getByLabel("Share link")).toHaveValue(SHORT_LINK_PATTERN);

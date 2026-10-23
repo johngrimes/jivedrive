@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 import type { BrowserContext, Locator, Page } from "@playwright/test";
-import { expectNoHorizontalOverflow, expectSignedInAs } from "./helpers";
+import {
+  chooseRowAction,
+  expectNoHorizontalOverflow,
+  expectSignedInAs,
+} from "./helpers";
 
 /**
  * Move a file to another folder (issue #14). Every test runs as milo, a
@@ -100,21 +104,20 @@ function fileRow(page: Page, name: string): Locator {
 }
 
 /**
- * Open the move dialog from a row and wait for it to name the file.
+ * Open the move dialog from a row's actions menu and wait for it to name
+ * the file.
  *
  * @param page - the page
- * @param row - the row carrying the Move button
+ * @param row - the listing or search row
  * @param name - the file name
- * @param buttonName - the Move button's accessible name
  * @returns the dialog locator
  */
 async function openMove(
   page: Page,
   row: Locator,
   name: string,
-  buttonName = "Move",
 ): Promise<Locator> {
-  await row.getByRole("button", { name: buttonName, exact: true }).click();
+  await chooseRowAction(row, "Move");
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText(`Move ${name}`);
   return dialog;
@@ -263,7 +266,7 @@ test("moves a file from a search result row", async ({ page, context }) => {
   }).toPass({ timeout: INDEX_TIMEOUT });
   await expect(result).toContainText("move-search");
 
-  const dialog = await openMove(page, result, name, `Move ${name}`);
+  const dialog = await openMove(page, result, name);
   await expect(trail(dialog)).toContainText("move-search");
   await enterFolder(dialog, "Target");
   await dialog.getByRole("button", { name: "Move here" }).click();
@@ -334,14 +337,22 @@ test("the move dialog is fully usable at 375px without horizontal scroll", async
   await page.goto("/files?prefix=move-mobile%2F");
 
   const row = fileRow(page, name);
-  const moveButton = row.getByRole("button", { name: "Move", exact: true });
-  await expect(moveButton).toBeVisible();
-  // Icon-only below sm, with a touch-sized target.
-  await expect(moveButton.getByText("Move", { exact: true })).toBeHidden();
-  expect((await moveButton.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  // The row's ⋯ trigger is a touch-sized target; the opened menu shows
+  // Move with its label, also touch-sized, and widens nothing.
+  const trigger = row.getByRole("button", { name: `Actions for ${name}` });
+  expect((await trigger.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await trigger.click();
+  const moveItem = row
+    .getByRole("list", { name: `Actions for ${name}` })
+    .getByRole("button", { name: "Move", exact: true });
+  await expect(moveItem).toBeVisible();
+  await expect(moveItem.getByText("Move", { exact: true })).toBeVisible();
+  expect((await moveItem.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   await expectNoHorizontalOverflow(page);
+  await moveItem.click();
 
-  const dialog = await openMove(page, row, name);
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText(`Move ${name}`);
   await expectNoHorizontalOverflow(page);
   const folderButton = dialog
     .getByRole("list", { name: "Folders" })

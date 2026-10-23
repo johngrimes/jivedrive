@@ -3,6 +3,7 @@ import type {
   BrowserContext,
   CDPSession,
   Download,
+  Locator,
   Page,
 } from "@playwright/test";
 
@@ -107,6 +108,24 @@ export async function expectNoHorizontalOverflow(page: Page): Promise<void> {
       document.documentElement.clientWidth,
   );
   expect(hasOverflow).toBe(false);
+}
+
+/**
+ * Choose an item from a listing or search row's "⋯" actions menu: open
+ * the menu, then click the item with the given label.
+ *
+ * @param row - the row (an `li.list-row` locator) carrying the menu
+ * @param label - the item's label, e.g. "Download"
+ */
+export async function chooseRowAction(
+  row: Locator,
+  label: string,
+): Promise<void> {
+  await row.getByRole("button", { name: /^Actions for / }).click();
+  await row
+    .getByRole("list", { name: /^Actions for / })
+    .getByRole("button", { name: label, exact: true })
+    .click();
 }
 
 /**
