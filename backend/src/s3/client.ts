@@ -1,4 +1,5 @@
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -206,6 +207,36 @@ export async function deleteObject(
 ): Promise<void> {
   assertKeyInScope(userPrefix, key);
   await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+}
+
+/**
+ * Copy an object to another key in the same bucket (server-side; the
+ * body never passes through the app). Metadata and content type are
+ * copied with the object. A single copy request handles objects up to
+ * 5 GB, the single-PUT ceiling of every upload the app issues.
+ *
+ * @param client - S3 client
+ * @param bucket - bucket holding both keys
+ * @param userPrefix - the effective scope prefix both keys must sit under
+ * @param fromKey - full key of the existing object
+ * @param toKey - full key to write the copy to
+ * @throws {RangeError} when either key is outside the prefix
+ */
+export async function copyObject(
+  client: S3Client,
+  bucket: string,
+  userPrefix: string,
+  fromKey: string,
+  toKey: string,
+): Promise<void> {
+  assertKeyInScope(userPrefix, fromKey);
+  assertKeyInScope(userPrefix, toKey);
+  // CopySource is "bucket/key" and must be URL-encoded; encoding each
+  // segment keeps the "/" separators literal.
+  const source = `${bucket}/${fromKey.split("/").map(encodeURIComponent).join("/")}`;
+  await client.send(
+    new CopyObjectCommand({ Bucket: bucket, Key: toKey, CopySource: source }),
+  );
 }
 
 /**

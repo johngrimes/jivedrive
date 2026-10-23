@@ -187,6 +187,25 @@ function createMockS3Client(): S3Client {
         await Bun.sleep(DELETE_DELAY_MS);
         objectStore.delete(input.Key as string);
         return {};
+      case "CopyObjectCommand": {
+        // CopySource is the URL-encoded `bucket/key`: drop the bucket
+        // segment and decode each key segment (the move route's form).
+        const [, ...segments] = String(input.CopySource)
+          .replace(/^\//, "")
+          .split("/");
+        const sourceKey = segments.map(decodeURIComponent).join("/");
+        const source = objectStore.get(sourceKey);
+        if (!source) {
+          const err = new Error("NoSuchKey") as Error & { name: string };
+          err.name = "NoSuchKey";
+          throw err;
+        }
+        objectStore.set(input.Key as string, {
+          ...source,
+          lastModified: new Date().toISOString(),
+        });
+        return {};
+      }
       case "GetObjectCommand": {
         const object = objectStore.get(input.Key as string);
         if (!object) {
@@ -364,6 +383,24 @@ const longname = createUser(db, {
 });
 createSession(db, longname.id, { token: "longname-session" });
 
+// Two users dedicated to the move e2e specs (move.spec.ts and the
+// responsive move-dialog test): milo owns one folder tree per test, and
+// nina receives milo's move-shared folder (the spec creates the share).
+// No other spec signs in as them, so their listings never disturb the
+// item counts other specs assert on.
+const milo = createUser(db, {
+  username: "milo",
+  bucket: "jivedrive-prod",
+  prefix: "users/milo/",
+});
+createSession(db, milo.id, { token: "milo-session" });
+const nina = createUser(db, {
+  username: "nina",
+  bucket: "jivedrive-prod",
+  prefix: "users/nina/",
+});
+createSession(db, nina.id, { token: "nina-session" });
+
 const future = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
@@ -493,6 +530,23 @@ seedObject("users/alice/photos/delete-me-missing.txt", "gone soon", 9);
 // target instead of using a seed, so it is retry-safe too.
 seedObject("users/alice/photos/0-responsive-overwrite.txt", "v1", 2);
 seedObject("users/alice/empty/", "", 0);
+// Milo's folder trees for the move specs: one per test, so parallel
+// tests never race each other. Folders exist through the keep.txt
+// objects inside them; the tests upload their own uniquely named files
+// to move. move-collide/ holds a same-named file in Inner/ for the
+// refused-collision test (which never moves anything).
+for (const key of [
+  "move-sub/Reports/keep.txt",
+  "move-root/deep/keep.txt",
+  "move-collide/dup.txt",
+  "move-collide/Inner/dup.txt",
+  "move-search/Target/keep.txt",
+  "move-mobile/Dest/keep.txt",
+  "move-responsive/Dest/keep.txt",
+  "move-shared/inbox/keep.txt",
+]) {
+  seedObject(`users/milo/${key}`, `seeded ${key}`);
+}
 
 // Mock S3 HTTP server: serves downloads at path-style presigned URLs and
 // accepts browser uploads (PUT) into the in-memory store.

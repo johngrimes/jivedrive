@@ -1193,6 +1193,53 @@ export function removeSearchDoc(
   remove();
 }
 
+/** Input for {@link moveObjectRecords}. */
+export interface MoveObjectRecordsInput {
+  /** Bucket holding the object before and after the move. */
+  bucket: string;
+  /** Owner of the space the object lives in (keys their search index). */
+  ownerUserId: string;
+  /** Full object key before the move. */
+  fromKey: string;
+  /** Full object key after the move; same base name as fromKey. */
+  toKey: string;
+}
+
+/**
+ * Carry the database records keyed by an object's key over to its new
+ * key after the object was moved in storage, atomically:
+ *
+ * - Anonymous share links of the object (from any creator) follow it:
+ *   their tokens are kept and their stored key is rewritten. Links that
+ *   already point at the destination key belonged to a since-removed
+ *   object; they are dropped so they can never serve the moved file.
+ * - The owner's search entry is rekeyed in place, keeping its extracted
+ *   text (a move keeps the base name, so the FTS row is unchanged). A
+ *   stale entry at the destination key is removed first.
+ *
+ * @param db - database connection
+ * @param input - bucket, space owner and the old and new full keys
+ */
+export function moveObjectRecords(
+  db: Database,
+  input: MoveObjectRecordsInput,
+): void {
+  const move = db.transaction(() => {
+    db.query("DELETE FROM share_links WHERE bucket = ? AND objectKey = ?").run(
+      input.bucket,
+      input.toKey,
+    );
+    db.query(
+      "UPDATE share_links SET objectKey = ? WHERE bucket = ? AND objectKey = ?",
+    ).run(input.toKey, input.bucket, input.fromKey);
+    removeSearchDoc(db, input.ownerUserId, input.toKey);
+    db.query(
+      "UPDATE search_index SET key = ? WHERE userId = ? AND key = ?",
+    ).run(input.toKey, input.ownerUserId, input.fromKey);
+  });
+  move();
+}
+
 /**
  * Delete every index and FTS row for one user (FR-014). The FTS rows
  * must be removed by a rowid join *before* the user (or their

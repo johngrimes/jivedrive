@@ -11,6 +11,7 @@ import {
   listAdminInvites,
   listAdminUsers,
   listFiles,
+  moveFile,
   listShares,
   postLoginOptions,
   postLoginVerify,
@@ -623,6 +624,71 @@ describe("space-aware file operations (T010)", () => {
       "/api/files?key=plan.txt&space=shared%3Ashare-1",
       expect.objectContaining({ method: "DELETE" }),
     );
+  });
+});
+
+describe("moveFile", () => {
+  it("posts the key and destination folder in the own space by default", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ key: "users/alice/docs/a.txt" }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    const result = await moveFile("users/alice/a.txt", "docs/");
+
+    expect(result).toEqual({ key: "users/alice/docs/a.txt" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files/move",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          space: "own",
+          key: "users/alice/a.txt",
+          folder: "docs/",
+        }),
+      }),
+    );
+  });
+
+  it("posts the shared space with a mount-relative key", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ key: "inbox/plan.txt" }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await moveFile("plan.txt", "inbox/", "shared:share-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files/move",
+      expect.objectContaining({
+        body: JSON.stringify({
+          space: "shared:share-1",
+          key: "plan.txt",
+          folder: "inbox/",
+        }),
+      }),
+    );
+  });
+
+  it("propagates the already_exists conflict", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            error: 'A file named "a.txt" already exists in that folder',
+            code: "already_exists",
+          },
+          409,
+        ),
+      ) as unknown as FetchMock,
+    );
+
+    await expect(moveFile("users/alice/a.txt", "docs/")).rejects.toMatchObject({
+      code: "already_exists",
+      status: 409,
+      message: 'A file named "a.txt" already exists in that folder',
+    });
   });
 });
 

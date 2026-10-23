@@ -3,7 +3,14 @@ import type { Database } from "bun:sqlite";
 import type { S3Client } from "@aws-sdk/client-s3";
 import { fileURLToPath } from "node:url";
 import { migrateFromDir, openDatabase } from "../src/db/migrate";
-import { createUser, getShareLinkByToken } from "../src/db/repository";
+import {
+  createShareLink,
+  createUser,
+  getSearchDoc,
+  getShareLinkByToken,
+  getUserByUsername,
+  upsertSearchDoc,
+} from "../src/db/repository";
 import { createSession } from "../src/auth/sessions";
 import { createApp } from "../src/server";
 import { createS3Client } from "../src/s3/client";
@@ -1042,6 +1049,408 @@ describe("DELETE /api/files", () => {
       method: "DELETE",
     });
     expect(res.status).toBe(401);
+  });
+});
+
+describe("POST /api/files/move", () => {
+  /** POST a move request with the given session cookie. */
+  async function postMove(
+    app: TestApp,
+    body: unknown,
+    cookie = aliceCookie,
+  ): Promise<Response> {
+    return app.request("/api/files/move", {
+      method: "POST",
+      headers: { cookie, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** A NotFound error as the SDK raises it for a missing HEAD target. */
+  function notFound(): Error {
+    const err = new Error("Not Found") as Error & { name: string };
+    err.name = "NotFound";
+    return err;
+  }
+
+  /**
+   * A storage stub where exactly the given full keys exist: HEAD answers
+   * for them and NotFound for anything else; copy and delete succeed
+   * unless a failing command name is given.
+   */
+  function storage(
+    existing: string[],
+    failOn?: (name: string, input: Record<string, unknown>) => boolean,
+  ): (name: string, input: Record<string, unknown>) => unknown {
+    return (name, input) => {
+      if (failOn?.(name, input)) throw new Error(`${name} failed`);
+      if (name === "HeadObjectCommand") {
+        if (!existing.includes(String(input.Key))) throw notFound();
+        return {
+          ContentLength: 10,
+          LastModified: new Date("2026-08-12T00:00:00Z"),
+        };
+      }
+      if (name === "CopyObjectCommand" || name === "DeleteObjectCommand") {
+        return {};
+      }
+      throw new Error(`Unexpected command ${name}`);
+    };
+  }
+
+  it("copies the object into the destination folder, deletes the source and returns the new key", async () => {
+    const { app, calls } = createFilesApp(
+      storage(["users/alice/inbox/report.pdf"]),
+    );
+
+    const res = await postMove(app, {
+      key: "users/alice/inbox/report.pdf",
+      folder: "archive/2026",
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      key: "users/alice/archive/2026/report.pdf",
+    });
+    // Source must exist, destination must not, then copy before delete.
+    expect(calls.map((c) => [c.name, c.input.Key])).toEqual([
+      ["HeadObjectCommand", "users/alice/inbox/report.pdf"],
+      ["HeadObjectCommand", "users/alice/archive/2026/report.pdf"],
+      ["CopyObjectCommand", "users/alice/archive/2026/report.pdf"],
+      ["DeleteObjectCommand", "users/alice/inbox/report.pdf"],
+    ]);
+    expect(calls[2]?.input).toMatchObject({
+      Bucket: bucket,
+      CopySource: "jivedrive-prod/users/alice/inbox/report.pdf",
+    });
+    expect(calls[3]?.input.Bucket).toBe(bucket);
+  });
+
+  it("moves to the space root and accepts a trailing slash on the folder", async () => {
+    const { app } = createFilesApp(
+      storage(["users/alice/inbox/report.pdf", "users/alice/a/b.txt"]),
+    );
+
+    const toRoot = await postMove(app, {
+      key: "users/alice/inbox/report.pdf",
+      folder: "",
+    });
+    expect(toRoot.status).toBe(200);
+    expect(await toRoot.json()).toEqual({ key: "users/alice/report.pdf" });
+
+    const trailing = await postMove(app, {
+      key: "users/alice/a/b.txt",
+      folder: "c/",
+    });
+    expect(trailing.status).toBe(200);
+    expect(await trailing.json()).toEqual({ key: "users/alice/c/b.txt" });
+  });
+
+  it("keeps share links working and rekeys the search index at the new key", async () => {
+    const { app, db } = createFilesApp(
+      storage(["users/alice/inbox/report.pdf"]),
+    );
+    const alice = getUserByUsername(db, "alice")!;
+    const link = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket,
+      objectKey: "users/alice/inbox/report.pdf",
+      expiresIn: "7d",
+    });
+    upsertSearchDoc(db, {
+      userId: alice.id,
+      key: "users/alice/inbox/report.pdf",
+      etag: '"r"',
+      size: 10,
+      fileName: "report.pdf",
+      body: "quarterly figures",
+    });
+
+    const res = await postMove(app, {
+      key: "users/alice/inbox/report.pdf",
+      folder: "archive",
+    });
+
+    expect(res.status).toBe(200);
+    expect(getShareLinkByToken(db, link.token)?.objectKey).toBe(
+      "users/alice/archive/report.pdf",
+    );
+    expect(getSearchDoc(db, alice.id, "users/alice/inbox/report.pdf")).toBe(
+      null,
+    );
+    expect(
+      getSearchDoc(db, alice.id, "users/alice/archive/report.pdf")?.body,
+    ).toBe("quarterly figures");
+  });
+
+  it("refuses a destination that already holds a file of that name, changing nothing", async () => {
+    const { app, db, calls } = createFilesApp(
+      storage([
+        "users/alice/inbox/report.pdf",
+        "users/alice/archive/report.pdf",
+      ]),
+    );
+    const alice = getUserByUsername(db, "alice")!;
+    const link = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket,
+      objectKey: "users/alice/inbox/report.pdf",
+      expiresIn: "7d",
+    });
+
+    const res = await postMove(app, {
+      key: "users/alice/inbox/report.pdf",
+      folder: "archive",
+    });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string; code: string };
+    expect(body.code).toBe("already_exists");
+    expect(body.error).toContain('"report.pdf"');
+    // No overwrite, no delete: only the two existence checks ran.
+    expect(calls.map((c) => c.name)).toEqual([
+      "HeadObjectCommand",
+      "HeadObjectCommand",
+    ]);
+    expect(getShareLinkByToken(db, link.token)?.objectKey).toBe(
+      "users/alice/inbox/report.pdf",
+    );
+  });
+
+  it("returns 404 for a missing source without copying", async () => {
+    const { app, calls } = createFilesApp(storage([]));
+
+    const res = await postMove(app, {
+      key: "users/alice/gone.txt",
+      folder: "archive",
+    });
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ code: "not_found" });
+    expect(calls.map((c) => c.name)).toEqual(["HeadObjectCommand"]);
+  });
+
+  it("refuses a move into the folder the file is already in without touching storage", async () => {
+    const { app, calls } = createFilesApp(
+      storage(["users/alice/inbox/report.pdf", "users/alice/top.txt"]),
+    );
+
+    for (const [key, folder] of [
+      ["users/alice/inbox/report.pdf", "inbox"],
+      ["users/alice/inbox/report.pdf", "inbox/"],
+      ["users/alice/top.txt", ""],
+    ]) {
+      const res = await postMove(app, { key, folder });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "same_folder" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects a source key outside the space without touching storage", async () => {
+    const { app, calls } = createFilesApp(storage(["users/bob/a.txt"]));
+
+    for (const key of [
+      "users/bob/a.txt",
+      "users/alice2/x.txt",
+      "users/alice/../bob/a.txt",
+    ]) {
+      const res = await postMove(app, { key, folder: "" });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "out_of_scope" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects a destination folder that escapes the space without touching storage", async () => {
+    const { app, calls } = createFilesApp(storage(["users/alice/a.txt"]));
+
+    for (const folder of ["..", "../bob", "a/../../bob", "/abs", "a/.."]) {
+      const res = await postMove(app, { key: "users/alice/a.txt", folder });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "invalid_folder" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects malformed requests", async () => {
+    const { app, calls } = createFilesApp(storage([]));
+
+    for (const body of [
+      {},
+      { key: "users/alice/a.txt" },
+      { folder: "archive" },
+      { key: "", folder: "archive" },
+      { key: "users/alice/a.txt", folder: 3 },
+      { key: 3, folder: "archive" },
+      // A folder marker is not a file.
+      { key: "users/alice/docs/", folder: "archive" },
+      { key: "users/alice/a.txt", folder: "archive", space: 7 },
+    ]) {
+      const res = await postMove(app, body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: "bad_request" });
+    }
+    const invalidJson = await app.request("/api/files/move", {
+      method: "POST",
+      headers: { cookie: aliceCookie, "Content-Type": "application/json" },
+      body: "{",
+    });
+    expect(invalidJson.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("leaves the source and its records in place when the copy fails", async () => {
+    const { app, db, calls } = createFilesApp(
+      storage(
+        ["users/alice/inbox/report.pdf"],
+        (name) => name === "CopyObjectCommand",
+      ),
+    );
+    const alice = getUserByUsername(db, "alice")!;
+    const link = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket,
+      objectKey: "users/alice/inbox/report.pdf",
+      expiresIn: "7d",
+    });
+
+    const res = await postMove(app, {
+      key: "users/alice/inbox/report.pdf",
+      folder: "archive",
+    });
+
+    expect(res.status).toBe(500);
+    expect(calls.map((c) => c.name)).not.toContain("DeleteObjectCommand");
+    expect(getShareLinkByToken(db, link.token)?.objectKey).toBe(
+      "users/alice/inbox/report.pdf",
+    );
+  });
+
+  it("removes the copy and keeps records at the source when deleting the source fails", async () => {
+    const { app, db, calls } = createFilesApp(
+      storage(
+        ["users/alice/inbox/report.pdf"],
+        (name, input) =>
+          name === "DeleteObjectCommand" &&
+          input.Key === "users/alice/inbox/report.pdf",
+      ),
+    );
+    const alice = getUserByUsername(db, "alice")!;
+    const link = createShareLink(db, {
+      ownerUserId: alice.id,
+      bucket,
+      objectKey: "users/alice/inbox/report.pdf",
+      expiresIn: "7d",
+    });
+
+    const res = await postMove(app, {
+      key: "users/alice/inbox/report.pdf",
+      folder: "archive",
+    });
+
+    expect(res.status).toBe(500);
+    // The failed move is rolled back: the copy at the destination is
+    // deleted so the file is not left in two places.
+    expect(calls.map((c) => [c.name, c.input.Key])).toEqual([
+      ["HeadObjectCommand", "users/alice/inbox/report.pdf"],
+      ["HeadObjectCommand", "users/alice/archive/report.pdf"],
+      ["CopyObjectCommand", "users/alice/archive/report.pdf"],
+      ["DeleteObjectCommand", "users/alice/inbox/report.pdf"],
+      ["DeleteObjectCommand", "users/alice/archive/report.pdf"],
+    ]);
+    expect(getShareLinkByToken(db, link.token)?.objectKey).toBe(
+      "users/alice/inbox/report.pdf",
+    );
+  });
+
+  it("requires a signed-in session", async () => {
+    const { app, calls } = createFilesApp(storage([]));
+    const res = await app.request("/api/files/move", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: "users/alice/a.txt", folder: "x" }),
+    });
+    expect(res.status).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+
+  describe("in a shared space", () => {
+    const spaceOf = (shareId: string) => `shared:${shareId}`;
+
+    it("moves within the mount using mount-relative keys and rekeys the sharer's index", async () => {
+      const { app, db, calls, shareId } = createSharedApp(
+        storage(["users/alice/projects/docs/plan.txt"]),
+      );
+      const alice = getUserByUsername(db, "alice")!;
+      upsertSearchDoc(db, {
+        userId: alice.id,
+        key: "users/alice/projects/docs/plan.txt",
+        etag: '"p"',
+        size: 10,
+        fileName: "plan.txt",
+        body: "roadmap",
+      });
+
+      const res = await postMove(
+        app,
+        { space: spaceOf(shareId), key: "docs/plan.txt", folder: "" },
+        bobCookie,
+      );
+
+      expect(res.status).toBe(200);
+      // The sharer's internal prefix never reaches the client.
+      expect(await res.json()).toEqual({ key: "plan.txt" });
+      expect(calls.map((c) => [c.name, c.input.Key])).toEqual([
+        ["HeadObjectCommand", "users/alice/projects/docs/plan.txt"],
+        ["HeadObjectCommand", "users/alice/projects/plan.txt"],
+        ["CopyObjectCommand", "users/alice/projects/plan.txt"],
+        ["DeleteObjectCommand", "users/alice/projects/docs/plan.txt"],
+      ]);
+      // The index belongs to the space owner, not the recipient.
+      expect(
+        getSearchDoc(db, alice.id, "users/alice/projects/plan.txt")?.body,
+      ).toBe("roadmap");
+    });
+
+    it("never lets a key or folder escape the mount", async () => {
+      const { app, calls, shareId } = createSharedApp(
+        storage(["users/alice/projects/a.txt", "users/alice/secret.txt"]),
+      );
+
+      const outKey = await postMove(
+        app,
+        { space: spaceOf(shareId), key: "../secret.txt", folder: "" },
+        bobCookie,
+      );
+      expect(outKey.status).toBe(400);
+      expect(await outKey.json()).toMatchObject({ code: "out_of_scope" });
+
+      const outFolder = await postMove(
+        app,
+        { space: spaceOf(shareId), key: "a.txt", folder: ".." },
+        bobCookie,
+      );
+      expect(outFolder.status).toBe(400);
+      expect(await outFolder.json()).toMatchObject({ code: "invalid_folder" });
+      expect(calls).toHaveLength(0);
+    });
+
+    it("refuses a share the caller does not hold", async () => {
+      const { app, calls, foreignShareId } = createSharedApp(
+        storage(["users/alice/media/a.txt"]),
+      );
+
+      const res = await postMove(
+        app,
+        { space: spaceOf(foreignShareId), key: "a.txt", folder: "x" },
+        bobCookie,
+      );
+
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ code: "not_found" });
+      expect(calls).toHaveLength(0);
+    });
   });
 });
 describe("space-aware file operations (T007)", () => {

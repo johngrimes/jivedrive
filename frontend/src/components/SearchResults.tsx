@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   DownloadIcon,
   FileIcon,
+  FileMovedIcon,
   ShareAndroidIcon,
   TrashIcon,
 } from "@primer/octicons-react";
@@ -28,6 +29,8 @@ export interface SearchResultsProps {
   onDownload?: (result: SearchResult) => void;
   /** Open the share modal for a result. */
   onShare?: (result: SearchResult) => void;
+  /** Open the move dialog for a result, within the result's space. */
+  onMove?: (result: SearchResult) => void;
   /** Open the delete confirmation for a result. */
   onDelete?: (result: SearchResult) => void;
   /** Called on 401 so the page can refresh the (expired) session. */
@@ -99,6 +102,7 @@ export function SearchResults({
   onOpenResult,
   onDownload,
   onShare,
+  onMove,
   onDelete,
   onSessionExpired,
 }: SearchResultsProps) {
@@ -259,6 +263,17 @@ export function SearchResults({
                     >
                       <ShareAndroidIcon aria-hidden="true" />
                       <span className="hidden sm:inline">Share</span>
+                    </button>
+                  )}
+                  {onMove && (
+                    <button
+                      type="button"
+                      className="btn btn-accent btn-sm btn-soft min-h-11"
+                      aria-label={`Move ${result.name}`}
+                      onClick={() => onMove(result)}
+                    >
+                      <FileMovedIcon aria-hidden="true" />
+                      <span className="hidden sm:inline">Move</span>
                     </button>
                   )}
                   {onDelete && (

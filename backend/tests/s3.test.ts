@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { S3Client } from "@aws-sdk/client-s3";
 import {
   assertKeyInScope,
+  copyObject,
   createS3Client,
   deleteObject,
   headObject,
@@ -297,6 +298,63 @@ describe("deleteObject", () => {
     await expect(
       deleteObject(client, bucket, userPrefix, "users/alice/../bob.txt"),
     ).rejects.toThrow(RangeError);
+  });
+});
+
+describe("copyObject", () => {
+  it("copies within the bucket with a URL-encoded copy source", async () => {
+    const { client, calls } = s3Input(() => ({}));
+
+    await copyObject(
+      client,
+      bucket,
+      userPrefix,
+      "users/alice/My Docs/r&d #1.txt",
+      "users/alice/archive/r&d #1.txt",
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.name).toBe("CopyObjectCommand");
+    // The source is "bucket/key" with each key segment URL-encoded and
+    // the separators kept, so spaces and reserved characters survive.
+    expect(calls[0]?.input).toEqual({
+      Bucket: bucket,
+      Key: "users/alice/archive/r&d #1.txt",
+      CopySource: "jivedrive-prod/users/alice/My%20Docs/r%26d%20%231.txt",
+    });
+  });
+
+  it("rejects a source or destination outside the user's prefix without contacting storage", async () => {
+    const { client, calls } = s3Input(() => ({}));
+
+    await expect(
+      copyObject(
+        client,
+        bucket,
+        userPrefix,
+        "users/bob/a.txt",
+        "users/alice/a.txt",
+      ),
+    ).rejects.toThrow(RangeError);
+    await expect(
+      copyObject(
+        client,
+        bucket,
+        userPrefix,
+        "users/alice/a.txt",
+        "users/bob/a.txt",
+      ),
+    ).rejects.toThrow(RangeError);
+    await expect(
+      copyObject(
+        client,
+        bucket,
+        userPrefix,
+        "users/alice/a.txt",
+        "users/alice/../bob/a.txt",
+      ),
+    ).rejects.toThrow(RangeError);
+    expect(calls).toHaveLength(0);
   });
 });
 

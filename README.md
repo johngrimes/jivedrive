@@ -3,9 +3,9 @@
 JiveDrive is a small, passkey-authenticated file browser for
 [OVHcloud Object Storage](https://www.ovhcloud.com/en/public-cloud/object-storage/).
 Each user is scoped to an admin-configured bucket and prefix, and can browse
-folders, download, upload (with overwrite confirmation), generate short
-share links, and delete files. Admins invite users and manage
-accounts. Authentication is WebAuthn passkeys only - no passwords.
+folders, download, upload (with overwrite confirmation), move files between
+folders, generate short share links, and delete files. Admins invite users
+and manage accounts. Authentication is WebAuthn passkeys only - no passwords.
 
 - SPA + REST API in one container (React + Vite frontend, Hono backend, bun).
 - SQLite database (users, passkey credentials, invites, sessions) on a
@@ -16,6 +16,11 @@ accounts. Authentication is WebAuthn passkeys only - no passwords.
   folder, mounts labelled with the sharer, revocable at any time.
 - Short share links: an anonymous `<origin>/s/<12-character token>` link
   to a single file, valid for 1 hour to 30 days, stored only until expiry.
+- Moving files: a file can be moved to another existing folder of the same
+  space (its own space, or within a shared folder) from the listing or a
+  search result. A name clash at the destination is refused, never
+  overwritten. The move is a server-side copy then delete; the file's
+  short share links keep working and its search entry follows it.
 - Full-text search: one search box finds files by name and by content
   (plain text, PDF, DOCX) across the user's space and every folder shared
   with them, kept fresh by a background index scan.

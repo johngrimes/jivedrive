@@ -32,6 +32,12 @@ export interface ResolvedScope {
   mountRelative: boolean;
   /** Share id for a shared space; undefined for the caller's own space. */
   shareId?: string;
+  /**
+   * Id of the user whose space the objects belong to: the caller for the
+   * own space, the sharer for a shared space. Per-user records keyed by
+   * object key (the search index) are stored under this id.
+   */
+  ownerUserId: string;
 }
 
 /**
@@ -88,6 +94,7 @@ export function resolveSpace(
       bucket: caller.bucket,
       prefix: caller.prefix,
       mountRelative: false,
+      ownerUserId: caller.id,
     };
   }
 
@@ -108,5 +115,6 @@ export function resolveSpace(
     prefix: owner.prefix + share.folder,
     mountRelative: true,
     shareId: share.id,
+    ownerUserId: owner.id,
   };
 }

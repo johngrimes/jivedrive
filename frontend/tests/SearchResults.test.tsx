@@ -589,3 +589,46 @@ describe("SearchResults shared results (T020)", () => {
     expect(container.textContent).not.toContain("Name match");
   });
 });
+
+describe("SearchResults move action", () => {
+  it("renders a Move button per result that calls onMove with the result", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ results: [nestedResult], capped: false }),
+        ),
+    );
+    const onMove = vi.fn();
+    const container = renderResults({ onMove });
+    await flush();
+
+    const button = container.querySelector(
+      'button[aria-label="Move Q3-Report.pdf"]',
+    ) as HTMLButtonElement | null;
+    expect(button).not.toBeNull();
+    expect(button?.textContent).toContain("Move");
+    act(() => {
+      button?.click();
+    });
+    expect(onMove).toHaveBeenCalledWith(nestedResult);
+  });
+
+  it("renders no Move button when no handler is provided", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ results: [nestedResult], capped: false }),
+        ),
+    );
+    const container = renderResults();
+    await flush();
+
+    expect(
+      container.querySelector('button[aria-label="Move Q3-Report.pdf"]'),
+    ).toBeNull();
+  });
+});

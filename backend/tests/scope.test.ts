@@ -71,6 +71,7 @@ describe("resolveSpace", () => {
       bucket: "jivedrive-prod",
       prefix: "users/alice/",
       mountRelative: false,
+      ownerUserId: alice.id,
     });
   });
 
@@ -94,6 +95,7 @@ describe("resolveSpace", () => {
       prefix: "users/alice/projects/",
       mountRelative: true,
       shareId: share.id,
+      ownerUserId: alice.id,
     });
   });
 

@@ -175,3 +175,38 @@ describe("FileListing mounts (T023)", () => {
     expect(container.querySelector('[aria-label="Delete"]')).not.toBeNull();
   });
 });
+
+describe("FileListing move action", () => {
+  it("renders a Move button on file rows that calls onMove with the file", () => {
+    const onMove = vi.fn();
+    const container = renderListing({
+      folders: ["docs"],
+      files: [fileEntry],
+      onMove,
+    });
+
+    const buttons = container.querySelectorAll('[aria-label="Move"]');
+    // Only the file row carries the action: folders cannot be moved.
+    expect(buttons).toHaveLength(1);
+    act(() => {
+      (buttons[0] as HTMLButtonElement).click();
+    });
+    expect(onMove).toHaveBeenCalledWith(fileEntry);
+  });
+
+  it("hides the Move label text below sm, like the other actions", () => {
+    const container = renderListing({ files: [fileEntry], onMove: () => {} });
+
+    const button = container.querySelector('[aria-label="Move"]');
+    expect(button?.className).toContain("min-h-11");
+    const label = button?.querySelector("span");
+    expect(label?.textContent).toBe("Move");
+    expect(label?.className).toContain("hidden sm:inline");
+  });
+
+  it("renders no Move button when no handler is provided", () => {
+    const container = renderListing({ files: [fileEntry] });
+
+    expect(container.querySelector('[aria-label="Move"]')).toBeNull();
+  });
+});
