@@ -244,11 +244,13 @@ describe("SearchResults (T009)", () => {
  *
  * @param searchBody - response for /api/files/search
  * @param searchDelay - optional delay applied to the search response
+ * @param sharesBody - response for /api/shares (no shares by default)
  * @returns fetch mock and container
  */
 async function renderFilesPage(
   searchBody: unknown,
   searchDelay = 0,
+  sharesBody: unknown = { incoming: [], outgoing: [] },
 ): Promise<{ fetchMock: Mock; container: HTMLElement }> {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -274,7 +276,7 @@ async function renderFilesPage(
       });
     }
     if (url.startsWith("/api/shares")) {
-      return jsonResponse({ incoming: [], outgoing: [] });
+      return jsonResponse(sharesBody);
     }
     throw new Error(`unexpected fetch: ${url}`);
   });
@@ -724,11 +726,32 @@ describe("SearchResults folder results (#13)", () => {
     expect(listingCall).not.toContain("prefix=");
   });
 
-  it("opens the folder share dialog from an own-space folder result", async () => {
-    const { container } = await renderFilesPage({
-      results: [ownFolder],
-      capped: false,
-    });
+  it("opens the folder share dialog for exactly that folder from an own-space result", async () => {
+    const { container } = await renderFilesPage(
+      { results: [ownFolder], capped: false },
+      0,
+      {
+        incoming: [],
+        // A same-named root folder's share must not show up: the dialog
+        // filters by the folder's full space-relative prefix.
+        outgoing: [
+          {
+            id: "s1",
+            folder: "work/old plans/",
+            folderName: "old plans",
+            recipient: { id: "u-bob", username: "bob" },
+            createdAt: "2026-08-10T12:00:00.000Z",
+          },
+          {
+            id: "s2",
+            folder: "old plans/",
+            folderName: "old plans",
+            recipient: { id: "u-carol", username: "carol" },
+            createdAt: "2026-08-10T12:00:00.000Z",
+          },
+        ],
+      },
+    );
     await submitSearch(container);
 
     const share = container.querySelector(
@@ -742,5 +765,11 @@ describe("SearchResults folder results (#13)", () => {
     expect(
       container.querySelector("#share-folder-dialog-title")?.textContent,
     ).toBe("Share old plans");
+    expect(
+      container.querySelector('button[aria-label="Revoke share for bob"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('button[aria-label="Revoke share for carol"]'),
+    ).toBeNull();
   });
 });

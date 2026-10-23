@@ -402,7 +402,7 @@ export function FilesPage() {
           <input
             type="search"
             className="input input-bordered grow min-h-11"
-            aria-label="Search files"
+            aria-label="Search files and folders"
             placeholder="Search files and folders"
             value={queryInput}
             onChange={(event) => setQueryInput(event.target.value)}

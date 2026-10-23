@@ -31,7 +31,7 @@ const INDEX_TIMEOUT = 20_000;
  * @param query - the query to type and submit
  */
 async function search(page: Page, query: string) {
-  const box = page.getByRole("searchbox", { name: "Search files" });
+  const box = page.getByRole("searchbox", { name: "Search files and folders" });
   await box.fill(query);
   await box.press("Enter");
 }
@@ -102,7 +102,7 @@ test("a query with no matches shows a clear empty state", async ({ page }) => {
 test("the search UI is fully usable at mobile width", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 667 });
   await expect(
-    page.getByRole("searchbox", { name: "Search files" }),
+    page.getByRole("searchbox", { name: "Search files and folders" }),
   ).toBeVisible();
   await expectNoHorizontalOverflow(page);
 
@@ -123,7 +123,7 @@ test("the search UI is fully usable at mobile width", async ({ page }) => {
 test("the search UI is fully usable at tablet width", async ({ page }) => {
   await page.setViewportSize({ width: 768, height: 1024 });
   await expect(
-    page.getByRole("searchbox", { name: "Search files" }),
+    page.getByRole("searchbox", { name: "Search files and folders" }),
   ).toBeVisible();
   await expectNoHorizontalOverflow(page);
 

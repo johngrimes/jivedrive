@@ -1668,6 +1668,40 @@ describe("search folders (folder search results, #13)", () => {
     expect(searchFolderNames(db, alice.id, "_")).toEqual([]);
   });
 
+  it("folds case beyond ASCII, like the trigram filename index", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    syncSearchFolders(db, alice.id, [
+      "users/alice/Übersicht/",
+      "users/alice/Café Résumé/",
+    ]);
+
+    expect(searchFolderNames(db, alice.id, "übersicht")).toEqual([
+      { key: "users/alice/Übersicht/", name: "Übersicht" },
+    ]);
+    expect(searchFolderNames(db, alice.id, "CAFÉ").map((h) => h.key)).toEqual([
+      "users/alice/Café Résumé/",
+    ]);
+    expect(searchFolderNames(db, alice.id, "RÉSUMÉ").map((h) => h.key)).toEqual(
+      ["users/alice/Café Résumé/"],
+    );
+  });
+
+  it("keeps the key prefix case-exact: a case-variant sibling never leaks", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    syncSearchFolders(db, alice.id, [
+      "users/alice/projects/specs/",
+      "users/alice/Projects/specs/",
+    ]);
+
+    expect(
+      searchFolderNames(db, alice.id, "specs", 50, "users/alice/projects/").map(
+        (h) => h.key,
+      ),
+    ).toEqual(["users/alice/projects/specs/"]);
+  });
+
   it("replaces the stored set on each sync: vanished folders drop out", () => {
     const db = createDb();
     const alice = seedUser(db, { username: "alice" });
