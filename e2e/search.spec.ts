@@ -31,7 +31,7 @@ const INDEX_TIMEOUT = 20_000;
  * @param query - the query to type and submit
  */
 async function search(page: Page, query: string) {
-  const box = page.getByRole("searchbox", { name: "Search files" });
+  const box = page.getByRole("searchbox", { name: "Search files and folders" });
   await box.fill(query);
   await box.press("Enter");
 }
@@ -92,7 +92,7 @@ test("clicking a result navigates to the containing folder and restores the list
 test("a query with no matches shows a clear empty state", async ({ page }) => {
   await search(page, "zzz-no-such-file-xyz");
 
-  await expect(page.getByText(/No files match/)).toBeVisible({
+  await expect(page.getByText(/No files or folders match/)).toBeVisible({
     timeout: INDEX_TIMEOUT,
   });
   // No result rows render for the empty state (US1 sc.5).
@@ -102,7 +102,7 @@ test("a query with no matches shows a clear empty state", async ({ page }) => {
 test("the search UI is fully usable at mobile width", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 667 });
   await expect(
-    page.getByRole("searchbox", { name: "Search files" }),
+    page.getByRole("searchbox", { name: "Search files and folders" }),
   ).toBeVisible();
   await expectNoHorizontalOverflow(page);
 
@@ -123,7 +123,7 @@ test("the search UI is fully usable at mobile width", async ({ page }) => {
 test("the search UI is fully usable at tablet width", async ({ page }) => {
   await page.setViewportSize({ width: 768, height: 1024 });
   await expect(
-    page.getByRole("searchbox", { name: "Search files" }),
+    page.getByRole("searchbox", { name: "Search files and folders" }),
   ).toBeVisible();
   await expectNoHorizontalOverflow(page);
 
@@ -322,7 +322,7 @@ test("US3: revoking the share removes its search results immediately", async ({
 
   await startSignedInAs(page, context, "flo", "flo-session");
   await search(page, "pic");
-  await expect(page.getByText(/No files match/)).toBeVisible({
+  await expect(page.getByText(/No files or folders match/)).toBeVisible({
     timeout: INDEX_TIMEOUT,
   });
   await expect(page.locator("li.list-row")).toHaveCount(0);
@@ -343,7 +343,7 @@ test("US3: a non-recipient's search never returns the sharer's files", async ({
   await startSignedInAs(page, context, "gina", "gina-session");
   await search(page, "notes");
 
-  await expect(page.getByText(/No files match/)).toBeVisible({
+  await expect(page.getByText(/No files or folders match/)).toBeVisible({
     timeout: INDEX_TIMEOUT,
   });
   await expect(page.locator("li.list-row")).toHaveCount(0);
@@ -414,9 +414,142 @@ test("US4: an admin reindex makes an upload searchable and a deletion disappear"
   await expect(async () => {
     await page.goto("/files");
     await search(page, "xenocryptic");
-    await expect(page.getByText(/No files match/)).toBeVisible({
+    await expect(page.getByText(/No files or folders match/)).toBeVisible({
       timeout: 1_000,
     });
   }).toPass({ timeout: INDEX_TIMEOUT });
   await expect(page.locator("li.list-row")).toHaveCount(0);
+});
+
+/**
+ * Folder search results (#13). The scan records every folder in a
+ * space — the ancestors of each object plus placeholder objects — so
+ * seeded folders (docs/reports/..., the empty/ placeholder) become
+ * searchable within one scan interval, like files.
+ */
+test("folder search ranks folders first and a folder result opens the folder itself", async ({
+  page,
+}) => {
+  await search(page, "report");
+
+  // docs/reports matches by its own name and ranks above the report.pdf
+  // file name matches. (Other specs upload more "report" files into the
+  // shared server, so the file count is not pinned.)
+  const first = page.locator("li.list-row").first();
+  await expect(first).toContainText("reports", { timeout: INDEX_TIMEOUT });
+  await expect(first).toContainText("Folder");
+  await expect(first).toContainText("docs");
+  await expect(page.locator("li.list-row").nth(1)).toContainText("Name match");
+  // A folder row carries no file actions.
+  await expect(first.getByRole("button", { name: /Download/ })).toHaveCount(0);
+  await expect(first.getByRole("button", { name: /Delete/ })).toHaveCount(0);
+
+  await first.getByRole("link", { name: /reports/ }).click();
+
+  // The listing of docs/reports/ itself replaced the results.
+  await expect(page.getByText("Folder", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("navigation", { name: "Breadcrumbs" }),
+  ).toContainText("reports");
+  await expect(page.getByRole("link", { name: /2026/ })).toBeVisible();
+});
+
+test("an empty folder is found by name and opens to its empty state", async ({
+  page,
+}) => {
+  await search(page, "empty");
+
+  const row = page.locator("li.list-row", { hasText: "empty" });
+  await expect(row).toBeVisible({ timeout: INDEX_TIMEOUT });
+  await expect(row).toContainText("Folder");
+  await expect(row).toContainText("Home");
+
+  await row.getByRole("link", { name: /empty/ }).click();
+
+  await expect(page.getByText(/This folder is empty/)).toBeVisible();
+});
+
+test("an own folder result shares the folder, usable at mobile and tablet widths", async ({
+  page,
+}) => {
+  for (const width of [375, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    await search(page, "photos");
+
+    const row = page.locator("li.list-row", { hasText: "photos" }).first();
+    await expect(row).toContainText("Folder", { timeout: INDEX_TIMEOUT });
+    await expectNoHorizontalOverflow(page);
+
+    await row.getByRole("button", { name: "Share photos" }).click();
+    const dialog = page.getByRole("alertdialog", { name: "Share photos" });
+    await expect(dialog).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    // The backdrop closes the dialog; click its corner, clear of the box.
+    await page
+      .getByRole("button", { name: "Close" })
+      .click({ position: { x: 5, y: 5 } });
+    await expect(dialog).toHaveCount(0);
+    await page.getByRole("button", { name: "Clear" }).click();
+  }
+});
+
+test("a recipient finds a shared folder's root and subfolders and opens them in the share", async ({
+  page,
+  context,
+}) => {
+  // flo is search.spec's dedicated recipient: bob is deleted mid-run by
+  // share-folder.spec US5 (see e2eServer.ts).
+  await startSignedInAs(page, context, "alice", "browse-session");
+  const photosShare = await page.request.post("/api/shares", {
+    data: { folder: "photos/", recipientUsername: "flo" },
+  });
+  expect([201, 409]).toContain(photosShare.status());
+  const docsShare = await page.request.post("/api/shares", {
+    data: { folder: "docs/", recipientUsername: "flo" },
+  });
+  expect([201, 409]).toContain(docsShare.status());
+
+  try {
+    // The mount root itself matches by name and opens the share's root.
+    await startSignedInAs(page, context, "flo", "flo-session");
+    await search(page, "photos");
+    const mount = page.locator("li.list-row", { hasText: "Shared by alice" });
+    await expect(mount).toContainText("photos", { timeout: INDEX_TIMEOUT });
+    await expect(mount).toContainText("Folder");
+    // A recipient cannot re-share: no Share button on shared folders.
+    await expect(mount.getByRole("button")).toHaveCount(0);
+    await mount.getByRole("link", { name: /photos/ }).click();
+    // The share opens at its root: no prefix in the URL, and the trail
+    // is the mount itself. (photos/ holds more than one 5-item page,
+    // and other specs write into it, so no single file is asserted.)
+    await expect(page).toHaveURL(/[?&]space=shared%3A[^&]+$/);
+    const trail = page.getByRole("navigation", { name: "Breadcrumbs" });
+    await expect(trail).toContainText("photos");
+    await expect(trail).toContainText("Shared by alice");
+
+    // A subfolder deep inside a share opens at its mount-relative path.
+    await search(page, "quarterly");
+    // The content match summary.txt sits one level deeper and has no
+    // Folder badge.
+    const deep = page
+      .locator("li.list-row", { hasText: "Folder" })
+      .filter({ hasText: "quarterly" });
+    await expect(deep).toContainText("reports / 2026 / q1", {
+      timeout: INDEX_TIMEOUT,
+    });
+    await expect(deep).toContainText("Shared by alice");
+    await deep.getByRole("link", { name: /quarterly/ }).click();
+    await expect(page.getByText("summary.txt")).toBeVisible();
+  } finally {
+    // Revoke the photos share again, as the US3 revocation test does.
+    await startSignedInAs(page, context, "alice", "browse-session");
+    const shares = (await (
+      await page.request.get("/api/shares")
+    ).json()) as ListSharesBody;
+    const share = shares.outgoing.find(
+      (entry) =>
+        entry.folderName === "photos" && entry.recipient.username === "flo",
+    );
+    if (share) await page.request.delete(`/api/shares/${share.id}`);
+  }
 });

@@ -274,4 +274,24 @@ describe("searchFileNames/searchContent with a key prefix (US3, T021)", () => {
       searchFileNames(db, alice.id, "txt", 50, "users/alice/projects/"),
     ).toHaveLength(3);
   });
+
+  it("keeps the prefix case-exact: a case-variant sibling folder never leaks (constitution IV)", () => {
+    const db = createDb();
+    const alice = seedUser(db, "alice");
+    seed(db, alice, "users/alice/projects/plan.txt", "plan.txt", "the plan");
+    // A different folder that differs only in case: outside the mount.
+    seed(db, alice, "users/alice/Projects/plan-b.txt", "plan-b.txt", "plan b");
+
+    const prefix = "users/alice/projects/";
+    // Trigram name path, short-query LIKE name path, and content path.
+    expect(
+      searchFileNames(db, alice.id, "plan", 50, prefix).map((h) => h.key),
+    ).toEqual(["users/alice/projects/plan.txt"]);
+    expect(
+      searchFileNames(db, alice.id, "pl", 50, prefix).map((h) => h.key),
+    ).toEqual(["users/alice/projects/plan.txt"]);
+    expect(
+      searchContent(db, alice.id, "plan", 50, prefix).map((h) => h.key),
+    ).toEqual(["users/alice/projects/plan.txt"]);
+  });
 });
