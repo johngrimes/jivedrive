@@ -2,8 +2,10 @@ import { describe, expect, it } from "bun:test";
 import type { S3Client } from "@aws-sdk/client-s3";
 import {
   assertKeyInScope,
+  createFolderMarker,
   createS3Client,
   deleteObject,
+  folderExists,
   headObject,
   listObjects,
   presignedGetUrl,
@@ -360,5 +362,74 @@ describe("presigned URLs", () => {
     await expect(
       presignedPutUrl(client, bucket, userPrefix, "users/alice/../bob.txt", 60),
     ).rejects.toThrow(RangeError);
+  });
+});
+
+describe("folderExists", () => {
+  it("reports a folder with at least one object under it", async () => {
+    const { client, calls } = s3Input(() => ({
+      Contents: [{ Key: "users/alice/docs/" }],
+      IsTruncated: false,
+    }));
+
+    expect(
+      await folderExists(client, bucket, userPrefix, "users/alice/docs/"),
+    ).toBe(true);
+    // One recursive probe of a single key: no delimiter, so a folder made
+    // only of nested objects (no marker) still counts as existing.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.name).toBe("ListObjectsV2Command");
+    expect(calls[0]?.input).toEqual({
+      Bucket: bucket,
+      Prefix: "users/alice/docs/",
+      MaxKeys: 1,
+    });
+  });
+
+  it("reports a folder with no objects under it as missing", async () => {
+    const { client } = s3Input(() => ({ IsTruncated: false }));
+
+    expect(
+      await folderExists(client, bucket, userPrefix, "users/alice/new/"),
+    ).toBe(false);
+  });
+
+  it("rejects a folder key outside the user's prefix", async () => {
+    const { client, calls } = s3Input(() => ({}));
+    await expect(
+      folderExists(client, bucket, userPrefix, "users/bob/docs/"),
+    ).rejects.toThrow(RangeError);
+    await expect(
+      folderExists(client, bucket, userPrefix, "users/alice/../bob/"),
+    ).rejects.toThrow(RangeError);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("createFolderMarker", () => {
+  it("writes a zero-byte marker object at the folder key", async () => {
+    const { client, calls } = s3Input(() => ({}));
+
+    await createFolderMarker(client, bucket, userPrefix, "users/alice/new/");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.name).toBe("PutObjectCommand");
+    expect(calls[0]?.input).toMatchObject({
+      Bucket: bucket,
+      Key: "users/alice/new/",
+      Body: "",
+      ContentLength: 0,
+    });
+  });
+
+  it("rejects a folder key outside the user's prefix", async () => {
+    const { client, calls } = s3Input(() => ({}));
+    await expect(
+      createFolderMarker(client, bucket, userPrefix, "users/bob/new/"),
+    ).rejects.toThrow(RangeError);
+    await expect(
+      createFolderMarker(client, bucket, userPrefix, "users/alice/../bob/"),
+    ).rejects.toThrow(RangeError);
+    expect(calls).toHaveLength(0);
   });
 });

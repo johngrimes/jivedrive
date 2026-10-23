@@ -17,6 +17,7 @@ import { Breadcrumbs, FileListing } from "../components/FileListing";
 import type { MountRow } from "../components/FileListing";
 import { SearchResults } from "../components/SearchResults";
 import { ShareModal } from "../components/ShareModal";
+import { NewFolderControl } from "../components/NewFolderControl";
 import { UploadControl } from "../components/UploadControl";
 import { ShareDialog } from "../components/ShareDialog";
 
@@ -428,10 +429,18 @@ export function FilesPage() {
 
         {query === null ? (
           <>
-            <div className="mb-3 flex items-center justify-between gap-4">
-              <span className="text-sm opacity-70">
+            {/* One wrapping row: the count, then the actions pushed to
+                the right; feedback lines wrap below at full width. */}
+            <div className="mb-3 flex flex-wrap items-start justify-end gap-2">
+              <span className="mr-auto min-h-10 content-center whitespace-nowrap text-sm opacity-70">
                 {itemCount} {itemCount === 1 ? "item" : "items"}
               </span>
+              <NewFolderControl
+                folder={prefix}
+                space={space}
+                onCreated={refreshListing}
+                onSessionExpired={() => void refresh()}
+              />
               <UploadControl
                 folder={prefix}
                 space={space}
