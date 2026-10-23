@@ -376,6 +376,44 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     await expectNoHorizontalOverflow(page);
   });
 
+  test("a mount from a long-named sharer keeps its folder name readable at 375px", async ({
+    page,
+    context,
+  }) => {
+    // rowan receives a long-named folder from the 28-character username
+    // (seeded in e2eServer.ts); his root lists only that mount.
+    await context.addCookies([
+      { ...BROWSE_SESSION_COOKIE, value: "rowan-session" },
+    ]);
+    await page.setViewportSize(MOBILE_VIEWPORT);
+    await page.goto("/files");
+    await expectSignedInAs(page, "rowan");
+
+    // The name and the "Shared by" label share the row: neither crowds
+    // the other out, nothing spills past the row, the page never widens.
+    const mountRow = page.locator("li.list-row", {
+      hasText: `Shared by ${LONG_USERNAME}`,
+    });
+    const name = mountRow.getByText("quarterly-planning-documents", {
+      exact: true,
+    });
+    await expect(name).toBeVisible();
+    expect((await name.boundingBox())!.width).toBeGreaterThanOrEqual(64);
+    const badge = mountRow.locator(".badge");
+    await expect(badge).toBeVisible();
+    const rowBox = (await mountRow.boundingBox())!;
+    const badgeBox = (await badge.boundingBox())!;
+    expect(badgeBox.x + badgeBox.width).toBeLessThanOrEqual(
+      rowBox.x + rowBox.width,
+    );
+    await expectNoHorizontalOverflow(page);
+
+    // The mount still opens from its row.
+    await mountRow.getByRole("link").click();
+    await expect(page).toHaveURL(/space=shared/);
+    await expect(page.getByText("agenda.txt", { exact: true })).toBeVisible();
+  });
+
   test("deep breadcrumbs wrap at 375px with no horizontal scroll", async ({
     page,
     context,

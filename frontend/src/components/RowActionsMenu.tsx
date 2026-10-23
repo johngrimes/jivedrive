@@ -83,7 +83,7 @@ export function RowActionsMenu({ name, actions }: RowActionsMenuProps) {
         className="btn btn-ghost btn-sm btn-square size-11"
         aria-label={label}
         aria-expanded={open}
-        aria-controls={listId}
+        aria-controls={open ? listId : undefined}
         onClick={() => setOpen((wasOpen) => !wasOpen)}
       >
         <KebabHorizontalIcon aria-hidden="true" />

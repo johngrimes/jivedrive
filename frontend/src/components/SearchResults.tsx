@@ -232,14 +232,17 @@ export function SearchResults({
                       }}
                     >
                       <span className="truncate">{result.name}</span>
-                      <span className="badge badge-ghost badge-sm">
+                      <span className="badge badge-ghost badge-sm shrink-0">
                         {MATCH_LABELS[result.match]}
                       </span>
                       {/* Shared mounts carry the sharer's label (US3,
-                          FR-010); own-space rows show none. */}
+                          FR-010); own-space rows show none. It shrinks
+                          with an ellipsis alongside the name. */}
                       {result.sharedBy && (
-                        <span className="badge badge-secondary badge-sm">
-                          Shared by {result.sharedBy}
+                        <span className="badge badge-secondary badge-sm min-w-0">
+                          <span className="truncate">
+                            Shared by {result.sharedBy}
+                          </span>
                         </span>
                       )}
                     </a>

@@ -225,7 +225,7 @@ export interface FileListingProps {
   /**
    * Shared folders mounted at the own-space root (FR-008). Each renders
    * as a folder row labelled "Shared by <username>"; mounts render only
-   * at the own-space root and never carry a share button or "Shared"
+   * at the own-space root and never carry an actions menu or "Shared"
    * chip.
    */
   mounts?: MountRow[];
@@ -337,9 +337,13 @@ export function FileListing({
               <span className="truncate">{mount.folderName}</span>
               {/* FR-008: the label disambiguates a mount from a
                   same-named own folder; no actions menu (FR-015) and
-                  no "Shared" chip on received rows. */}
-              <span className="badge badge-ghost badge-sm shrink-0">
-                Shared by {mount.sharerUsername}
+                  no "Shared" chip on received rows. Name and label both
+                  shrink with an ellipsis, so a long sharer name never
+                  crowds the folder name out at narrow widths. */}
+              <span className="badge badge-ghost badge-sm min-w-0">
+                <span className="truncate">
+                  Shared by {mount.sharerUsername}
+                </span>
               </span>
             </a>
           </li>
