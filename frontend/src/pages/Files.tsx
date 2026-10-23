@@ -17,6 +17,7 @@ import { Breadcrumbs, FileListing } from "../components/FileListing";
 import type { MountRow } from "../components/FileListing";
 import { SearchResults } from "../components/SearchResults";
 import { ShareModal } from "../components/ShareModal";
+import { NewFolderControl } from "../components/NewFolderControl";
 import { UploadControl } from "../components/UploadControl";
 import { ShareDialog } from "../components/ShareDialog";
 
@@ -338,13 +339,19 @@ export function FilesPage() {
   }
 
   /**
-   * Open a search result's containing folder: navigating clears the
-   * query, which restores the folder listing (FR-003, US1 sc.4).
+   * Open a search result: a folder opens itself, a file its containing
+   * folder. Navigating clears the query, which restores the folder
+   * listing (FR-003, US1 sc.4).
    *
    * @param result - the clicked result
    */
   function openResult(result: SearchResult): void {
     setQuery(null);
+    if (result.match === "folder") {
+      // A folder's key is its space-relative prefix ("" opens a mount).
+      navigate(result.space, result.key);
+      return;
+    }
     navigate(result.space, result.path === "" ? "" : `${result.path}/`);
   }
 
@@ -396,8 +403,8 @@ export function FilesPage() {
           <input
             type="search"
             className="input input-bordered grow min-h-11"
-            aria-label="Search files"
-            placeholder="Search files by name"
+            aria-label="Search files and folders"
+            placeholder="Search files and folders"
             value={queryInput}
             onChange={(event) => setQueryInput(event.target.value)}
           />
@@ -426,14 +433,24 @@ export function FilesPage() {
           </p>
         )}
 
-        {/* The upload row stays mounted while search results show: an
-            upload batch lives in the control, so unmounting it would
-            abandon the batch mid-way (issue #12). */}
-        <div className="mb-3 flex items-center justify-end gap-4">
+        {/* One wrapping row: the count, then the actions pushed to the
+            right; feedback lines wrap below at full width. The row stays
+            mounted while search results show: an upload batch lives in the
+            upload control, so unmounting it would abandon the batch mid-way
+            (issue #12). */}
+        <div className="mb-3 flex flex-wrap items-start justify-end gap-2">
           {query === null && (
-            <span className="mr-auto shrink-0 whitespace-nowrap text-sm opacity-70">
-              {itemCount} {itemCount === 1 ? "item" : "items"}
-            </span>
+            <>
+              <span className="mr-auto min-h-10 content-center whitespace-nowrap text-sm opacity-70">
+                {itemCount} {itemCount === 1 ? "item" : "items"}
+              </span>
+              <NewFolderControl
+                folder={prefix}
+                space={space}
+                onCreated={refreshListing}
+                onSessionExpired={() => void refresh()}
+              />
+            </>
           )}
           <UploadControl
             folder={prefix}
@@ -488,6 +505,7 @@ export function FilesPage() {
               setDialogSpace(result.space);
               setDeleteFile(asFileEntry(result));
             }}
+            onShareFolder={(result) => setShareFolder(result.key)}
             onSessionExpired={() => void refresh()}
           />
         )}

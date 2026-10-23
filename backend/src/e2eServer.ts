@@ -15,7 +15,7 @@ import { Hono } from "hono";
 import type { S3Client } from "@aws-sdk/client-s3";
 import { loadConfig } from "./config";
 import { migrateFromDir, openDatabase } from "./db/migrate";
-import { createInvite, createUser } from "./db/repository";
+import { createInvite, createShare, createUser } from "./db/repository";
 import { createApp, startSearchIndexer } from "./server";
 import { createS3Client } from "./s3/client";
 import { createScanStatusRegistry } from "./search/status";
@@ -105,8 +105,10 @@ function listObjectsV2(input: {
   for (const key of [...objectStore.keys()]
     .filter((k) => k.startsWith(prefix))
     .sort()) {
+    // A key equal to the prefix (a folder's own marker object) is returned
+    // in Contents, as real S3 does: folder creation's existence probe
+    // relies on it, and the listing route filters it out by name.
     const rest = key.slice(prefix.length);
-    if (rest === "") continue;
     if (delimited && rest.includes("/")) {
       const folder = prefix + rest.slice(0, rest.indexOf("/") + 1);
       if (!seenFolders.has(folder)) {
@@ -186,6 +188,15 @@ function createMockS3Client(): S3Client {
         // the dialog's pending state (visibility of system status).
         await Bun.sleep(DELETE_DELAY_MS);
         objectStore.delete(input.Key as string);
+        return {};
+      case "PutObjectCommand":
+        // Server-side writes: folder creation's zero-byte marker objects.
+        // Browser uploads PUT to the mock HTTP server instead.
+        objectStore.set(input.Key as string, {
+          body: "",
+          size: 0,
+          lastModified: new Date().toISOString(),
+        });
         return {};
       case "GetObjectCommand": {
         const object = objectStore.get(input.Key as string);
@@ -363,6 +374,30 @@ const longname = createUser(db, {
   prefix: "users/this-username-is-really-long/",
 });
 createSession(db, longname.id, { token: "longname-session" });
+
+// Dedicated users for the folder-creation spec (folders.spec.ts): nora
+// creates folders in her own space and inside the `team` folder otto
+// shares with her; otto then sees what she created. No other spec signs
+// in as either, so creating folders never shifts another spec's counts.
+const nora = createUser(db, {
+  username: "nora",
+  bucket: "jivedrive-prod",
+  prefix: "users/nora/",
+});
+createSession(db, nora.id, { token: "nora-session" });
+const otto = createUser(db, {
+  username: "otto",
+  bucket: "jivedrive-prod",
+  prefix: "users/otto/",
+});
+createSession(db, otto.id, { token: "otto-session" });
+createShare(db, {
+  ownerUserId: otto.id,
+  recipientUserId: nora.id,
+  folder: "team",
+});
+seedObject("users/nora/existing/notes.txt", "nora's notes", 12);
+seedObject("users/otto/team/plan.txt", "team plan", 9);
 
 const future = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();

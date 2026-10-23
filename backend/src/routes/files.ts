@@ -15,7 +15,9 @@ import type { Context, MiddlewareHandler } from "hono";
 import type { S3Client } from "@aws-sdk/client-s3";
 import {
   assertKeyInScope,
+  createFolderMarker,
   deleteObject,
+  folderExists,
   headObject,
   listObjects,
   presignedGetUrl,
@@ -30,10 +32,12 @@ import {
   listSharesByRecipient,
   searchContent,
   searchFileNames,
+  searchFolderNames,
 } from "../db/repository";
 import type {
   ContentSearchHit,
   FileNameSearchHit,
+  FolderSearchHit,
   ShareLinkLifetime,
 } from "../db/repository";
 import type { Database } from "bun:sqlite";
@@ -66,6 +70,9 @@ const SEARCH_QUERY_MAX_LENGTH = 200;
 
 /** Lifetime of an upload (presigned PUT) URL in seconds (15 minutes). */
 const UPLOAD_URL_TTL_SECONDS = 15 * 60;
+
+/** Maximum folder name length in characters (code points), after trimming. */
+const FOLDER_NAME_MAX_LENGTH = 255;
 
 /** Accepted share-link lifetimes (seconds), keyed by the contract's
  * expiresIn enum. The values document each lifetime's duration; the
@@ -114,7 +121,9 @@ function isSafeRelativePrefix(prefix: string): boolean {
 /**
  * One entry of the search result list, per the contract's `SearchResult`
  * schema. `snippet` is present only on content matches; `sharedBy` only
- * on results from a shared mount (US3).
+ * on results from a shared mount (US3). A folder result (`match:
+ * "folder"`, #13) carries the folder's space-relative prefix as `key`
+ * ("" for a shared mount's root) and its parent folder as `path`.
  */
 interface SearchRouteResult {
   name: string;
@@ -122,7 +131,7 @@ interface SearchRouteResult {
   key: string;
   space: string;
   sharedBy?: string;
-  match: "name" | "content";
+  match: "folder" | "name" | "content";
   snippet?: string;
 }
 
@@ -178,6 +187,30 @@ function sharedSpaceResult(
     key: relative,
     space: `shared:${scope.shareId}`,
     sharedBy,
+  };
+}
+
+/**
+ * Build the search-result fields for a folder match (#13) in either
+ * space: `key` is the folder's prefix relative to the space root —
+ * exactly what the listing navigates to, "" for a shared mount's root —
+ * and `path` is its parent folder ("" at the space root).
+ *
+ * @param entry - the scope the folder was found in
+ * @param hit - the folder hit (full key including the scope prefix)
+ * @returns name, path, key, space and (in a shared scope) sharedBy
+ */
+function folderResult(entry: SearchScope, hit: FolderSearchHit) {
+  const key = hit.key.slice(entry.scope.prefix.length);
+  const parent = key.slice(0, -1);
+  const lastSlash = parent.lastIndexOf("/");
+  return {
+    name: hit.name,
+    path: lastSlash === -1 ? "" : parent.slice(0, lastSlash),
+    key,
+    ...(entry.scope.mountRelative
+      ? { space: `shared:${entry.scope.shareId}`, sharedBy: entry.sharedBy }
+      : { space: "own" }),
   };
 }
 
@@ -293,10 +326,11 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
     );
   });
 
-  // Search (007-file-search US1 T010, US2 T016, US3 T021): one flat
-  // result list over the caller's effective scopes — their own space
-  // plus every live incoming share (FR-010). Name matches rank above
-  // content matches (R-008), relevance order inside each group; the
+  // Search (007-file-search US1 T010, US2 T016, US3 T021; folders #13):
+  // one flat result list over the caller's effective scopes — their own
+  // space plus every live incoming share (FR-010). Folder name matches
+  // rank first, then file name matches above content matches (R-008),
+  // name order for folders and relevance order inside each file group; the
   // cap spans all scopes. Shared scopes are filtered to the mount
   // prefix and their keys are reported mount-relative, exactly as the
   // listing endpoints return them. Resolution happens per request, so
@@ -343,36 +377,70 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
           )
         : ownSpaceResult(user, hit.key, hit.fileName);
 
-    // Name pass: one extra hit per scope decides whether the name group
-    // alone exhausts the cap, in which case content is not queried.
-    const nameHits: Array<{ entry: SearchScope; hit: FileNameSearchHit }> = [];
+    // Folder pass (#13): folders whose base name matches, ordered by
+    // name. Hits are restricted to each scope's prefix — the shared
+    // mount (whose root itself is a candidate) or the caller's own
+    // prefix — so every folder key maps to a space-relative prefix.
+    // One extra hit per scope decides whether folders alone exhaust
+    // the cap, in which case no file pass runs.
+    const folderHits: Array<{ entry: SearchScope; hit: FolderSearchHit }> = [];
+    // Folder keys end in "/" and file keys never do, so one set dedupes
+    // all three passes.
     const seenKeys = new Set<string>();
     for (const entry of scopes) {
-      const hits = searchFileNames(
+      const hits = searchFolderNames(
         db,
         entry.ownerId,
         q,
         SEARCH_RESULT_CAP + 1,
-        entry.scope.mountRelative ? entry.scope.prefix : undefined,
+        entry.scope.prefix,
       );
       for (const hit of hits) {
-        // Nested shares of the same folder would surface one file twice;
-        // the first (oldest) share wins.
+        // Nested shares of the same folder would surface it twice; the
+        // first (oldest) share wins.
         if (seenKeys.has(hit.key)) continue;
         seenKeys.add(hit.key);
-        nameHits.push({ entry, hit });
+        folderHits.push({ entry, hit });
       }
     }
-    const nameCapped = nameHits.length > SEARCH_RESULT_CAP;
-    const results: SearchRouteResult[] = (
-      nameCapped ? nameHits.slice(0, SEARCH_RESULT_CAP) : nameHits
-    ).map(({ entry, hit }) => ({
-      ...resultOf(entry, hit),
-      match: "name" as const,
-    }));
+    let capped = folderHits.length > SEARCH_RESULT_CAP;
+    const results: SearchRouteResult[] = folderHits
+      .slice(0, SEARCH_RESULT_CAP)
+      .map(({ entry, hit }) => ({
+        ...folderResult(entry, hit),
+        match: "folder" as const,
+      }));
 
-    let capped = nameCapped;
-    if (!nameCapped && q.length >= 3) {
+    // Name pass: one extra hit per scope decides whether the name group
+    // exhausts what is left of the cap, in which case content is not
+    // queried.
+    if (!capped) {
+      const nameHits: Array<{ entry: SearchScope; hit: FileNameSearchHit }> =
+        [];
+      for (const entry of scopes) {
+        const hits = searchFileNames(
+          db,
+          entry.ownerId,
+          q,
+          SEARCH_RESULT_CAP + 1,
+          entry.scope.mountRelative ? entry.scope.prefix : undefined,
+        );
+        for (const hit of hits) {
+          // Nested shares of the same folder would surface one file
+          // twice; the first (oldest) share wins.
+          if (seenKeys.has(hit.key)) continue;
+          seenKeys.add(hit.key);
+          nameHits.push({ entry, hit });
+        }
+      }
+      const room = SEARCH_RESULT_CAP - results.length;
+      if (nameHits.length > room) capped = true;
+      for (const { entry, hit } of nameHits.slice(0, room)) {
+        results.push({ ...resultOf(entry, hit), match: "name" as const });
+      }
+    }
+
+    if (!capped && q.length >= 3) {
       // One extra hit per scope decides the capped flag without a
       // second query.
       const contentHits: Array<{
@@ -562,6 +630,98 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
       { url, key: scope.mountRelative ? key.slice(scope.prefix.length) : key },
       200,
     );
+  });
+
+  // Create a folder (issue #11) by writing a zero-byte "<folder>/" marker
+  // object, so an empty folder persists. Anywhere the caller can upload,
+  // including a shared folder. The name is trimmed and otherwise stored
+  // verbatim; it must be a single path segment of at most 255 characters.
+  // Any object under the folder key (a marker or nested files) means the
+  // folder exists: 409. A file named like the folder does not conflict:
+  // S3 keeps "X" and "X/" distinct and the listing shows both.
+  app.post("/folders", async (c) => {
+    const user = c.get("user");
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return jsonError(c, 400, "Invalid JSON body", "bad_request");
+    }
+    const {
+      space: spaceValue,
+      folder,
+      name: rawName,
+    } = (body ?? {}) as { space?: unknown; folder?: unknown; name?: unknown };
+    const scope = resolveRequestSpace(
+      c,
+      db,
+      user,
+      spaceValue === undefined || typeof spaceValue === "string"
+        ? spaceValue
+        : null,
+    );
+    if (scope instanceof Response) return scope;
+    if (typeof folder !== "string" || typeof rawName !== "string") {
+      return jsonError(c, 400, "folder and name are required", "bad_request");
+    }
+    if (!isSafeRelativePrefix(folder)) {
+      return jsonError(
+        c,
+        400,
+        "The folder must stay within your space",
+        "invalid_folder",
+      );
+    }
+    const name = rawName.trim();
+    if (name === "" || name === "." || name === ".." || name.includes("/")) {
+      return jsonError(
+        c,
+        400,
+        'The folder name must not be empty, "." or "..", or contain "/"',
+        "invalid_folder_name",
+      );
+    }
+    if ([...name].length > FOLDER_NAME_MAX_LENGTH) {
+      return jsonError(
+        c,
+        400,
+        `The folder name must be at most ${FOLDER_NAME_MAX_LENGTH} characters`,
+        "invalid_folder_name",
+      );
+    }
+
+    // Scope enforcement (constitution IV): the parent folder is validated
+    // above and the name is a single segment, so the key stays inside the
+    // effective scope; the S3 helpers assert it again before any call.
+    const normalizedFolder =
+      folder === "" ? "" : folder.replace(/\/+$/, "") + "/";
+    const relativePrefix = normalizedFolder + name + "/";
+    const folderKey = scope.prefix + relativePrefix;
+
+    try {
+      if (await folderExists(s3Client, scope.bucket, scope.prefix, folderKey)) {
+        return jsonError(
+          c,
+          409,
+          `A folder named "${name}" already exists`,
+          "already_exists",
+        );
+      }
+      await createFolderMarker(s3Client, scope.bucket, scope.prefix, folderKey);
+    } catch (error) {
+      if (error instanceof RangeError) {
+        return jsonError(
+          c,
+          400,
+          "The folder is outside your space",
+          "out_of_scope",
+        );
+      }
+      throw error;
+    }
+    // The prefix is relative to the space (mount-relative in a shared
+    // space), the same shape the listing's `prefix` parameter takes.
+    return c.json({ name, prefix: relativePrefix }, 201);
   });
 
   app.post("/share-url", async (c) => {

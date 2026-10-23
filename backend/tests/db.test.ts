@@ -41,6 +41,8 @@ import {
   normalizePrefix,
   removeSearchDoc,
   searchFileNames,
+  searchFolderNames,
+  syncSearchFolders,
   findActiveShareLink,
   sweepExpiredShareLinks,
   updateCredentialCounter,
@@ -1627,5 +1629,146 @@ describe("searchFileNames (T010)", () => {
     // LIKE wildcards in the query stay literal.
     expect(searchFileNames(db, alice.id, "%")).toEqual([]);
     expect(searchFileNames(db, alice.id, "_")).toEqual([]);
+  });
+});
+
+describe("search folders (folder search results, #13)", () => {
+  it("finds folders by base name, case-insensitively, for one user only", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    syncSearchFolders(db, alice.id, [
+      "users/alice/Projects/",
+      "users/alice/archive/",
+      "users/alice/archive/old-projects/",
+      "users/alice/projects-docs/inner/",
+    ]);
+    syncSearchFolders(db, bob.id, ["users/bob/projects/"]);
+
+    // Only the base name matches: "projects-docs/inner/" does not match
+    // "proj" through its parent segment. Ordered by name, then key.
+    expect(searchFolderNames(db, alice.id, "PROJ")).toEqual([
+      { key: "users/alice/archive/old-projects/", name: "old-projects" },
+      { key: "users/alice/Projects/", name: "Projects" },
+    ]);
+    expect(searchFolderNames(db, bob.id, "proj")).toEqual([
+      { key: "users/bob/projects/", name: "projects" },
+    ]);
+  });
+
+  it("matches 1-2 character queries and keeps LIKE wildcards literal", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    syncSearchFolders(db, alice.id, ["users/alice/Q3/", "users/alice/notes/"]);
+
+    expect(searchFolderNames(db, alice.id, "q").map((h) => h.key)).toEqual([
+      "users/alice/Q3/",
+    ]);
+    expect(searchFolderNames(db, alice.id, "%")).toEqual([]);
+    expect(searchFolderNames(db, alice.id, "_")).toEqual([]);
+  });
+
+  it("folds case beyond ASCII, like the trigram filename index", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    syncSearchFolders(db, alice.id, [
+      "users/alice/Übersicht/",
+      "users/alice/Café Résumé/",
+    ]);
+
+    expect(searchFolderNames(db, alice.id, "übersicht")).toEqual([
+      { key: "users/alice/Übersicht/", name: "Übersicht" },
+    ]);
+    expect(searchFolderNames(db, alice.id, "CAFÉ").map((h) => h.key)).toEqual([
+      "users/alice/Café Résumé/",
+    ]);
+    expect(searchFolderNames(db, alice.id, "RÉSUMÉ").map((h) => h.key)).toEqual(
+      ["users/alice/Café Résumé/"],
+    );
+  });
+
+  it("keeps the key prefix case-exact: a case-variant sibling never leaks", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    syncSearchFolders(db, alice.id, [
+      "users/alice/projects/specs/",
+      "users/alice/Projects/specs/",
+    ]);
+
+    expect(
+      searchFolderNames(db, alice.id, "specs", 50, "users/alice/projects/").map(
+        (h) => h.key,
+      ),
+    ).toEqual(["users/alice/projects/specs/"]);
+  });
+
+  it("replaces the stored set on each sync: vanished folders drop out", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    syncSearchFolders(db, alice.id, [
+      "users/alice/photos/",
+      "users/alice/photos2/",
+    ]);
+
+    syncSearchFolders(db, alice.id, [
+      "users/alice/photos2/",
+      "users/alice/photos3/",
+    ]);
+
+    expect(searchFolderNames(db, alice.id, "photos").map((h) => h.key)).toEqual(
+      ["users/alice/photos2/", "users/alice/photos3/"],
+    );
+  });
+
+  it("restricts hits to a key prefix, with LIKE wildcards in it literal", () => {
+    const db = createDb();
+    const bob = seedUser(db, { username: "bob" });
+    syncSearchFolders(db, bob.id, [
+      "users/bob/team_a/",
+      "users/bob/team_a/plans/",
+      "users/bob/teamXa/plans/",
+      "users/bob/plans/",
+    ]);
+
+    // The prefix itself (the mount root) is a hit when its name matches.
+    expect(
+      searchFolderNames(db, bob.id, "team", 50, "users/bob/team_a/").map(
+        (h) => h.key,
+      ),
+    ).toEqual(["users/bob/team_a/"]);
+    expect(
+      searchFolderNames(db, bob.id, "plans", 50, "users/bob/team_a/").map(
+        (h) => h.key,
+      ),
+    ).toEqual(["users/bob/team_a/plans/"]);
+  });
+
+  it("honours the limit so the route can compute the capped flag", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    syncSearchFolders(
+      db,
+      alice.id,
+      [0, 1, 2, 3].map((i) => `users/alice/match-${i}/`),
+    );
+
+    expect(searchFolderNames(db, alice.id, "match-", 2)).toHaveLength(2);
+    expect(searchFolderNames(db, alice.id, "match-")).toHaveLength(4);
+  });
+
+  it("deletes the user's folder rows on account deletion", () => {
+    const db = createDb();
+    const alice = seedUser(db, { username: "alice" });
+    const bob = seedUser(db, { username: "bob" });
+    syncSearchFolders(db, alice.id, ["users/alice/docs/"]);
+    syncSearchFolders(db, bob.id, ["users/bob/docs/"]);
+
+    deleteUser(db, alice.id);
+
+    expect(
+      db.query("SELECT userId FROM search_folders").all() as Array<{
+        userId: string;
+      }>,
+    ).toEqual([{ userId: bob.id }]);
   });
 });

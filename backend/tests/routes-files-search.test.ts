@@ -16,6 +16,7 @@ import {
   createShare,
   createUser,
   deleteShare,
+  syncSearchFolders,
   upsertSearchDoc,
 } from "../src/db/repository";
 import type { User } from "../src/db/repository";
@@ -734,5 +735,212 @@ describe("GET /api/files/search (US3)", () => {
     // matches here (30 own + 20 shared).
     expect(body.results.every((r) => r.match === "name")).toBe(true);
     expect(body.results.filter((r) => r.space === "own")).toHaveLength(30);
+  });
+});
+
+describe("GET /api/files/search (folder results, #13)", () => {
+  /** The parsed body of a search response. */
+  type SearchBody = {
+    results: Array<Record<string, unknown>>;
+    capped: boolean;
+  };
+
+  it("returns own-space folders by name, ranked above file name and content matches", async () => {
+    const { app, db, alice, carol } = createSearchApp();
+    syncSearchFolders(db, alice.id, [
+      "users/alice/plans/",
+      "users/alice/work/",
+      "users/alice/work/old plans/",
+      // A parent segment match alone never makes a folder match.
+      "users/alice/plans/inner/",
+    ]);
+    seedDoc(db, alice.id, "users/alice/work/plans.txt", "plans.txt");
+    seedDoc(db, alice.id, "users/alice/notes.txt", "notes.txt", "five plans");
+    // Another user's matching folder must never leak (constitution IV).
+    syncSearchFolders(db, carol.id, ["users/carol/plans/"]);
+
+    const res = await search(app, "plans");
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as SearchBody;
+    expect(body.capped).toBe(false);
+    // Folders first (by name), then file names, then content. A folder's
+    // key is its space-relative prefix (what the listing navigates to);
+    // its path is the parent folder ("" at the space root).
+    expect(body.results).toEqual([
+      {
+        name: "old plans",
+        path: "work",
+        key: "work/old plans/",
+        space: "own",
+        match: "folder",
+      },
+      {
+        name: "plans",
+        path: "",
+        key: "plans/",
+        space: "own",
+        match: "folder",
+      },
+      {
+        name: "plans.txt",
+        path: "work",
+        key: "users/alice/work/plans.txt",
+        space: "own",
+        match: "name",
+      },
+      {
+        name: "notes.txt",
+        path: "",
+        key: "users/alice/notes.txt",
+        space: "own",
+        match: "content",
+        snippet: expect.stringContaining("<mark>plans</mark>"),
+      },
+    ]);
+  });
+
+  it("matches folder names for a 1-2 character query", async () => {
+    const { app, db, alice } = createSearchApp();
+    syncSearchFolders(db, alice.id, ["users/alice/Q3/", "users/alice/misc/"]);
+
+    const res = await search(app, "q3");
+
+    const body = (await res.json()) as SearchBody;
+    expect(body.results.map((r) => r.key)).toEqual(["Q3/"]);
+  });
+
+  it("returns a shared mount's root and subfolders, mount-relative, and nothing outside it", async () => {
+    const { app, db, alice, bob } = createSearchApp();
+    syncSearchFolders(db, alice.id, [
+      "users/alice/team/",
+      "users/alice/team/team-notes/",
+      "users/alice/team/2026/team-old/",
+      "users/alice/team/2026/",
+      // Outside the shared mount: never visible to bob.
+      "users/alice/team-private/",
+    ]);
+    const share = createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: bob.id,
+      folder: "team",
+    });
+
+    const res = await searchAs(app, bobCookie, "team");
+
+    const body = (await res.json()) as SearchBody;
+    // The mount root opens the mount (key ""), and sits at bob's Home.
+    expect(body.results).toEqual([
+      {
+        name: "team",
+        path: "",
+        key: "",
+        space: `shared:${share.id}`,
+        sharedBy: "alice",
+        match: "folder",
+      },
+      {
+        name: "team-notes",
+        path: "",
+        key: "team-notes/",
+        space: `shared:${share.id}`,
+        sharedBy: "alice",
+        match: "folder",
+      },
+      {
+        name: "team-old",
+        path: "2026",
+        key: "2026/team-old/",
+        space: `shared:${share.id}`,
+        sharedBy: "alice",
+        match: "folder",
+      },
+    ]);
+
+    // Revocation drops the shared folders at query time (FR-011).
+    deleteShare(db, share.id);
+    const revoked = (await (
+      await searchAs(app, bobCookie, "team")
+    ).json()) as SearchBody;
+    expect(revoked.results).toEqual([]);
+  });
+
+  it("lists a folder under two overlapping shares once, from the oldest share", async () => {
+    const { app, db, alice, bob } = createSearchApp();
+    syncSearchFolders(db, alice.id, [
+      "users/alice/team/",
+      "users/alice/team/specs/",
+    ]);
+    const outer = createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: bob.id,
+      folder: "team",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    createShare(db, {
+      ownerUserId: alice.id,
+      recipientUserId: bob.id,
+      folder: "team/specs",
+      createdAt: "2026-02-01T00:00:00.000Z",
+    });
+
+    const res = await searchAs(app, bobCookie, "specs");
+
+    const body = (await res.json()) as SearchBody;
+    expect(body.results).toEqual([
+      {
+        name: "specs",
+        path: "",
+        key: "specs/",
+        space: `shared:${outer.id}`,
+        sharedBy: "alice",
+        match: "folder",
+      },
+    ]);
+  });
+
+  it("counts folders toward the 50 cap, ahead of file matches", async () => {
+    const { app, db, alice } = createSearchApp();
+    const pad = (i: number) => String(i).padStart(2, "0");
+    syncSearchFolders(
+      db,
+      alice.id,
+      Array.from({ length: 30 }, (_, i) => `users/alice/match-${pad(i)}/`),
+    );
+    for (let i = 0; i < 30; i++) {
+      seedDoc(
+        db,
+        alice.id,
+        `users/alice/match-${pad(i)}.txt`,
+        `match-${pad(i)}.txt`,
+      );
+    }
+
+    const res = await search(app, "match-");
+
+    const body = (await res.json()) as SearchBody;
+    expect(body.results).toHaveLength(50);
+    expect(body.capped).toBe(true);
+    expect(body.results.slice(0, 30).every((r) => r.match === "folder")).toBe(
+      true,
+    );
+    expect(body.results.slice(30).every((r) => r.match === "name")).toBe(true);
+  });
+
+  it("caps on folders alone when they exceed 50", async () => {
+    const { app, db, alice } = createSearchApp();
+    syncSearchFolders(
+      db,
+      alice.id,
+      Array.from({ length: 51 }, (_, i) => `users/alice/match-${i}/`),
+    );
+    seedDoc(db, alice.id, "users/alice/match.txt", "match.txt");
+
+    const res = await search(app, "match");
+
+    const body = (await res.json()) as SearchBody;
+    expect(body.results).toHaveLength(50);
+    expect(body.capped).toBe(true);
+    expect(body.results.every((r) => r.match === "folder")).toBe(true);
   });
 });

@@ -380,11 +380,13 @@ async function seed(db: Database): Promise<User> {
 }
 
 /**
- * Replay the /search route's merged ranking (R-008): name hits above
+ * Replay the /search route's file ranking (R-008): name hits above
  * content hits, FTS rank order inside each group, deduplicated by key,
- * capped at the contract limit. Kept in lockstep with the handler in
- * routes/files.ts; the cap semantics (name group exhausting the cap)
- * cannot trigger with this corpus.
+ * capped at the contract limit. Kept in lockstep with the file passes
+ * of the handler in routes/files.ts; its folder pass (#13), which ranks
+ * folder-name matches above every file, is outside this file-relevance
+ * evaluation (the seeded corpus has no folder rows). The cap semantics
+ * (name group exhausting the cap) cannot trigger with this corpus.
  */
 export function routeSearch(db: Database, user: User, query: string): string[] {
   const keys: string[] = [];
