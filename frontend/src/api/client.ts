@@ -249,25 +249,28 @@ export function listFiles(
 
 /** One search result, per the contract `SearchResult` schema. */
 export interface SearchResult {
-  /** Base name of the file (after the last "/"). */
+  /** Base name of the file or folder (its last path segment). */
   name: string;
   /**
-   * Human-readable folder path relative to the space root; "" for a file
-   * at the root (the UI breadcrumb).
+   * Human-readable path of the containing folder relative to the space
+   * root; "" at the root (the UI breadcrumb).
    */
   path: string;
   /**
-   * Object key in the space's existing key convention — identical to
-   * what the listing endpoints return, so existing row actions
-   * (download, share, delete) work unchanged with the result's space.
+   * For a file: the object key in the space's existing key convention —
+   * identical to what the listing endpoints return, so existing row
+   * actions (download, share, delete) work unchanged with the result's
+   * space. For a folder: its prefix relative to the space root, with a
+   * trailing "/" ("" for the root of a shared mount) — what the listing
+   * navigates to and the folder share dialog takes.
    */
   key: string;
   /** "own" or "shared:<shareId>" (the same identifier listFiles takes). */
   space: Space;
   /** Sharer's username; present only when space is shared. */
   sharedBy?: string;
-  /** Which field matched the query. */
-  match: "name" | "content";
+  /** What matched: a folder's name, a file's name, or a file's content. */
+  match: "folder" | "name" | "content";
   /**
    * Snippet of the document around the first content match, with the
    * matching text wrapped in <mark>...</mark>; present only when match
@@ -278,15 +281,15 @@ export interface SearchResult {
 
 /** Response of GET /api/files/search. */
 export interface SearchFilesResponse {
-  /** Results, filename matches first. */
+  /** Results: folder matches, then file name matches, then content. */
   results: SearchResult[];
   /** True when matches were dropped to enforce the 50-result cap. */
   capped: boolean;
 }
 
 /**
- * Search files by filename substring (and, later, content) across the
- * caller's own space, ranked filename-first.
+ * Search folders by name and files by name and content across the
+ * caller's own space and every folder shared with them.
  *
  * @param q - the search query (the server trims it)
  * @returns the matching results and whether the 50-result cap was hit

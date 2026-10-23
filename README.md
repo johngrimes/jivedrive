@@ -16,9 +16,9 @@ accounts. Authentication is WebAuthn passkeys only - no passwords.
   folder, mounts labelled with the sharer, revocable at any time.
 - Short share links: an anonymous `<origin>/s/<12-character token>` link
   to a single file, valid for 1 hour to 30 days, stored only until expiry.
-- Full-text search: one search box finds files by name and by content
-  (plain text, PDF, DOCX) across the user's space and every folder shared
-  with them, kept fresh by a background index scan.
+- Full-text search: one search box finds folders by name and files by name
+  and by content (plain text, PDF, DOCX) across the user's space and every
+  folder shared with them, kept fresh by a background index scan.
 
 ## Local development
 
@@ -131,12 +131,15 @@ form.
 ## Search
 
 The Files page has a search box that replaces the folder listing with a
-flat result list. Filenames are matched case-insensitively by substring
-across the user's entire space; content is matched against extracted text
-from plain text, PDF, and DOCX files. Filename matches rank above content
-matches, content matches show a snippet with the matching text, and the
-list is capped at 50 results. Queries shorter than three characters fall
-back to filename-only matching.
+flat result list. Folder and file names are matched case-insensitively by
+substring across the user's entire space (a folder matches on its own
+name, not on its parent folders); content is matched against extracted
+text from plain text, PDF, and DOCX files. Folder matches rank first, then
+filename matches, then content matches; content matches show a snippet
+with the matching text, and the list is capped at 50 results. Clicking a
+folder result opens that folder, and own-space folder results can be
+shared from the list. Queries shorter than three characters fall back to
+name-only matching.
 
 Search covers every folder shared with the user in the same query; results
 from a shared mount are labelled with the sharer's username, and revoking
@@ -146,13 +149,16 @@ extracted (corrupt or password-protected documents, other formats) remain
 findable by name only.
 
 The search index is a trigram FTS5 table in the existing SQLite database,
-kept fresh by a background scan of each user's space every
-`JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS`: new objects are indexed, objects
-whose ETag or size changed are re-extracted, and rows for deleted objects
-are removed. Unchanged objects are never re-downloaded, so scans of
-stable spaces are cheap. An admin can force an immediate reconciliation
-for any user from the Admin users page ("Rebuild search index"), which
-reports how many objects were indexed, re-extracted, and removed.
+plus a folder table, kept fresh by a background scan of each user's space
+every `JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS`: new objects are indexed,
+objects whose ETag or size changed are re-extracted, and rows for deleted
+objects are removed. The same scan records every folder in the space —
+each object's parent folders and any empty-folder placeholder objects — so
+empty folders are searchable too. Unchanged objects are never
+re-downloaded, so scans of stable spaces are cheap. An admin can force an
+immediate reconciliation for any user from the Admin users page ("Rebuild
+search index"), which reports how many objects were indexed, re-extracted,
+and removed.
 
 ## Deployment
 

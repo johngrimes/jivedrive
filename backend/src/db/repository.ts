@@ -1363,3 +1363,86 @@ export function searchContent(
     )
     .all(userId, ...prefixArgs, phrase, limit) as ContentSearchHit[];
 }
+
+/** One folder-name match of a search query. */
+export interface FolderSearchHit {
+  /** Full folder key including the owner's storage prefix and trailing "/". */
+  key: string;
+  /** Base name of the folder (its last path segment). */
+  name: string;
+}
+
+/**
+ * Replace the stored folder set of one user's space with `keys` (folder
+ * search, #13): folders absent from `keys` are deleted, new ones are
+ * inserted, and unchanged rows are left alone, so a stable space causes
+ * no writes. Runs in one transaction.
+ *
+ * @param db - database connection
+ * @param userId - owner of the space
+ * @param keys - every folder key in the space: full keys including the
+ *   storage prefix, each ending in "/"
+ */
+export function syncSearchFolders(
+  db: Database,
+  userId: string,
+  keys: Iterable<string>,
+): void {
+  const wanted = new Set(keys);
+  const sync = db.transaction(() => {
+    const stored = db
+      .query("SELECT key FROM search_folders WHERE userId = ?")
+      .all(userId) as Array<{ key: string }>;
+    const remove = db.query(
+      "DELETE FROM search_folders WHERE userId = ? AND key = ?",
+    );
+    for (const { key } of stored) {
+      if (!wanted.delete(key)) remove.run(userId, key);
+    }
+    // `wanted` now holds only the keys not yet stored.
+    const insert = db.query(
+      "INSERT INTO search_folders (userId, key, name) VALUES (?, ?, ?)",
+    );
+    for (const key of wanted) {
+      const trimmed = key.slice(0, -1);
+      insert.run(userId, key, trimmed.slice(trimmed.lastIndexOf("/") + 1));
+    }
+  });
+  sync();
+}
+
+/**
+ * Find one user's folders whose base name contains the query (folder
+ * search, #13): a case-insensitive (ASCII) substring match on the name
+ * only, never on parent segments, with LIKE wildcards in the query kept
+ * literal. Rows outside the owner's space are never returned
+ * (constitution IV).
+ *
+ * @param db - database connection
+ * @param userId - owner of the space to search
+ * @param query - the (already trimmed, non-empty) search query
+ * @param limit - maximum number of hits to return
+ * @param keyPrefix - when given, only folders at or under this prefix
+ *   match (shared-scope search): the prefix is the sharer's mount
+ *   prefix, so the mount root itself is a candidate; LIKE wildcards in
+ *   it stay literal
+ * @returns hits ordered by name (case-insensitively), then key
+ */
+export function searchFolderNames(
+  db: Database,
+  userId: string,
+  query: string,
+  limit = 50,
+  keyPrefix?: string,
+): FolderSearchHit[] {
+  const prefixClause = keyPrefix ? " AND key LIKE ? ESCAPE '\\'" : "";
+  const prefixArgs = keyPrefix
+    ? [`${keyPrefix.replace(/([\\%_])/g, "\\$1")}%`]
+    : [];
+  const pattern = `%${query.replace(/([\\%_])/g, "\\$1")}%`;
+  return db
+    .query(
+      `SELECT key, name FROM search_folders WHERE userId = ?${prefixClause} AND name LIKE ? ESCAPE '\\' ORDER BY name COLLATE NOCASE, key LIMIT ?`,
+    )
+    .all(userId, ...prefixArgs, pattern, limit) as FolderSearchHit[];
+}

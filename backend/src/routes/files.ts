@@ -30,10 +30,12 @@ import {
   listSharesByRecipient,
   searchContent,
   searchFileNames,
+  searchFolderNames,
 } from "../db/repository";
 import type {
   ContentSearchHit,
   FileNameSearchHit,
+  FolderSearchHit,
   ShareLinkLifetime,
 } from "../db/repository";
 import type { Database } from "bun:sqlite";
@@ -114,7 +116,9 @@ function isSafeRelativePrefix(prefix: string): boolean {
 /**
  * One entry of the search result list, per the contract's `SearchResult`
  * schema. `snippet` is present only on content matches; `sharedBy` only
- * on results from a shared mount (US3).
+ * on results from a shared mount (US3). A folder result (`match:
+ * "folder"`, #13) carries the folder's space-relative prefix as `key`
+ * ("" for a shared mount's root) and its parent folder as `path`.
  */
 interface SearchRouteResult {
   name: string;
@@ -122,7 +126,7 @@ interface SearchRouteResult {
   key: string;
   space: string;
   sharedBy?: string;
-  match: "name" | "content";
+  match: "folder" | "name" | "content";
   snippet?: string;
 }
 
@@ -178,6 +182,30 @@ function sharedSpaceResult(
     key: relative,
     space: `shared:${scope.shareId}`,
     sharedBy,
+  };
+}
+
+/**
+ * Build the search-result fields for a folder match (#13) in either
+ * space: `key` is the folder's prefix relative to the space root —
+ * exactly what the listing navigates to, "" for a shared mount's root —
+ * and `path` is its parent folder ("" at the space root).
+ *
+ * @param entry - the scope the folder was found in
+ * @param hit - the folder hit (full key including the scope prefix)
+ * @returns name, path, key, space and (in a shared scope) sharedBy
+ */
+function folderResult(entry: SearchScope, hit: FolderSearchHit) {
+  const key = hit.key.slice(entry.scope.prefix.length);
+  const parent = key.slice(0, -1);
+  const lastSlash = parent.lastIndexOf("/");
+  return {
+    name: hit.name,
+    path: lastSlash === -1 ? "" : parent.slice(0, lastSlash),
+    key,
+    ...(entry.scope.mountRelative
+      ? { space: `shared:${entry.scope.shareId}`, sharedBy: entry.sharedBy }
+      : { space: "own" }),
   };
 }
 
@@ -293,10 +321,11 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
     );
   });
 
-  // Search (007-file-search US1 T010, US2 T016, US3 T021): one flat
-  // result list over the caller's effective scopes — their own space
-  // plus every live incoming share (FR-010). Name matches rank above
-  // content matches (R-008), relevance order inside each group; the
+  // Search (007-file-search US1 T010, US2 T016, US3 T021; folders #13):
+  // one flat result list over the caller's effective scopes — their own
+  // space plus every live incoming share (FR-010). Folder name matches
+  // rank first, then file name matches above content matches (R-008),
+  // name order for folders and relevance order inside each file group; the
   // cap spans all scopes. Shared scopes are filtered to the mount
   // prefix and their keys are reported mount-relative, exactly as the
   // listing endpoints return them. Resolution happens per request, so
@@ -343,36 +372,70 @@ export function filesRoutes(deps: FileRouteDeps): Hono<ServerEnv> {
           )
         : ownSpaceResult(user, hit.key, hit.fileName);
 
-    // Name pass: one extra hit per scope decides whether the name group
-    // alone exhausts the cap, in which case content is not queried.
-    const nameHits: Array<{ entry: SearchScope; hit: FileNameSearchHit }> = [];
+    // Folder pass (#13): folders whose base name matches, ordered by
+    // name. Hits are restricted to each scope's prefix — the shared
+    // mount (whose root itself is a candidate) or the caller's own
+    // prefix — so every folder key maps to a space-relative prefix.
+    // One extra hit per scope decides whether folders alone exhaust
+    // the cap, in which case no file pass runs.
+    const folderHits: Array<{ entry: SearchScope; hit: FolderSearchHit }> = [];
+    // Folder keys end in "/" and file keys never do, so one set dedupes
+    // all three passes.
     const seenKeys = new Set<string>();
     for (const entry of scopes) {
-      const hits = searchFileNames(
+      const hits = searchFolderNames(
         db,
         entry.ownerId,
         q,
         SEARCH_RESULT_CAP + 1,
-        entry.scope.mountRelative ? entry.scope.prefix : undefined,
+        entry.scope.prefix,
       );
       for (const hit of hits) {
-        // Nested shares of the same folder would surface one file twice;
-        // the first (oldest) share wins.
+        // Nested shares of the same folder would surface it twice; the
+        // first (oldest) share wins.
         if (seenKeys.has(hit.key)) continue;
         seenKeys.add(hit.key);
-        nameHits.push({ entry, hit });
+        folderHits.push({ entry, hit });
       }
     }
-    const nameCapped = nameHits.length > SEARCH_RESULT_CAP;
-    const results: SearchRouteResult[] = (
-      nameCapped ? nameHits.slice(0, SEARCH_RESULT_CAP) : nameHits
-    ).map(({ entry, hit }) => ({
-      ...resultOf(entry, hit),
-      match: "name" as const,
-    }));
+    let capped = folderHits.length > SEARCH_RESULT_CAP;
+    const results: SearchRouteResult[] = folderHits
+      .slice(0, SEARCH_RESULT_CAP)
+      .map(({ entry, hit }) => ({
+        ...folderResult(entry, hit),
+        match: "folder" as const,
+      }));
 
-    let capped = nameCapped;
-    if (!nameCapped && q.length >= 3) {
+    // Name pass: one extra hit per scope decides whether the name group
+    // exhausts what is left of the cap, in which case content is not
+    // queried.
+    if (!capped) {
+      const nameHits: Array<{ entry: SearchScope; hit: FileNameSearchHit }> =
+        [];
+      for (const entry of scopes) {
+        const hits = searchFileNames(
+          db,
+          entry.ownerId,
+          q,
+          SEARCH_RESULT_CAP + 1,
+          entry.scope.mountRelative ? entry.scope.prefix : undefined,
+        );
+        for (const hit of hits) {
+          // Nested shares of the same folder would surface one file
+          // twice; the first (oldest) share wins.
+          if (seenKeys.has(hit.key)) continue;
+          seenKeys.add(hit.key);
+          nameHits.push({ entry, hit });
+        }
+      }
+      const room = SEARCH_RESULT_CAP - results.length;
+      if (nameHits.length > room) capped = true;
+      for (const { entry, hit } of nameHits.slice(0, room)) {
+        results.push({ ...resultOf(entry, hit), match: "name" as const });
+      }
+    }
+
+    if (!capped && q.length >= 3) {
       // One extra hit per scope decides the capped flag without a
       // second query.
       const contentHits: Array<{

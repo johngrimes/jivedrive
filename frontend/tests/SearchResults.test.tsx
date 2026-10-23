@@ -149,7 +149,7 @@ describe("SearchResults (T009)", () => {
     const container = renderResults();
     await flush();
 
-    expect(container.textContent).toContain("No files match");
+    expect(container.textContent).toContain("No files or folders match");
     expect(container.querySelector(".alert-error")).toBeNull();
   });
 
@@ -587,5 +587,160 @@ describe("SearchResults shared results (T020)", () => {
     expect(listingCall).toBeDefined();
     expect(listingCall).toContain("prefix=projects%2F");
     expect(container.textContent).not.toContain("Name match");
+  });
+});
+
+describe("SearchResults folder results (#13)", () => {
+  /** An own-space folder match, nested one level. */
+  const ownFolder: SearchResult = {
+    name: "old plans",
+    path: "work",
+    key: "work/old plans/",
+    space: "own",
+    match: "folder",
+  };
+  /** The root of a folder alice shared with the signed-in user. */
+  const mountRoot: SearchResult = {
+    name: "team",
+    path: "",
+    key: "",
+    space: "shared:share-1",
+    sharedBy: "alice",
+    match: "folder",
+  };
+
+  /** Submit the Files page search box for `renderFilesPage` output. */
+  async function submitSearch(container: HTMLElement): Promise<void> {
+    const input = container.querySelector(
+      'input[type="search"]',
+    ) as HTMLInputElement;
+    await act(async () => {
+      typeInput(input, "plans");
+    });
+    const form = container.querySelector('form[role="search"]');
+    await act(async () => {
+      form?.dispatchEvent(new Event("submit", { bubbles: true }));
+    });
+    await flush();
+  }
+
+  it("renders a folder row with its parent path and a Folder badge, without file actions", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ results: [ownFolder, nestedResult], capped: false }),
+        ),
+    );
+    const container = renderResults({
+      onDownload: () => {},
+      onShare: () => {},
+      onDelete: () => {},
+      onShareFolder: () => {},
+    });
+    await flush();
+
+    const folderRow = container.querySelectorAll("li.list-row")[0]!;
+    expect(folderRow.textContent).toContain("old plans");
+    expect(folderRow.textContent).toContain("Folder");
+    expect(folderRow.textContent).not.toContain("Name match");
+    // The second line is the parent folder, not the folder itself.
+    expect(folderRow.querySelector("p")?.textContent).toBe("work");
+    // File-only actions never render on a folder row.
+    expect(
+      folderRow.querySelector('button[aria-label="Download old plans"]'),
+    ).toBeNull();
+    expect(
+      folderRow.querySelector('button[aria-label="Delete old plans"]'),
+    ).toBeNull();
+    expect(
+      folderRow.querySelectorAll('button[aria-label="Share old plans"]'),
+    ).toHaveLength(1);
+  });
+
+  it("offers no Share button on a folder from a shared mount", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ results: [mountRoot], capped: false }),
+        ),
+    );
+    const container = renderResults({ onShareFolder: () => {} });
+    await flush();
+
+    const row = container.querySelector("li.list-row")!;
+    expect(row.textContent).toContain("Shared by alice");
+    expect(row.querySelector("button")).toBeNull();
+    // A mount sits at the recipient's Home.
+    expect(row.querySelector("p")?.textContent).toBe("Home");
+  });
+
+  it("opens the folder itself when a folder result is clicked", async () => {
+    const { container, fetchMock } = await renderFilesPage({
+      results: [ownFolder],
+      capped: false,
+    });
+    await submitSearch(container);
+
+    const link = Array.from(container.querySelectorAll("a")).find((a) =>
+      a.textContent?.includes("old plans"),
+    );
+    await act(async () => {
+      link?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    const listingCall = fetchMock.mock.calls
+      .map((call) => String(call[0]))
+      .find((url) => url.includes("prefix=work%2Fold+plans%2F"));
+    expect(listingCall).toBeDefined();
+    expect(
+      container.querySelector('nav[aria-label="Breadcrumbs"]')?.textContent,
+    ).toContain("old plans");
+  });
+
+  it("opens a shared mount at its root from its folder result", async () => {
+    const { container, fetchMock } = await renderFilesPage({
+      results: [mountRoot],
+      capped: false,
+    });
+    await submitSearch(container);
+
+    const link = Array.from(container.querySelectorAll("a")).find((a) =>
+      a.textContent?.includes("team"),
+    );
+    await act(async () => {
+      link?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    const listingCall = fetchMock.mock.calls
+      .map((call) => String(call[0]))
+      .find((url) => url.includes("space=shared%3Ashare-1"));
+    expect(listingCall).toBeDefined();
+    expect(listingCall).not.toContain("prefix=");
+  });
+
+  it("opens the folder share dialog from an own-space folder result", async () => {
+    const { container } = await renderFilesPage({
+      results: [ownFolder],
+      capped: false,
+    });
+    await submitSearch(container);
+
+    const share = container.querySelector(
+      'button[aria-label="Share old plans"]',
+    );
+    await act(async () => {
+      share?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    expect(
+      container.querySelector("#share-folder-dialog-title")?.textContent,
+    ).toBe("Share old plans");
   });
 });

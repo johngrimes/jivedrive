@@ -338,13 +338,19 @@ export function FilesPage() {
   }
 
   /**
-   * Open a search result's containing folder: navigating clears the
-   * query, which restores the folder listing (FR-003, US1 sc.4).
+   * Open a search result: a folder opens itself, a file its containing
+   * folder. Navigating clears the query, which restores the folder
+   * listing (FR-003, US1 sc.4).
    *
    * @param result - the clicked result
    */
   function openResult(result: SearchResult): void {
     setQuery(null);
+    if (result.match === "folder") {
+      // A folder's key is its space-relative prefix ("" opens a mount).
+      navigate(result.space, result.key);
+      return;
+    }
     navigate(result.space, result.path === "" ? "" : `${result.path}/`);
   }
 
@@ -397,7 +403,7 @@ export function FilesPage() {
             type="search"
             className="input input-bordered grow min-h-11"
             aria-label="Search files"
-            placeholder="Search files by name"
+            placeholder="Search files and folders"
             value={queryInput}
             onChange={(event) => setQueryInput(event.target.value)}
           />
@@ -485,6 +491,7 @@ export function FilesPage() {
               setDialogSpace(result.space);
               setDeleteFile(asFileEntry(result));
             }}
+            onShareFolder={(result) => setShareFolder(result.key)}
             onSessionExpired={() => void refresh()}
           />
         )}

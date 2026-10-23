@@ -4,7 +4,8 @@
  * diffed against the index by the (key → etag + size) fingerprint; only
  * new or changed objects are downloaded and re-extracted (R-004), files
  * above the size cap are indexed name-only (R-009), and objects that
- * vanished are removed from the index (FR-007).
+ * vanished are removed from the index (FR-007). The same listing
+ * rebuilds the user's folder set for folder search (#13).
  */
 import { GetObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import type { S3Client } from "@aws-sdk/client-s3";
@@ -12,6 +13,7 @@ import type { Database } from "bun:sqlite";
 import {
   listSearchIndex,
   removeSearchDoc,
+  syncSearchFolders,
   upsertSearchDoc,
 } from "../db/repository";
 import type { User } from "../db/repository";
@@ -112,18 +114,22 @@ async function readObjectBody(body: unknown): Promise<Uint8Array> {
 
 /**
  * List every object under the user's prefix, following S3 pagination
- * until exhausted. Folder-placeholder keys (ending in "/") are skipped:
- * they carry no name to index.
+ * until exhausted. Folder-placeholder keys (ending in "/") are not
+ * returned as objects — they carry no file to index — but, like every
+ * file's ancestors, they contribute to the folder set (#13), so empty
+ * folders are searchable. The space root itself is never a folder.
  *
  * @param client - S3 client
  * @param user - the user whose space is listed (bucket + prefix scope)
- * @returns all listed objects
+ * @returns all listed file objects, and every folder key (full key with
+ *   trailing "/") in the space
  */
 async function listAllObjects(
   client: S3Client,
   user: User,
-): Promise<ListedObject[]> {
+): Promise<{ objects: ListedObject[]; folders: Set<string> }> {
   const objects: ListedObject[] = [];
+  const folders = new Set<string>();
   let cursor: string | undefined;
   do {
     const output = (await client.send(
@@ -140,12 +146,22 @@ async function listAllObjects(
     };
     for (const object of output.Contents ?? []) {
       const key = object.Key ?? "";
-      if (key === "" || key.endsWith("/")) continue;
+      if (key === "") continue;
+      // Every "/" after the prefix closes one folder: a/b/c.txt yields
+      // a/ and a/b/, a placeholder a/b/ yields the same two.
+      for (
+        let slash = key.indexOf("/", user.prefix.length);
+        slash !== -1;
+        slash = key.indexOf("/", slash + 1)
+      ) {
+        folders.add(key.slice(0, slash + 1));
+      }
+      if (key.endsWith("/")) continue;
       objects.push({ key, etag: object.ETag ?? "", size: object.Size ?? 0 });
     }
     cursor = output.IsTruncated ? output.NextContinuationToken : undefined;
   } while (cursor);
-  return objects;
+  return { objects, folders };
 }
 
 /**
@@ -191,7 +207,8 @@ export async function scanUserSpace(
 ): Promise<ScanCounts> {
   const counts: ScanCounts = { indexed: 0, reindexed: 0, removed: 0 };
 
-  const listed = await listAllObjects(client, user);
+  const { objects: listed, folders } = await listAllObjects(client, user);
+  syncSearchFolders(db, user.id, folders);
   const listedByKey = new Map(listed.map((object) => [object.key, object]));
   const indexedByKey = new Map(
     listSearchIndex(db, user.id).map((row) => [row.key, row]),

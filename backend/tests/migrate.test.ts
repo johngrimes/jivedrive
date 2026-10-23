@@ -185,6 +185,7 @@ describe("migrateFromDir", () => {
       "004_shares.sql",
       "005_search_index.sql",
       "006_share_links.sql",
+      "007_search_folders.sql",
     ]);
 
     // Every table from data-model.md exists.
@@ -195,6 +196,7 @@ describe("migrateFromDir", () => {
       "sessions",
       "shares",
       "share_links",
+      "search_folders",
     ]) {
       expect(
         db

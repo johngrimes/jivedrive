@@ -525,6 +525,75 @@ describe("scanUserSpace", () => {
   });
 });
 
+describe("scanUserSpace folder index (folder search results, #13)", () => {
+  /** Every stored folder key of one user, sorted. */
+  function folderKeys(db: Database, userId: string): string[] {
+    return (
+      db
+        .query("SELECT key FROM search_folders WHERE userId = ? ORDER BY key")
+        .all(userId) as Array<{ key: string }>
+    ).map((row) => row.key);
+  }
+
+  it("records every ancestor folder of a file and every placeholder folder", async () => {
+    const db = createDb();
+    const alice = seedUser(db);
+    const store: FakeStore = new Map([
+      ["users/alice/", textObject("", '"root"')],
+      ["users/alice/top.txt", textObject("top", '"t"')],
+      ["users/alice/projects/2026/plan.txt", textObject("plan", '"p"')],
+      ["users/alice/projects/2026/notes.txt", textObject("notes", '"n"')],
+      ["users/alice/empty/", textObject("", '"e"')],
+      ["users/alice/empty/nested/", textObject("", '"en"')],
+    ]);
+    // One key per page: folders are gathered across the whole listing.
+    const { client } = fakeClient(store, 1);
+
+    const counts = await scanUserSpace(client, db, alice, CAP);
+
+    expect(folderKeys(db, alice.id)).toEqual([
+      "users/alice/empty/",
+      "users/alice/empty/nested/",
+      "users/alice/projects/",
+      "users/alice/projects/2026/",
+    ]);
+    // Placeholders are still not indexed as files.
+    expect(counts).toEqual({ indexed: 3, reindexed: 0, removed: 0 });
+  });
+
+  it("drops folders that vanished from the listing on the next scan", async () => {
+    const db = createDb();
+    const alice = seedUser(db);
+    const store: FakeStore = new Map([
+      ["users/alice/keep/a.txt", textObject("a", '"a"')],
+      ["users/alice/gone/deep/b.txt", textObject("b", '"b"')],
+      ["users/alice/placeholder/", textObject("", '"p"')],
+    ]);
+    const { client } = fakeClient(store);
+    await scanUserSpace(client, db, alice, CAP);
+
+    store.delete("users/alice/gone/deep/b.txt");
+    store.delete("users/alice/placeholder/");
+    await scanUserSpace(client, db, alice, CAP);
+
+    expect(folderKeys(db, alice.id)).toEqual(["users/alice/keep/"]);
+  });
+
+  it("derives folders for a user scoped to the bucket root", async () => {
+    const db = createDb();
+    const root = seedUser(db, { username: "root", prefix: "" });
+    const store: FakeStore = new Map([
+      ["photos/2025/beach.jpg", textObject("jpg", '"j"')],
+      ["readme.txt", textObject("hi", '"r"')],
+    ]);
+    const { client } = fakeClient(store);
+
+    await scanUserSpace(client, db, root, CAP);
+
+    expect(folderKeys(db, root.id)).toEqual(["photos/", "photos/2025/"]);
+  });
+});
+
 describe("startScanScheduler", () => {
   /**
    * Drain pending microtasks so started scan cycles finish: Bun
