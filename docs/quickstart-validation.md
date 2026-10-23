@@ -128,7 +128,10 @@ Steps and where each is exercised:
 3. Uploading a file shows progress and adds it to the listing:
    `e2e/upload.spec.ts` ("uploads a new file with progress feedback and shows
    it in the listing"); `scripts/verify-upload.sh` PUTs to a presigned URL and
-   confirms the file appears in the listing.
+   confirms the file appears in the listing. Picking several files uploads
+   them one at a time with a batch counter, then summarises the batch:
+   `e2e/upload.spec.ts` ("uploads several selected files in one go, counting
+   through the batch").
 4. Downloading a file returns the bytes: `e2e/browse.spec.ts` (download
    asserted byte-for-byte against the seed).
 5. Sharing with the default 7-day expiry and downloading anonymously without
@@ -156,13 +159,20 @@ Steps:
 
 1. Upload `report.pdf`.
 2. Upload `report.pdf` again; the UI asks for confirmation and refuses
-   without it; confirming replaces the object.
+   without it; confirming replaces the object. In a multi-file upload each
+   conflict asks Skip or Replace, and "Apply to remaining conflicts" reuses
+   the answer for the rest of the batch.
 
 What was validated:
 
 - `e2e/upload.spec.ts` ("uploading over an existing name asks for
   confirmation before replacing"): the second upload shows the confirm
   dialog; the object is replaced only after confirmation.
+- `e2e/upload.spec.ts` ("a batch with conflicts and a failure: skip one,
+  replace the rest, and summarise"): Skip keeps one file, Replace with
+  "Apply to remaining conflicts" replaces the others without asking again,
+  a failed file does not stop the batch, and the stored sizes confirm which
+  objects were replaced.
 - `scripts/verify-upload.sh`: without `overwrite` the API returns
   `HTTP 409 {"error":"A file named \"report.pdf\" already exists",...}`;
   with `overwrite: true` it returns a presigned PUT URL for the same key.

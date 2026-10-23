@@ -255,7 +255,7 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
 
     // US2 sc.5: both the item count and the upload button are visible.
     await expect(page.getByText("5 items")).toBeVisible();
-    const uploadButton = page.getByText("Upload file", { exact: true });
+    const uploadButton = page.getByText("Upload files", { exact: true });
     await expect(uploadButton).toBeVisible();
     await expect(uploadButton.locator("svg")).toBeVisible();
     await expectNoHorizontalOverflow(page);
@@ -926,7 +926,7 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     await expect(dialog).toHaveCount(0);
   });
 
-  test("the overwrite confirmation at 375px cancels without replacing, replaces on confirm, and stays scroll-free in both themes", async ({
+  test("the overwrite confirmation at 375px skips without replacing, replaces on confirm, and stays scroll-free in both themes", async ({
     page,
     context,
   }) => {
@@ -965,17 +965,17 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     });
     await expect(dialog).toContainText("0-responsive-overwrite.txt");
     await expect(dialog).toContainText("already exists");
-    const cancel = dialog.getByRole("button", { name: "Cancel" });
+    const skip = dialog.getByRole("button", { name: "Skip" });
     const replace = dialog.getByRole("button", { name: "Replace" });
-    await expect(cancel).toBeVisible();
+    await expect(skip).toBeVisible();
     await expect(replace).toBeVisible();
 
-    // FR-004: cancel and replace carry octicons with unchanged names.
-    await expect(cancel.locator("svg")).toBeVisible();
+    // FR-004: skip and replace carry octicons.
+    await expect(skip.locator("svg")).toBeVisible();
     await expect(replace.locator("svg")).toBeVisible();
 
-    // Cancel keeps the stored object: the name is still listed.
-    await cancel.click();
+    // Skip keeps the stored object: the name is still listed.
+    await skip.click();
     await expect(dialog).toHaveCount(0);
     await expect(row).toBeVisible();
     await expectNoHorizontalOverflow(page);
@@ -995,7 +995,7 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
 
     // SC-002: the confirmation is also open at 375px in the dark theme
     // with no overflow. The object now holds the replacement, so the same
-    // name still triggers the confirmation; Cancel leaves it in place.
+    // name still triggers the confirmation; Skip leaves it in place.
     await page.emulateMedia({ colorScheme: "dark" });
     await fileInput.setInputFiles({
       name: "0-responsive-overwrite.txt",
@@ -1004,7 +1004,7 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     });
     await expect(dialog).toContainText("already exists");
     await expectNoHorizontalOverflow(page);
-    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await dialog.getByRole("button", { name: "Skip" }).click();
     await expect(dialog).toHaveCount(0);
   });
 

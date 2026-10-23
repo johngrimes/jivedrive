@@ -3,8 +3,9 @@
 JiveDrive is a small, passkey-authenticated file browser for
 [OVHcloud Object Storage](https://www.ovhcloud.com/en/public-cloud/object-storage/).
 Each user is scoped to an admin-configured bucket and prefix, and can browse
-and create folders, download, upload (with overwrite confirmation), generate
-short share links, and delete files. Admins invite users and manage
+and create folders, download, upload one or more files at a time (with
+overwrite confirmation), generate short share links, and delete files. Admins
+invite users and manage
 accounts. Authentication is WebAuthn passkeys only - no passwords.
 
 - SPA + REST API in one container (React + Vite frontend, Hono backend, bun).
