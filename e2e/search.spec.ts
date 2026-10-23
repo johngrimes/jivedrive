@@ -516,10 +516,13 @@ test("a recipient finds a shared folder's root and subfolders and opens them in 
     // A recipient cannot re-share: no Share button on shared folders.
     await expect(mount.getByRole("button")).toHaveCount(0);
     await mount.getByRole("link", { name: /photos/ }).click();
-    await expect(
-      page.getByRole("navigation", { name: "Breadcrumbs" }),
-    ).toContainText("Shared by alice");
-    await expect(page.getByText("pic.jpg")).toBeVisible();
+    // The share opens at its root: no prefix in the URL, and the trail
+    // is the mount itself. (photos/ holds more than one 5-item page,
+    // and other specs write into it, so no single file is asserted.)
+    await expect(page).toHaveURL(/[?&]space=shared%3A[^&]+$/);
+    const trail = page.getByRole("navigation", { name: "Breadcrumbs" });
+    await expect(trail).toContainText("photos");
+    await expect(trail).toContainText("Shared by alice");
 
     // A subfolder deep inside a share opens at its mount-relative path.
     await search(page, "quarterly");
