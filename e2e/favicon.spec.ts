@@ -29,6 +29,11 @@ interface DecodedIcon {
   centre: Pixel;
   /** Pixel at (50%, 10%): tile background above the glyph. */
   tile: Pixel;
+  /**
+   * Farthest distance of any glyph pixel (clearly lighter than the tile)
+   * from the centre, as a fraction of the width.
+   */
+  glyphReach: number;
 }
 
 /**
@@ -53,12 +58,27 @@ async function decodeIcon(page: Page, href: string): Promise<DecodedIcon> {
       const [r = 0, g = 0, b = 0, a = 0] = ctx.getImageData(x, y, 1, 1).data;
       return { r, g, b, a };
     };
+    const { data } = ctx.getImageData(0, 0, width, height);
+    let glyphReach = 0;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const g = data[(y * width + x) * 4 + 1] ?? 0;
+        const a = data[(y * width + x) * 4 + 3] ?? 0;
+        // The tile's green channel is 0x2a; the white glyph's is 0xff.
+        if (a === 255 && g > 0x2a + 20) {
+          const reach =
+            Math.hypot(x + 0.5 - width / 2, y + 0.5 - height / 2) / width;
+          glyphReach = Math.max(glyphReach, reach);
+        }
+      }
+    }
     return {
       width,
       height,
       corner: at(0, 0),
       centre: at(Math.floor(width / 2), Math.floor(height / 2)),
       tile: at(Math.floor(width / 2), Math.floor(height * 0.1)),
+      glyphReach,
     };
   }, href);
 }
@@ -187,6 +207,8 @@ test.describe("favicon and app icons", () => {
       expectColour(decoded.centre, GLYPH);
     }
 
+    // Purpose "any" icons are shown as-is, so they carry the rounded tile
+    // with transparent corners, like the browser tab favicon.
     const any = manifest.icons.filter(
       (icon) => (icon.purpose ?? "any") === "any",
     );
@@ -194,15 +216,22 @@ test.describe("favicon and app icons", () => {
       "192x192",
       "512x512",
     ]);
+    for (const icon of any) {
+      const decoded = await decodeIcon(page, icon.src);
+      expect(decoded.corner.a, icon.src).toBe(0);
+    }
 
     // Android crops maskable icons to its own shape, so the maskable icon
-    // must be full-bleed: the tile reaches the corners.
+    // must be full-bleed (the tile reaches the corners) with the whole
+    // glyph inside the safe zone: the central circle of radius 40%.
     const maskable = manifest.icons.filter(
       (icon) => icon.purpose === "maskable",
     );
     expect(maskable.map((icon) => icon.sizes)).toEqual(["512x512"]);
     const decoded = await decodeIcon(page, maskable[0]?.src ?? "");
     expectColour(decoded.corner, TILE);
+    expect(decoded.glyphReach).toBeGreaterThan(0);
+    expect(decoded.glyphReach).toBeLessThanOrEqual(0.4);
   });
 
   test("the browser chrome colour matches the header bar in each theme", async ({

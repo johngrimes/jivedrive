@@ -39,8 +39,8 @@ const PNG_ICONS: IconSpec[] = [
   { file: "icon-192.png", size: 192, fullBleed: false, scale: 1 },
   { file: "icon-512.png", size: 512, fullBleed: false, scale: 1 },
   { file: "apple-touch-icon.png", size: 180, fullBleed: true, scale: 1 },
-  // At 0.8 the glyph's farthest point sits ~36% from the centre, inside
-  // the 40% maskable safe-zone radius.
+  // At 0.8 the glyph's farthest pixel sits ~33% of the width from the
+  // centre, inside the 40% maskable safe-zone radius (at 1 it is ~41%).
   { file: "icon-maskable-512.png", size: 512, fullBleed: true, scale: 0.8 },
 ];
 
