@@ -4,24 +4,22 @@
  * a search is active (FR-001). Built on the same daisyUI primitives as
  * the folder listing; mobile-first: each row is one column with large
  * (min-h-11) touch targets, the folder path renders as a second line
- * under the name (FR-015), and action labels collapse to icons below
- * `sm` exactly like the listing rows (FR-003). Folder matches (#13)
+ * under the name (FR-015), and the row's actions sit behind the same "⋯"
+ * RowActionsMenu as the listing rows (FR-003). Folder matches (#13)
  * render like listing folder rows: a folder icon, and Share as the only
  * action, offered in the caller's own space only.
  */
 import { useEffect, useRef, useState } from "react";
 import {
-  DownloadIcon,
   FileDirectoryFillIcon,
   FileIcon,
-  FileMovedIcon,
   PeopleIcon,
-  ShareAndroidIcon,
-  TrashIcon,
 } from "@primer/octicons-react";
 import { searchFiles } from "../api/client";
 import type { ApiClientError, SearchResult } from "../api/client";
 import { LoadingSkeleton } from "./FileListing";
+import { RowActionsMenu } from "./RowActionsMenu";
+import { fileRowActions } from "./fileRowActions";
 
 /** Props for {@link SearchResults}. */
 export interface SearchResultsProps {
@@ -39,8 +37,8 @@ export interface SearchResultsProps {
   onDelete?: (result: SearchResult) => void;
   /**
    * Open the folder share dialog for an own-space folder result. Folders
-   * from a shared mount never get the button: a recipient cannot
-   * re-share (006 FR-015).
+   * from a shared mount never offer it: a recipient cannot re-share
+   * (006 FR-015).
    */
   onShareFolder?: (result: SearchResult) => void;
   /** Called on 401 so the page can refresh the (expired) session. */
@@ -212,7 +210,7 @@ export function SearchResults({
           <ul className="list">
             {state.results.map((result) => (
               <li
-                className="list-row flex flex-wrap justify-end md:justify-start md:flex-nowrap gap-3 items-center overflow-hidden"
+                className="list-row flex items-center gap-3"
                 key={`${result.space}:${result.key}`}
               >
                 <div className="flex grow gap-3 items-center min-w-0">
@@ -222,26 +220,31 @@ export function SearchResults({
                       className="shrink-0"
                     />
                   ) : (
-                    <FileIcon aria-hidden="true" />
+                    <FileIcon aria-hidden="true" className="shrink-0" />
                   )}
                   <div className="min-w-0">
+                    {/* flex-wrap: badges that do not fit beside the name
+                        wrap below it, so the name keeps the full width. */}
                     <a
-                      className="link inline-flex items-center gap-2 font-semibold no-underline"
+                      className="link inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 font-semibold no-underline"
                       href="#"
                       onClick={(event) => {
                         event.preventDefault();
                         onOpenResult(result);
                       }}
                     >
-                      <span className="truncate">{result.name}</span>
-                      <span className="badge badge-ghost badge-sm">
+                      <span className="max-w-full truncate">{result.name}</span>
+                      <span className="badge badge-ghost badge-sm shrink-0">
                         {MATCH_LABELS[result.match]}
                       </span>
                       {/* Shared mounts carry the sharer's label (US3,
-                          FR-010); own-space rows show none. */}
+                          FR-010); own-space rows show none. A label longer
+                          than the line truncates with an ellipsis. */}
                       {result.sharedBy && (
-                        <span className="badge badge-secondary badge-sm">
-                          Shared by {result.sharedBy}
+                        <span className="badge badge-secondary badge-sm min-w-0 max-w-full">
+                          <span className="truncate">
+                            Shared by {result.sharedBy}
+                          </span>
                         </span>
                       )}
                     </a>
@@ -261,65 +264,27 @@ export function SearchResults({
                     )}
                   </div>
                 </div>
-                <div className="flex gap-3">
-                  {result.match === "folder" &&
-                    result.space === "own" &&
-                    onShareFolder && (
-                      <button
-                        type="button"
-                        className="btn btn-accent btn-sm btn-soft min-h-11"
-                        aria-label={`Share ${result.name}`}
-                        onClick={() => onShareFolder(result)}
-                      >
-                        <PeopleIcon aria-hidden="true" />
-                        <span className="hidden sm:inline">Share</span>
-                      </button>
-                    )}
-                  {result.match !== "folder" && onDownload && (
-                    <button
-                      type="button"
-                      className="btn btn-accent btn-sm btn-soft min-h-11"
-                      aria-label={`Download ${result.name}`}
-                      onClick={() => onDownload(result)}
-                    >
-                      <DownloadIcon aria-hidden="true" />
-                      <span className="hidden sm:inline">Download</span>
-                    </button>
-                  )}
-                  {result.match !== "folder" && onShare && (
-                    <button
-                      type="button"
-                      className="btn btn-accent btn-sm btn-soft min-h-11"
-                      aria-label={`Share ${result.name}`}
-                      onClick={() => onShare(result)}
-                    >
-                      <ShareAndroidIcon aria-hidden="true" />
-                      <span className="hidden sm:inline">Share</span>
-                    </button>
-                  )}
-                  {result.match !== "folder" && onMove && (
-                    <button
-                      type="button"
-                      className="btn btn-accent btn-sm btn-soft min-h-11"
-                      aria-label={`Move ${result.name}`}
-                      onClick={() => onMove(result)}
-                    >
-                      <FileMovedIcon aria-hidden="true" />
-                      <span className="hidden sm:inline">Move</span>
-                    </button>
-                  )}
-                  {result.match !== "folder" && onDelete && (
-                    <button
-                      type="button"
-                      className="btn btn-accent btn-sm btn-soft min-h-11"
-                      aria-label={`Delete ${result.name}`}
-                      onClick={() => onDelete(result)}
-                    >
-                      <TrashIcon aria-hidden="true" />
-                      <span className="hidden sm:inline">Delete</span>
-                    </button>
-                  )}
-                </div>
+                <RowActionsMenu
+                  name={result.name}
+                  actions={
+                    result.match === "folder"
+                      ? result.space === "own" && onShareFolder
+                        ? [
+                            {
+                              label: "Share",
+                              icon: <PeopleIcon aria-hidden="true" />,
+                              onSelect: () => onShareFolder(result),
+                            },
+                          ]
+                        : []
+                      : fileRowActions({
+                          onDownload: onDownload && (() => onDownload(result)),
+                          onShare: onShare && (() => onShare(result)),
+                          onMove: onMove && (() => onMove(result)),
+                          onDelete: onDelete && (() => onDelete(result)),
+                        })
+                  }
+                />
               </li>
             ))}
           </ul>

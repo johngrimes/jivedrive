@@ -385,14 +385,32 @@ createSession(db, gina.id, { token: "gina-session" });
 // A user at the 32-character data-model username maximum (see
 // validateUsername in db/repository.ts): the responsive e2e spec asserts
 // the navbar truncates a long username with an ellipsis at 375px instead
-// of overflowing (FR-003, US1 sc.4). No other spec signs in as him and his
-// space stays empty.
+// of overflowing (FR-003, US1 sc.4). He shares one long-named folder with
+// rowan, a recipient dedicated to the narrow-width checks of that long
+// "Shared by" label (the mount row in responsive.spec, the search result
+// in search.spec); no other spec signs in as either.
 const longname = createUser(db, {
   username: "this-username-is-really-long",
   bucket: "jivedrive-prod",
   prefix: "users/this-username-is-really-long/",
 });
 createSession(db, longname.id, { token: "longname-session" });
+const rowan = createUser(db, {
+  username: "rowan",
+  bucket: "jivedrive-prod",
+  prefix: "users/rowan/",
+});
+createSession(db, rowan.id, { token: "rowan-session" });
+createShare(db, {
+  ownerUserId: longname.id,
+  recipientUserId: rowan.id,
+  folder: "quarterly-planning-documents",
+});
+seedObject(
+  "users/this-username-is-really-long/quarterly-planning-documents/agenda.txt",
+  "agenda",
+  6,
+);
 
 // Two users dedicated to the move e2e specs (move.spec.ts and the
 // responsive move-dialog test): milo owns one folder tree per test, and

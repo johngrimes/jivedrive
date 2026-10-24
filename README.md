@@ -25,6 +25,9 @@ Authentication is WebAuthn passkeys only - no passwords.
 - Full-text search: one search box finds folders by name and files by name
   and by content (plain text, PDF, DOCX) across the user's space and every
   folder shared with them, kept fresh by a background index scan.
+- Uncluttered rows: each listing and search row keeps its actions (file
+  Download/Share/Move/Delete, own-folder Share) behind a single "⋯" menu,
+  and clicking a file's name in the listing downloads it.
 
 ## Local development
 

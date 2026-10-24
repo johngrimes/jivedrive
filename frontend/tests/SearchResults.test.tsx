@@ -109,6 +109,48 @@ function renderResults(
   return container;
 }
 
+/**
+ * Open a row's actions menu and list its item labels in order.
+ *
+ * @param scope - element containing the row
+ * @param name - the row's file or folder name
+ * @returns the menu's item labels ([] when the row has no menu)
+ */
+async function openActions(scope: ParentNode, name: string): Promise<string[]> {
+  await act(async () => {
+    scope
+      .querySelector(`button[aria-label="Actions for ${name}"]`)
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  return Array.from(
+    scope.querySelectorAll(`ul[aria-label="Actions for ${name}"] button`),
+  ).map((item) => item.textContent ?? "");
+}
+
+/**
+ * Choose an item from a row's actions menu, opening it first if closed.
+ *
+ * @param scope - element containing the row
+ * @param name - the row's file or folder name
+ * @param label - the item to choose
+ */
+async function chooseAction(
+  scope: ParentNode,
+  name: string,
+  label: string,
+): Promise<void> {
+  if (!scope.querySelector(`ul[aria-label="Actions for ${name}"]`)) {
+    await openActions(scope, name);
+  }
+  const item = Array.from(
+    scope.querySelectorAll(`ul[aria-label="Actions for ${name}"] button`),
+  ).find((button) => button.textContent === label);
+  expect(item).toBeDefined();
+  await act(async () => {
+    item?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
 describe("SearchResults (T009)", () => {
   it("renders name, path and match badge for each result", async () => {
     vi.stubGlobal(
@@ -310,11 +352,7 @@ describe("Files page download opens a new window", () => {
       (el) => el.textContent?.includes("notes.txt"),
     ) as HTMLElement;
     expect(row).toBeDefined();
-    await act(async () => {
-      row
-        .querySelector('button[aria-label="Download"]')
-        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
+    await chooseAction(row, "notes.txt", "Download");
 
     expect(open).toHaveBeenCalledWith("https://storage.test/object", "_blank");
     expect(open).toHaveBeenCalledTimes(1);
@@ -531,13 +569,7 @@ describe("SearchResults shared results (T020)", () => {
     });
     await submitSearch(container);
 
-    const row = container.querySelector("li.list-row") as HTMLElement;
-    await act(async () => {
-      (
-        row.querySelector('button[aria-label="Download plan.txt"]') ??
-        row.querySelector("button")
-      )?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
+    await chooseAction(container, "plan.txt", "Download");
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -555,13 +587,7 @@ describe("SearchResults shared results (T020)", () => {
     });
     await submitSearch(container);
 
-    const row = container.querySelector("li.list-row") as HTMLElement;
-    await act(async () => {
-      (
-        row.querySelector('button[aria-label="Download plan.txt"]') ??
-        row.querySelector("button")
-      )?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
+    await chooseAction(container, "plan.txt", "Download");
 
     expect(open).toHaveBeenCalledWith("https://storage.test/object", "_blank");
   });
@@ -593,7 +619,7 @@ describe("SearchResults shared results (T020)", () => {
 });
 
 describe("SearchResults move action", () => {
-  it("renders a Move button per result that calls onMove with the result", async () => {
+  it("offers Move in each file result's menu, calling onMove with the result", async () => {
     vi.stubGlobal(
       "fetch",
       vi
@@ -603,21 +629,25 @@ describe("SearchResults move action", () => {
         ),
     );
     const onMove = vi.fn();
-    const container = renderResults({ onMove });
+    const container = renderResults({
+      onDownload: () => {},
+      onShare: () => {},
+      onDelete: () => {},
+      onMove,
+    });
     await flush();
 
-    const button = container.querySelector(
-      'button[aria-label="Move Q3-Report.pdf"]',
-    ) as HTMLButtonElement | null;
-    expect(button).not.toBeNull();
-    expect(button?.textContent).toContain("Move");
-    act(() => {
-      button?.click();
-    });
+    expect(await openActions(container, "Q3-Report.pdf")).toEqual([
+      "Download",
+      "Share",
+      "Move",
+      "Delete",
+    ]);
+    await chooseAction(container, "Q3-Report.pdf", "Move");
     expect(onMove).toHaveBeenCalledWith(nestedResult);
   });
 
-  it("renders no Move button when no handler is provided", async () => {
+  it("omits Move from the menu when no handler is provided", async () => {
     vi.stubGlobal(
       "fetch",
       vi
@@ -626,12 +656,10 @@ describe("SearchResults move action", () => {
           jsonResponse({ results: [nestedResult], capped: false }),
         ),
     );
-    const container = renderResults();
+    const container = renderResults({ onDownload: () => {} });
     await flush();
 
-    expect(
-      container.querySelector('button[aria-label="Move Q3-Report.pdf"]'),
-    ).toBeNull();
+    expect(await openActions(container, "Q3-Report.pdf")).toEqual(["Download"]);
   });
 });
 
@@ -693,19 +721,8 @@ describe("SearchResults folder results (#13)", () => {
     expect(folderRow.textContent).not.toContain("Name match");
     // The second line is the parent folder, not the folder itself.
     expect(folderRow.querySelector("p")?.textContent).toBe("work");
-    // File-only actions never render on a folder row.
-    expect(
-      folderRow.querySelector('button[aria-label="Download old plans"]'),
-    ).toBeNull();
-    expect(
-      folderRow.querySelector('button[aria-label="Delete old plans"]'),
-    ).toBeNull();
-    expect(
-      folderRow.querySelector('button[aria-label="Move old plans"]'),
-    ).toBeNull();
-    expect(
-      folderRow.querySelectorAll('button[aria-label="Share old plans"]'),
-    ).toHaveLength(1);
+    // A folder row's menu carries only the folder Share, never file actions.
+    expect(await openActions(folderRow, "old plans")).toEqual(["Share"]);
   });
 
   it("offers no Share button on a folder from a shared mount", async () => {
@@ -801,12 +818,7 @@ describe("SearchResults folder results (#13)", () => {
     );
     await submitSearch(container);
 
-    const share = container.querySelector(
-      'button[aria-label="Share old plans"]',
-    );
-    await act(async () => {
-      share?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
+    await chooseAction(container, "old plans", "Share");
     await flush();
 
     expect(

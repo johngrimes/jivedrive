@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { BrowserContext, Locator, Page, TestInfo } from "@playwright/test";
 import {
+  chooseRowAction,
   downloadFromPopup,
   enableVirtualAuthenticator,
   expectNoHorizontalOverflow,
@@ -128,51 +129,118 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     await expectSignedInAs(page, "alice");
   }
 
-  test("at 375px a file row shows icon-only action buttons", async ({
+  for (const viewport of [
+    MOBILE_VIEWPORT,
+    { width: 768, height: 1024 },
+    { width: 1280, height: 800 },
+  ]) {
+    test(`at ${viewport.width}px a file row has one actions trigger whose menu lists every action`, async ({
+      page,
+      context,
+    }) => {
+      await startSignedIn(page, context);
+      await page.setViewportSize(viewport);
+      const row = page.locator("li.list-row", { hasText: FILE_ROW_TEXT });
+      await expect(row).toBeVisible();
+
+      // FR-007 / FR-008: the row's only button is the icon-only ⋯ trigger,
+      // a touch target at least 44px tall.
+      await expect(row.getByRole("button")).toHaveCount(1);
+      const trigger = row.getByRole("button", {
+        name: `Actions for ${FILE_ROW_TEXT}`,
+      });
+      await expect(trigger.locator("svg")).toBeVisible();
+      expect((await trigger.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await expectNoHorizontalOverflow(page);
+
+      // Opened, the menu shows each action with its icon and visible
+      // label, touch-sized, clickable (not clipped by the row) and inside
+      // the viewport.
+      await trigger.click();
+      await expect(trigger).toHaveAttribute("aria-expanded", "true");
+      const menu = row.getByRole("list", {
+        name: `Actions for ${FILE_ROW_TEXT}`,
+      });
+      await expect(menu.getByRole("button")).toHaveText([
+        "Download",
+        "Share",
+        "Move",
+        "Delete",
+      ]);
+      for (const action of ["Download", "Share", "Move", "Delete"]) {
+        const item = menu.getByRole("button", { name: action });
+        await expect(item.locator("svg")).toBeVisible();
+        await expect(item.getByText(action, { exact: true })).toBeVisible();
+        await expect(item).toBeInViewport({ ratio: 1 });
+        expect((await item.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+        await item.click({ trial: true });
+      }
+      await expectNoHorizontalOverflow(page);
+
+      // Escape closes it and returns focus to the trigger.
+      await page.keyboard.press("Escape");
+      await expect(menu).toHaveCount(0);
+      await expect(trigger).toBeFocused();
+
+      // Octicons replaced the emoji (FR-004): no 📁/📄 anywhere in the rows.
+      await expect(page.locator("ul.list")).not.toContainText(["📁", "📄"]);
+    });
+  }
+
+  test("the last row's menu opens fully usable at 375px", async ({
     page,
     context,
   }) => {
     await startSignedIn(page, context);
     await page.setViewportSize(MOBILE_VIEWPORT);
-    const row = page.locator("li.list-row", { hasText: FILE_ROW_TEXT });
-    await expect(row).toBeVisible();
 
-    // FR-007 / US2 sc.1: the actions are buttons with accessible names
-    // identical to today's text labels, icon-only below sm (the label span
-    // is not visible, the icon svg is).
-    for (const action of ["Download", "Share", "Move", "Delete"]) {
-      const button = row.getByRole("button", { name: action });
-      await expect(button).toBeVisible();
-      await expect(button.locator("svg")).toBeVisible();
-      await expect(button.getByText(action, { exact: true })).toBeHidden();
-    }
-
-    // Octicons replaced the emoji (FR-004): no 📁/📄 anywhere in the rows.
-    await expect(page.locator("ul.list")).not.toContainText(["📁", "📄"]);
+    // The bottom row's menu drops below the list and the fold: opening it
+    // brings every item on screen (no manual scroll, not clipped by the
+    // row) without widening the page.
+    const lastRow = page.locator("li.list-row").last();
+    await lastRow.getByRole("button", { name: /^Actions for / }).click();
+    const lastItem = lastRow
+      .getByRole("list", { name: /^Actions for / })
+      .getByRole("button")
+      .last();
+    await expect(lastItem).toBeInViewport({ ratio: 1 });
+    await lastItem.click({ trial: true });
     await expectNoHorizontalOverflow(page);
+
+    // A press outside closes it.
+    await page.getByText("5 items").click();
+    await expect(
+      lastRow.getByRole("list", { name: /^Actions for / }),
+    ).toHaveCount(0);
   });
 
-  test("file action buttons are at least 44px tall at 375px", async ({
+  test("tapping a row's blank space only dismisses an open menu", async ({
     page,
     context,
   }) => {
     await startSignedIn(page, context);
-    await page.setViewportSize(MOBILE_VIEWPORT);
-    const row = page.locator("li.list-row", { hasText: FILE_ROW_TEXT });
-    await expect(row).toBeVisible();
+    await page.setViewportSize({ width: 1280, height: 800 });
+    let popups = 0;
+    page.on("popup", () => {
+      popups += 1;
+    });
 
-    // FR-008 / US2 sc.1: every action control keeps a touch target at
-    // least 44px tall (the daisyUI btn sizing mechanism).
-    for (const action of ["Download", "Share", "Move", "Delete"]) {
-      const button = row.getByRole("button", { name: action });
-      await expect(button).toBeVisible();
-      const box = await button.boundingBox();
-      expect(box).not.toBeNull();
-      expect(box!.height).toBeGreaterThanOrEqual(44);
-    }
+    // Open one row's menu, then tap the empty middle of another file row
+    // (well right of its short name, left of its trigger): the menu
+    // closes, and no download window opens - only the name downloads.
+    const openRow = page.locator("li.list-row", { hasText: FILE_ROW_TEXT });
+    await openRow.getByRole("button", { name: /^Actions for / }).click();
+    const otherRow = page.locator("li.list-row", { hasText: "data.csv" });
+    const box = (await otherRow.boundingBox())!;
+    await otherRow.click({ position: { x: box.width / 2, y: box.height / 2 } });
+    await expect(
+      openRow.getByRole("list", { name: /^Actions for / }),
+    ).toHaveCount(0);
+    await page.waitForTimeout(500);
+    expect(popups).toBe(0);
   });
 
-  test("tapping the download icon at 375px downloads the file", async ({
+  test("downloading from the menu or by tapping the name at 375px gets the file", async ({
     page,
     context,
   }) => {
@@ -186,37 +254,20 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     ).toContainText("docs");
     await expect(page.getByText("notes.txt")).toBeVisible();
 
-    // US2 sc.4: the icon button triggers the same download the text link
-    // did: the browser opens the presigned URL in a new window and gets
-    // the bytes there.
-    const download = await downloadFromPopup(page, () =>
-      page
-        .locator("li.list-row", { hasText: "notes.txt" })
-        .getByRole("button", { name: "Download" })
-        .click(),
-    );
-    const content = await readStream(await download.createReadStream());
-    expect(download.suggestedFilename()).toBe("notes.txt");
-    expect(download.url()).toContain("localhost:5299");
-    expect(download.url()).toContain("X-Amz-Signature");
-    expect(content.toString()).toBe("hello from notes");
-  });
-
-  test("at 768px actions show icon and text labels", async ({
-    page,
-    context,
-  }) => {
-    await startSignedIn(page, context);
-    await page.setViewportSize({ width: 768, height: 1024 });
-    const row = page.locator("li.list-row", { hasText: FILE_ROW_TEXT });
-    await expect(row).toBeVisible();
-
-    // US2 sc.2 / FR-007: actions show the icon AND the visible text label.
-    const download = row.getByRole("button", { name: "Download" });
-    await expect(download).toBeVisible();
-    await expect(download.locator("svg")).toBeVisible();
-    await expect(download.getByText("Download", { exact: true })).toBeVisible();
-    await expectNoHorizontalOverflow(page);
+    // US2 sc.4: the menu's Download and the name link both open the
+    // presigned URL in a new window, which gets the bytes.
+    const row = page.locator("li.list-row", { hasText: "notes.txt" });
+    for (const start of [
+      () => chooseRowAction(row, "Download"),
+      () => row.getByRole("link", { name: "notes.txt" }).click(),
+    ]) {
+      const download = await downloadFromPopup(page, start);
+      const content = await readStream(await download.createReadStream());
+      expect(download.suggestedFilename()).toBe("notes.txt");
+      expect(download.url()).toContain("localhost:5299");
+      expect(download.url()).toContain("X-Amz-Signature");
+      expect(content.toString()).toBe("hello from notes");
+    }
   });
 
   test("a folder row shows a folder octicon, navigates on tap, and never shows file actions", async ({
@@ -227,20 +278,21 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     await page.setViewportSize(MOBILE_VIEWPORT);
 
     // US2 sc.3 / US1 (R13): folders stay links (they navigate), carry the
-    // folder octicon, and expose exactly one action - the share-folder
-    // button - never the file actions (Download/Share/Delete).
+    // folder octicon, and their actions menu offers exactly one action -
+    // the share-folder item - never the file actions.
     const folderRow = page.locator("li.list-row", { hasText: "docs" });
     await expect(folderRow.getByRole("link", { name: "docs" })).toBeVisible();
     await expect(
       folderRow.getByRole("link", { name: "docs" }).locator("svg"),
     ).toBeVisible();
     await expect(folderRow.getByRole("button")).toHaveCount(1);
+    await folderRow.getByRole("button", { name: "Actions for docs" }).click();
     await expect(
-      folderRow.getByRole("button", { name: "Share docs" }),
-    ).toBeVisible();
-    await expect(
-      folderRow.getByRole("button", { name: /^(Download|Share|Delete)$/ }),
-    ).toHaveCount(0);
+      folderRow
+        .getByRole("list", { name: "Actions for docs" })
+        .getByRole("button"),
+    ).toHaveText(["Share"]);
+    await page.keyboard.press("Escape");
     await expect(folderRow).not.toContainText("📁");
 
     // Tapping the folder navigates into it.
@@ -311,8 +363,8 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     });
     await expect(specialRow).toBeVisible();
     await expect(
-      specialRow.getByRole("button", { name: "Download" }),
-    ).toBeVisible();
+      specialRow.getByRole("button", { name: "Actions for my file #1?.txt" }),
+    ).toBeInViewport();
     await expectNoHorizontalOverflow(page);
 
     // A genuinely long name truncates with an ellipsis inside its row
@@ -343,7 +395,49 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     const nameSpan = longRow.locator("span", { hasText: longName });
     await expect(nameSpan).toBeVisible();
     await expectTruncated(page, nameSpan);
+    // The truncated name leaves the row's menu trigger on screen.
+    await expect(
+      longRow.getByRole("button", { name: `Actions for ${longName}` }),
+    ).toBeInViewport({ ratio: 1 });
     await expectNoHorizontalOverflow(page);
+  });
+
+  test("a mount from a long-named sharer keeps its folder name readable at 375px", async ({
+    page,
+    context,
+  }) => {
+    // rowan receives a long-named folder from the 28-character username
+    // (seeded in e2eServer.ts); his root lists only that mount.
+    await context.addCookies([
+      { ...BROWSE_SESSION_COOKIE, value: "rowan-session" },
+    ]);
+    await page.setViewportSize(MOBILE_VIEWPORT);
+    await page.goto("/files");
+    await expectSignedInAs(page, "rowan");
+
+    // The name and the "Shared by" label share the row: neither crowds
+    // the other out, nothing spills past the row, the page never widens.
+    const mountRow = page.locator("li.list-row", {
+      hasText: `Shared by ${LONG_USERNAME}`,
+    });
+    const name = mountRow.getByText("quarterly-planning-documents", {
+      exact: true,
+    });
+    await expect(name).toBeVisible();
+    expect((await name.boundingBox())!.width).toBeGreaterThanOrEqual(64);
+    const badge = mountRow.locator(".badge");
+    await expect(badge).toBeVisible();
+    const linkBox = (await mountRow.getByRole("link").boundingBox())!;
+    const badgeBox = (await badge.boundingBox())!;
+    expect(badgeBox.x + badgeBox.width).toBeLessThanOrEqual(
+      linkBox.x + linkBox.width,
+    );
+    await expectNoHorizontalOverflow(page);
+
+    // The mount still opens from its row.
+    await mountRow.getByRole("link").click();
+    await expect(page).toHaveURL(/space=shared/);
+    await expect(page.getByText("agenda.txt", { exact: true })).toBeVisible();
   });
 
   test("deep breadcrumbs wrap at 375px with no horizontal scroll", async ({
@@ -802,10 +896,10 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
 
     // data.csv sorts onto the first page of the seeded root listing, and
     // sharing only generates a read-only link (no mutation).
-    await page
-      .locator("li.list-row", { hasText: "data.csv" })
-      .getByRole("button", { name: "Share" })
-      .click();
+    await chooseRowAction(
+      page.locator("li.list-row", { hasText: "data.csv" }),
+      "Share",
+    );
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toContainText("data.csv");
     await expect(dialog.getByLabel("Share link")).toHaveValue(
@@ -854,10 +948,10 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     // SC-002: the dialog is also open at 375px in the dark theme with no
     // overflow (sharing is read-only, so the same file is safe to reopen).
     await page.emulateMedia({ colorScheme: "dark" });
-    await page
-      .locator("li.list-row", { hasText: "data.csv" })
-      .getByRole("button", { name: "Share" })
-      .click();
+    await chooseRowAction(
+      page.locator("li.list-row", { hasText: "data.csv" }),
+      "Share",
+    );
     await expect(dialog).toContainText("data.csv");
     await expect(dialog.getByLabel("Share link")).toHaveValue(
       SHORT_LINK_PATTERN,
@@ -889,7 +983,7 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     await expect(row).toBeVisible();
 
     // US4 sc.2: the dialog opens with usable Cancel/Delete actions.
-    await row.getByRole("button", { name: "Delete" }).click();
+    await chooseRowAction(row, "Delete");
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toContainText(fileName);
     const cancel = dialog.getByRole("button", { name: "Cancel" });
@@ -909,7 +1003,7 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
 
     // Confirming deletes: reopen the dialog, click Delete, the row
     // disappears from the listing.
-    await row.getByRole("button", { name: "Delete" }).click();
+    await chooseRowAction(row, "Delete");
     await expect(dialog).toContainText(fileName);
     await confirmDelete.click();
     await expect(dialog).toHaveCount(0);
@@ -925,7 +1019,7 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
       hasText: "0-responsive-overwrite.txt",
     });
     await expect(stableRow).toBeVisible();
-    await stableRow.getByRole("button", { name: "Delete" }).click();
+    await chooseRowAction(stableRow, "Delete");
     await expect(dialog).toContainText("0-responsive-overwrite.txt");
     await expectNoHorizontalOverflow(page);
     await dialog.getByRole("button", { name: "Cancel" }).click();
@@ -960,7 +1054,7 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     await expect(row).toBeVisible();
 
     // The dialog opens with a usable folder list and Cancel/Move here.
-    await row.getByRole("button", { name: "Move", exact: true }).click();
+    await chooseRowAction(row, "Move");
     const dialog = page.getByRole("dialog");
     await expect(dialog).toContainText(fileName);
     const cancel = dialog.getByRole("button", { name: "Cancel" });
@@ -983,7 +1077,7 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
 
     // Dark theme: reopen, move into Dest; the row leaves the listing.
     await page.emulateMedia({ colorScheme: "dark" });
-    await row.getByRole("button", { name: "Move", exact: true }).click();
+    await chooseRowAction(row, "Move");
     await expect(dialog).toContainText(fileName);
     await expectNoHorizontalOverflow(page);
     await dest.click();

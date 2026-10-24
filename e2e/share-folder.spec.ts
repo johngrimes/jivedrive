@@ -1,4 +1,5 @@
 import {
+  chooseRowAction,
   downloadFromPopup,
   expectNoHorizontalOverflow,
   expectSignedInAs,
@@ -75,9 +76,9 @@ test("US1: alice shares the projects folder with bob via the share dialog", asyn
   const folderRow = page.locator("li.list-row", { hasText: "projects" });
   await expect(folderRow).toBeVisible();
 
-  // R13: the folder row carries a share-folder button; it opens the
+  // R13: the folder row's menu carries a share-folder item; it opens the
   // share dialog for exactly this folder.
-  await folderRow.getByRole("button", { name: "Share projects" }).click();
+  await chooseRowAction(folderRow, "Share");
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText("projects");
@@ -153,15 +154,13 @@ test("US2: bob browses and downloads the projects folder shared by alice", async
   const mountRow = projectsRows.filter({ hasText: "Shared by alice" });
   await expect(mountRow).toBeVisible();
   await expect(mountRow).toContainText("Shared by alice");
-  // FR-015: the received row carries no share button, while bob's own
-  // same-named folder row keeps its share action.
-  await expect(
-    mountRow.getByRole("button", { name: "Share projects" }),
-  ).toHaveCount(0);
+  // FR-015: the received row carries no actions at all, while bob's own
+  // same-named folder row keeps its actions menu.
+  await expect(mountRow.getByRole("button")).toHaveCount(0);
   const ownRow = projectsRows.filter({ hasNotText: "Shared by alice" });
   await expect(ownRow).toHaveCount(1);
   await expect(
-    ownRow.getByRole("button", { name: "Share projects" }),
+    ownRow.getByRole("button", { name: "Actions for projects" }),
   ).toBeVisible();
 
   // Open the mount: alice's contents list (plan.txt, docs/).
@@ -176,11 +175,14 @@ test("US2: bob browses and downloads the projects folder shared by alice", async
   // US3: the mount is writable — the upload control is present and file
   // rows carry delete actions (T027), both scoped to the sharer's folder.
   await expect(page.getByText("Upload files", { exact: true })).toBeVisible();
+  const planRow = page.locator("li.list-row", { hasText: "plan.txt" });
+  await planRow.getByRole("button", { name: "Actions for plan.txt" }).click();
   await expect(
-    page
-      .locator("li.list-row", { hasText: "plan.txt" })
+    planRow
+      .getByRole("list", { name: "Actions for plan.txt" })
       .getByRole("button", { name: "Delete" }),
   ).toBeVisible();
+  await page.keyboard.press("Escape");
 
   // Navigate into docs/ and download report.pdf (US2 sc.1/sc.2).
   await page.getByRole("link", { name: "docs" }).click();
@@ -191,7 +193,10 @@ test("US2: bob browses and downloads the projects folder shared by alice", async
   await expect(breadcrumbs).toContainText("Shared by alice");
 
   const download = await downloadFromPopup(page, () =>
-    page.getByRole("button", { name: "Download" }).click(),
+    chooseRowAction(
+      page.locator("li.list-row", { hasText: "report.pdf" }),
+      "Download",
+    ),
   );
   const content = await readStream(await download.createReadStream());
   expect(content.toString()).toBe("%PDF-1.4 report");
@@ -324,13 +329,13 @@ test("US3: bob uploads, overwrites and deletes a file in the projects folder sha
     // The replacement content is what the sharer's object now holds:
     // downloading from the mount returns v2.
     const download = await downloadFromPopup(page, () =>
-      row.getByRole("button", { name: "Download" }).click(),
+      chooseRowAction(row, "Download"),
     );
     const content = await readStream(await download.createReadStream());
     expect(content.toString()).toBe("project mountdoc v2\n");
 
     // US3 sc.4: bob deletes mountfile.txt; it disappears from the mount...
-    await row.getByRole("button", { name: "Delete" }).click();
+    await chooseRowAction(row, "Delete");
     const deleteDialog = page.getByRole("alertdialog");
     await expect(deleteDialog).toContainText(fileName);
     await deleteDialog.getByRole("button", { name: "Delete" }).click();
@@ -394,7 +399,7 @@ test("US4: alice revokes bob's share; the mount disappears and every request 404
     await page.getByRole("button", { name: "Load more" }).click();
     const folderRow = page.locator("li.list-row", { hasText: "projects" });
     await expect(folderRow).toBeVisible();
-    await folderRow.getByRole("button", { name: "Share projects" }).click();
+    await chooseRowAction(folderRow, "Share");
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText("bob", { exact: true })).toBeVisible();
@@ -488,7 +493,7 @@ test("responsive: the share dialog is usable with no overflow at 375, 768 and 12
     await page.getByRole("button", { name: "Load more" }).click();
     const folderRow = page.locator("li.list-row", { hasText: "projects" });
     await expect(folderRow).toBeVisible();
-    await folderRow.getByRole("button", { name: "Share projects" }).click();
+    await chooseRowAction(folderRow, "Share");
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toBeVisible();
     await expectNoHorizontalOverflow(page);
@@ -577,17 +582,24 @@ test("responsive: bob's mount view is usable with no overflow at 375, 768 and 12
     await expect(page.getByRole("link", { name: "docs" })).toBeVisible();
 
     // The read/write controls are usable: upload, download and delete
-    // are all present, and the row actions keep 44px+ touch targets
-    // (min-h-11, constitution VI).
+    // are all present in the row's menu, and the trigger and items keep
+    // 44px+ touch targets (min-h-11, constitution VI).
     await expect(page.getByText("Upload files", { exact: true })).toBeVisible();
     const planRow = page.locator("li.list-row", { hasText: "plan.txt" });
+    const trigger = planRow.getByRole("button", {
+      name: "Actions for plan.txt",
+    });
+    expect((await trigger.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await trigger.click();
     for (const action of ["Download", "Delete"]) {
-      const button = planRow.getByRole("button", { name: action });
-      await expect(button).toBeVisible();
-      const box = await button.boundingBox();
-      expect(box).not.toBeNull();
-      expect(box!.height).toBeGreaterThanOrEqual(44);
+      const item = planRow
+        .getByRole("list", { name: "Actions for plan.txt" })
+        .getByRole("button", { name: action });
+      await expect(item).toBeInViewport({ ratio: 1 });
+      expect((await item.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     }
+    await expectNoHorizontalOverflow(page);
+    await page.keyboard.press("Escape");
     await expectNoHorizontalOverflow(page);
 
     // Navigate into the subfolder: the breadcrumb trail keeps the mount
@@ -604,10 +616,10 @@ test("responsive: bob's mount view is usable with no overflow at 375, 768 and 12
     // sharer's bytes (US2 sc.2).
     if (viewport.width === 375) {
       const download = await downloadFromPopup(page, () =>
-        page
-          .locator("li.list-row", { hasText: "report.pdf" })
-          .getByRole("button", { name: "Download" })
-          .click(),
+        chooseRowAction(
+          page.locator("li.list-row", { hasText: "report.pdf" }),
+          "Download",
+        ),
       );
       const content = await readStream(await download.createReadStream());
       expect(content.toString()).toBe("%PDF-1.4 report");
@@ -691,7 +703,7 @@ test("US5: admin deletes bob; alice's mount, share dialog and /api/shares show n
     await page.getByRole("button", { name: "Load more" }).click();
     const folderRow = page.locator("li.list-row", { hasText: "projects" });
     await expect(folderRow).toBeVisible();
-    await folderRow.getByRole("button", { name: "Share projects" }).click();
+    await chooseRowAction(folderRow, "Share");
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText("bob", { exact: true })).toHaveCount(0);

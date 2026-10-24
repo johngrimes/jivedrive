@@ -172,6 +172,24 @@ async function click(target: HTMLButtonElement | undefined): Promise<void> {
   await flush();
 }
 
+/**
+ * Open a row's actions menu and find one of its items.
+ *
+ * @param scope - element containing the row
+ * @param name - the row's file name
+ * @param label - the item's label
+ * @returns the item button, or undefined
+ */
+async function menuItem(
+  scope: ParentNode,
+  name: string,
+  label: string,
+): Promise<HTMLButtonElement | undefined> {
+  await click(button(scope, `Actions for ${name}`));
+  const list = scope.querySelector(`ul[aria-label="Actions for ${name}"]`);
+  return list ? button(list, label) : undefined;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
@@ -587,7 +605,7 @@ describe("Files page move wiring", () => {
     const row = Array.from(container.querySelectorAll("li.list-row")).find(
       (el) => el.textContent?.includes("notes.txt"),
     ) as HTMLElement;
-    await click(button(row, "Move"));
+    await click(await menuItem(row, "notes.txt", "Move"));
 
     // The picker starts at the row's folder: the space root.
     const dialog = container.querySelector('[role="dialog"]') as HTMLElement;
@@ -626,7 +644,7 @@ describe("Files page move wiring", () => {
     await submitSearch(container, "report");
     expect(searches).toBe(1);
 
-    await click(button(container, "Move Q3-Report.pdf"));
+    await click(await menuItem(container, "Q3-Report.pdf", "Move"));
     const dialog = container.querySelector('[role="dialog"]') as HTMLElement;
     // The picker starts at the result's folder (projects/).
     expect(crumbs(dialog).textContent).toContain("projects");
@@ -686,7 +704,9 @@ describe("Files page move wiring", () => {
           Promise.resolve(jsonResponse({ results: [], capped: false })),
         "POST /api/files/share-url": () => never(),
       });
-      await click(button(fileRowOf(container, "notes.txt"), "Move"));
+      await click(
+        await menuItem(fileRowOf(container, "notes.txt"), "notes.txt", "Move"),
+      );
       const dialog = container.querySelector('[role="dialog"]') as HTMLElement;
       await click(button(folderList(dialog), "docs"));
       await click(button(dialog, "Move here"));
@@ -697,19 +717,29 @@ describe("Files page move wiring", () => {
     it("on download", async () => {
       vi.spyOn(window, "open").mockReturnValue(null);
       const container = await afterMove();
-      await click(button(fileRowOf(container, "keep.txt"), "Download"));
+      await click(
+        await menuItem(
+          fileRowOf(container, "keep.txt"),
+          "keep.txt",
+          "Download",
+        ),
+      );
       expect(container.querySelector(".alert-success")).toBeNull();
     });
 
     it("on opening Share", async () => {
       const container = await afterMove();
-      await click(button(fileRowOf(container, "keep.txt"), "Share"));
+      await click(
+        await menuItem(fileRowOf(container, "keep.txt"), "keep.txt", "Share"),
+      );
       expect(container.querySelector(".alert-success")).toBeNull();
     });
 
     it("on opening Delete", async () => {
       const container = await afterMove();
-      await click(button(fileRowOf(container, "keep.txt"), "Delete"));
+      await click(
+        await menuItem(fileRowOf(container, "keep.txt"), "keep.txt", "Delete"),
+      );
       expect(container.querySelector(".alert-success")).toBeNull();
     });
 
@@ -736,7 +766,7 @@ describe("Files page move wiring", () => {
 
     /** Move the result to the root so the success alert shows. */
     async function moveToRoot(): Promise<void> {
-      await click(button(container, "Move Q3-Report.pdf"));
+      await click(await menuItem(container, "Q3-Report.pdf", "Move"));
       const dialog = container.querySelector('[role="dialog"]') as HTMLElement;
       await click(button(crumbs(dialog), "Home"));
       await click(button(dialog, "Move here"));
@@ -744,12 +774,12 @@ describe("Files page move wiring", () => {
     }
 
     await moveToRoot();
-    await click(button(container, "Delete Q3-Report.pdf"));
+    await click(await menuItem(container, "Q3-Report.pdf", "Delete"));
     expect(container.querySelector(".alert-success")).toBeNull();
     await click(button(container, "Cancel"));
 
     await moveToRoot();
-    await click(button(container, "Share Q3-Report.pdf"));
+    await click(await menuItem(container, "Q3-Report.pdf", "Share"));
     expect(container.querySelector(".alert-success")).toBeNull();
   });
 });

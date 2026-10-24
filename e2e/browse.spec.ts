@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import {
+  chooseRowAction,
   downloadFromPopup,
   expectNoHorizontalOverflow,
   expectSignedInAs,
@@ -8,20 +9,26 @@ import {
 } from "./helpers";
 
 /**
- * Read the body of a download triggered by the given row's Download
- * action: the app opens the presigned URL in a new window, so the
- * download is captured from that popup.
+ * Read the body of a download triggered from the given file row, either
+ * by its menu's Download item or by clicking the file name: the app opens
+ * the presigned URL in a new window, so the download is captured from
+ * that popup.
  *
  * @param page - the page
- * @param rowText - text identifying the file row
+ * @param rowText - the file name identifying the row
+ * @param via - "menu" for the ⋯ Download item, "name" for the name link
  * @returns the download and its content
  */
-async function downloadFromRow(page: Page, rowText: string) {
+async function downloadFromRow(
+  page: Page,
+  rowText: string,
+  via: "menu" | "name",
+) {
+  const row = page.locator("li.list-row", { hasText: rowText });
   const download = await downloadFromPopup(page, () =>
-    page
-      .locator("li.list-row", { hasText: rowText })
-      .getByRole("button", { name: "Download" })
-      .click(),
+    via === "menu"
+      ? chooseRowAction(row, "Download")
+      : row.getByRole("link", { name: rowText, exact: true }).click(),
   );
   const content = await readStream(await download.createReadStream());
   return { download, content };
@@ -89,17 +96,17 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
   await expect(page.getByText("notes.txt")).toBeVisible();
   await expect(page.getByText("my file #1?.txt")).toBeVisible();
 
-  // Download a file: the browser fetches the presigned URL from the mock
-  // S3 and receives the file bytes.
-  const notes = await downloadFromRow(page, "notes.txt");
+  // Download a file from its row menu: the browser fetches the presigned
+  // URL from the mock S3 and receives the file bytes.
+  const notes = await downloadFromRow(page, "notes.txt", "menu");
   expect(notes.download.suggestedFilename()).toBe("notes.txt");
   expect(notes.download.url()).toContain("localhost:5299");
   expect(notes.download.url()).toContain("X-Amz-Signature");
   expect(notes.content.toString()).toBe("hello from notes");
 
-  // File names with spaces and special characters keep their encoding in
-  // the presigned download URL.
-  const special = await downloadFromRow(page, "my file #1?.txt");
+  // Clicking a file's name downloads it too. File names with spaces and
+  // special characters keep their encoding in the presigned download URL.
+  const special = await downloadFromRow(page, "my file #1?.txt", "name");
   expect(special.download.url()).toContain("my%20file%20%231%3F.txt");
   expect(special.content.toString()).toBe("special file content");
 
