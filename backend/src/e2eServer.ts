@@ -386,9 +386,9 @@ createSession(db, gina.id, { token: "gina-session" });
 // validateUsername in db/repository.ts): the responsive e2e spec asserts
 // the navbar truncates a long username with an ellipsis at 375px instead
 // of overflowing (FR-003, US1 sc.4). He shares one long-named folder with
-// rowan, a recipient dedicated to the responsive spec, so the mount row's
-// long "Shared by" label can be checked at 375px; no other spec signs in
-// as either.
+// rowan, a recipient dedicated to the narrow-width checks of that long
+// "Shared by" label (the mount row in responsive.spec, the search result
+// in search.spec); no other spec signs in as either.
 const longname = createUser(db, {
   username: "this-username-is-really-long",
   bucket: "jivedrive-prod",

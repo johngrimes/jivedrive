@@ -214,6 +214,32 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     ).toHaveCount(0);
   });
 
+  test("tapping a row's blank space only dismisses an open menu", async ({
+    page,
+    context,
+  }) => {
+    await startSignedIn(page, context);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    let popups = 0;
+    page.on("popup", () => {
+      popups += 1;
+    });
+
+    // Open one row's menu, then tap the empty middle of another file row
+    // (well right of its short name, left of its trigger): the menu
+    // closes, and no download window opens - only the name downloads.
+    const openRow = page.locator("li.list-row", { hasText: FILE_ROW_TEXT });
+    await openRow.getByRole("button", { name: /^Actions for / }).click();
+    const otherRow = page.locator("li.list-row", { hasText: "data.csv" });
+    const box = (await otherRow.boundingBox())!;
+    await otherRow.click({ position: { x: box.width / 2, y: box.height / 2 } });
+    await expect(
+      openRow.getByRole("list", { name: /^Actions for / }),
+    ).toHaveCount(0);
+    await page.waitForTimeout(500);
+    expect(popups).toBe(0);
+  });
+
   test("downloading from the menu or by tapping the name at 375px gets the file", async ({
     page,
     context,

@@ -291,7 +291,7 @@ export function FileListing({
             key={`folder:${folder}`}
           >
             <a
-              className="link inline-flex min-w-0 grow items-center gap-3 font-semibold no-underline"
+              className="link inline-flex min-w-0 items-center gap-3 font-semibold no-underline"
               href="#"
               onClick={(event) => {
                 event.preventDefault();
@@ -326,7 +326,7 @@ export function FileListing({
             key={`mount:${mount.id}`}
           >
             <a
-              className="link inline-flex min-w-0 grow items-center gap-3 font-semibold no-underline"
+              className="link inline-flex min-w-0 items-center gap-3 font-semibold no-underline"
               href="#"
               onClick={(event) => {
                 event.preventDefault();
@@ -351,7 +351,7 @@ export function FileListing({
         {files.map((file) => (
           <li className="list-row flex items-center gap-3" key={file.key}>
             <a
-              className="link inline-flex min-w-0 grow items-center gap-3 no-underline"
+              className="link inline-flex min-w-0 items-center gap-3 no-underline"
               href="#"
               onClick={(event) => {
                 event.preventDefault();

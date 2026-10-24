@@ -62,7 +62,7 @@ export function RowActionsMenu({ name, actions }: RowActionsMenuProps) {
   return (
     <div
       ref={wrapper}
-      className={`dropdown dropdown-end shrink-0 ${open ? "dropdown-open" : ""}`}
+      className={`dropdown dropdown-end ml-auto shrink-0 ${open ? "dropdown-open" : ""}`}
       onKeyDown={(event) => {
         if (event.key !== "Escape" || !open) return;
         setOpen(false);
