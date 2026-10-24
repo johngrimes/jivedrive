@@ -257,12 +257,16 @@ results are recorded in [`docs/quickstart-validation.md`](docs/quickstart-valida
 
 ```text
 backend/     Hono API, SQLite data layer, WebAuthn, S3 wrapper, migrations
-frontend/    React + Vite SPA
+frontend/    React + Vite SPA (static assets, icons and manifest in public/)
 e2e/         Playwright end-to-end tests
 docker/      Multi-stage Dockerfile
 deploy/      Helm chart
 docs/        Validation and operations documentation
-scripts/     curl-based verification scripts
+scripts/     curl-based verification scripts and the icon generator
 ```
+
+The favicon and app icons are generated from `frontend/public/favicon.svg`:
+after changing the SVG, run `bun run icons` to re-render the PNG and ICO
+files with Playwright's Chromium, and commit the results.
 
 Copyright © 2026, John Grimes.
