@@ -7,6 +7,7 @@ import { SignIn } from "./pages/SignIn";
 import { Register } from "./pages/Register";
 import { FilesPage } from "./pages/Files";
 import { AdminUsersPage } from "./pages/AdminUsers";
+import { SettingsPage } from "./pages/Settings";
 import "./index.css";
 
 const root = document.getElementById("root");
@@ -24,6 +25,7 @@ createRoot(root).render(
             <Route path="/register" element={<Register />} />
             <Route path="/files" element={<FilesPage />} />
             <Route path="/admin" element={<AdminUsersPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
           </Route>
         </Routes>
       </SessionProvider>

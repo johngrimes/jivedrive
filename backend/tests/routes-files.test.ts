@@ -61,6 +61,7 @@ const config: AppConfig = {
     enrollmentToken: null,
   },
   webauthn: { rpId: "localhost", origin: "http://localhost:5173" },
+  ovh: null,
 };
 
 const userPrefix = "users/alice/";

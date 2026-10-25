@@ -9,6 +9,11 @@
  * The mock S3 layer has two parts: a fake S3 client injected into the app
  * (serves listings and presigned URLs from an in-memory map) and a mock
  * S3 HTTP server on port 5299 (serves downloads at presigned URLs).
+ *
+ * A fake OVHcloud API on port 5298 enables rclone sync credentials: it
+ * keeps Object Storage users and S3 keys in memory, and fails user
+ * creation for the dedicated `syncfail` user so the e2e suite can assert
+ * the storage-provider error path.
  */
 import { resolve } from "node:path";
 import { Hono } from "hono";
@@ -40,6 +45,9 @@ const objectStore = new Map<string, MockObject>();
 
 /** Port of the mock S3 HTTP server (downloads). */
 const MOCK_S3_PORT = 5299;
+
+/** Port of the fake OVHcloud API (rclone sync credentials). */
+const MOCK_OVH_PORT = 5298;
 
 /** Keep a delete in flight so the UI's pending state is observable. */
 const DELETE_DELAY_MS = 400;
@@ -277,6 +285,19 @@ const env: Record<string, string | undefined> = {
   // results deterministically (T007; R-010). Overridable like the rest.
   JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS:
     process.env.JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS ?? "2",
+  // rclone sync is enabled against the fake OVH API below, with dummy
+  // credentials (the fake does not verify signatures). Overridable.
+  JIVEDRIVE_OVH_ENDPOINT:
+    process.env.JIVEDRIVE_OVH_ENDPOINT ??
+    `http://localhost:${MOCK_OVH_PORT}/1.0`,
+  JIVEDRIVE_OVH_APPLICATION_KEY:
+    process.env.JIVEDRIVE_OVH_APPLICATION_KEY ?? "e2e-app-key",
+  JIVEDRIVE_OVH_APPLICATION_SECRET:
+    process.env.JIVEDRIVE_OVH_APPLICATION_SECRET ?? "e2e-app-secret",
+  JIVEDRIVE_OVH_CONSUMER_KEY:
+    process.env.JIVEDRIVE_OVH_CONSUMER_KEY ?? "e2e-consumer-key",
+  JIVEDRIVE_OVH_PROJECT_ID:
+    process.env.JIVEDRIVE_OVH_PROJECT_ID ?? "e2e-project",
 };
 
 const config = loadConfig(env);
@@ -381,6 +402,23 @@ const gina = createUser(db, {
   prefix: "users/gina/",
 });
 createSession(db, gina.id, { token: "gina-session" });
+
+// Users dedicated to the rclone sync settings spec: sami issues and
+// revokes keys; every key syncfail creates fails at the fake OVH API
+// (user creation returns 500), so the spec can assert the explicit
+// storage-provider error. No other spec signs in as either.
+const sami = createUser(db, {
+  username: "sami",
+  bucket: "jivedrive-prod",
+  prefix: "users/sami/",
+});
+createSession(db, sami.id, { token: "sync-session" });
+const syncfail = createUser(db, {
+  username: "syncfail",
+  bucket: "jivedrive-prod",
+  prefix: "users/syncfail/",
+});
+createSession(db, syncfail.id, { token: "syncfail-session" });
 
 // A user at the 32-character data-model username maximum (see
 // validateUsername in db/repository.ts): the responsive e2e spec asserts
@@ -655,6 +693,74 @@ mockS3.put("/:bucket/*", async (c) => {
   return c.body(null, 200);
 });
 Bun.serve({ port: MOCK_S3_PORT, fetch: mockS3.fetch });
+
+// Fake OVHcloud API (rclone sync credentials): the endpoints the app
+// calls, held in memory. A new user reports "creating" until its first
+// GET, which moves it to "ok" (the real API takes a few seconds).
+const ovhUsers = new Map<number, { description: string; status: string }>();
+const ovhKeys = new Map<string, number>();
+let nextOvhUserId = 1;
+let nextOvhKey = 1;
+const ovhNotFound = { class: "Client::NotFound", message: "Not found" };
+const mockOvh = new Hono().basePath("/1.0/cloud/project/:projectId/user");
+mockOvh.post("/", async (c) => {
+  const { description } = await c.req.json<{ description: string }>();
+  // Failure injection: the dedicated syncfail user can never be created.
+  if (description === "jivedrive:syncfail") {
+    return c.json(
+      { class: "Server::InternalServerError", message: "injected" },
+      500,
+    );
+  }
+  const id = nextOvhUserId++;
+  ovhUsers.set(id, { description, status: "creating" });
+  return c.json({
+    id,
+    username: `user-${id}`,
+    description,
+    status: "creating",
+  });
+});
+mockOvh.get("/:id", (c) => {
+  const user = ovhUsers.get(Number(c.req.param("id")));
+  if (!user) return c.json(ovhNotFound, 404);
+  user.status = "ok";
+  return c.json({ id: Number(c.req.param("id")), ...user });
+});
+mockOvh.delete("/:id", (c) => {
+  const id = Number(c.req.param("id"));
+  if (!ovhUsers.delete(id)) return c.json(ovhNotFound, 404);
+  for (const [access, owner] of ovhKeys) {
+    if (owner === id) ovhKeys.delete(access);
+  }
+  return c.body(null, 200);
+});
+mockOvh.post("/:id/policy", (c) => {
+  if (!ovhUsers.has(Number(c.req.param("id")))) {
+    return c.json(ovhNotFound, 404);
+  }
+  return c.body(null, 200);
+});
+mockOvh.post("/:id/s3Credentials", (c) => {
+  const id = Number(c.req.param("id"));
+  if (!ovhUsers.has(id)) return c.json(ovhNotFound, 404);
+  const serial = nextOvhKey++;
+  const access = `E2EACCESS${String(serial).padStart(8, "0")}`;
+  ovhKeys.set(access, id);
+  return c.json({
+    userId: String(id),
+    tenantId: "e2e-tenant",
+    access,
+    secret: `e2e-secret-${serial}`,
+  });
+});
+mockOvh.delete("/:id/s3Credentials/:access", (c) => {
+  if (!ovhKeys.delete(c.req.param("access"))) {
+    return c.json(ovhNotFound, 404);
+  }
+  return c.body(null, 200);
+});
+Bun.serve({ port: MOCK_OVH_PORT, fetch: mockOvh.fetch });
 
 const staticDir = resolve(import.meta.dir, "../../frontend/dist");
 // One shared scan-status registry, as production main() wires it: the

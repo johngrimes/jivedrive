@@ -4,15 +4,16 @@ import {
   cancelAdminInvite,
   createAdminInvite,
   createShare,
+  createSyncCredential,
   deleteFile,
   getDownloadUrl,
-  getHealth,
   getMe,
   listAdminInvites,
   listAdminUsers,
   listFiles,
   moveFile,
   listShares,
+  listSyncCredentials,
   postLoginOptions,
   postLoginVerify,
   postLogout,
@@ -25,6 +26,7 @@ import {
   resetUserPasskeys,
   searchFiles,
   revokeShare,
+  revokeSyncCredential,
   searchUsers,
 } from "../src/api/client";
 
@@ -89,17 +91,6 @@ describe("apiFetch", () => {
     );
 
     await expect(apiFetch("/healthcheck")).rejects.toThrow("fetch failed");
-  });
-});
-
-describe("getHealth", () => {
-  it("returns the healthcheck body", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({ status: "ok" })),
-    );
-
-    expect(await getHealth()).toEqual({ status: "ok" });
   });
 });
 
@@ -885,5 +876,89 @@ describe("searchFiles (T009)", () => {
     const err = error as Error & { code: string; status: number };
     expect(err.code).toBe("bad_request");
     expect(err.status).toBe(400);
+  });
+});
+
+describe("sync credentials API", () => {
+  it("listSyncCredentials GETs the caller's keys", async () => {
+    const body = {
+      enabled: true,
+      credentials: [
+        {
+          accessKeyId: "AKID1",
+          label: "Laptop",
+          createdAt: "2026-10-20T09:30:00.000Z",
+        },
+      ],
+      limit: 10,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    expect(await listSyncCredentials()).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/sync-credentials",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("createSyncCredential POSTs the label and returns the one-time secret", async () => {
+    const body = {
+      credential: {
+        accessKeyId: "AKID2",
+        label: "Desktop",
+        createdAt: "2026-10-25T10:00:00.000Z",
+      },
+      secretAccessKey: "SECRET",
+      rcloneConfig: "[jivedrive]",
+      endpoint: "https://s3.example.test",
+      region: "ca",
+      bucket: "b",
+      prefix: "users/a/",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body, 201));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    expect(await createSyncCredential("Desktop")).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/sync-credentials",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ label: "Desktop" }),
+      }),
+    );
+  });
+
+  it("createSyncCredential surfaces the error code", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(
+            { error: "Key limit reached", code: "credential_limit" },
+            409,
+          ),
+        ),
+    );
+
+    await expect(createSyncCredential("x")).rejects.toMatchObject({
+      status: 409,
+      code: "credential_limit",
+    });
+  });
+
+  it("revokeSyncCredential sends a DELETE with the encoded key id", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await revokeSyncCredential("AKID/odd id");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/sync-credentials/${encodeURIComponent("AKID/odd id")}`,
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 });

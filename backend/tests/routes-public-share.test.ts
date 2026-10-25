@@ -52,6 +52,7 @@ function makeConfig(rateLimit?: Partial<AppConfig["rateLimit"]>): AppConfig {
       enrollmentToken: null,
     },
     webauthn: { rpId: "localhost", origin: "http://localhost:5173" },
+    ovh: null,
   };
 }
 

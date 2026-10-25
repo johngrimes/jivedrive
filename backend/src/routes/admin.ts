@@ -21,6 +21,9 @@ import type { Context, MiddlewareHandler } from "hono";
 import type { Database } from "bun:sqlite";
 import type { AppConfig } from "../config";
 import type { ServerEnv } from "../server";
+import type { OvhClient } from "../ovh";
+import { revokeSyncCredential } from "../syncCredentials";
+import type { KeyedLock } from "../syncCredentials";
 import {
   cancelPendingInvitesByUsername,
   countAdmins,
@@ -29,6 +32,7 @@ import {
   deleteInvite,
   deleteSessionsByUser,
   deleteUser,
+  listSyncCredentials,
   getInviteById,
   getUserById,
   getUserByUsername,
@@ -60,6 +64,10 @@ export interface AdminRouteDeps {
    * {@link s3Client}.
    */
   submitScan?: (user: User) => Promise<ScanCounts>;
+  /** OVH API client for rclone sync, or null when not configured. */
+  ovh: OvhClient | null;
+  /** Per-user lock shared with sync key creation. */
+  syncLock: KeyedLock;
 }
 interface AdminScanStatusResponse {
   userId: string;
@@ -182,7 +190,7 @@ function newInviteToken(): string {
  */
 function jsonError(
   c: Context<ServerEnv>,
-  status: 400 | 403 | 404 | 409,
+  status: 400 | 403 | 404 | 409 | 502 | 503,
   message: string,
   code: string,
 ): Response {
@@ -227,8 +235,11 @@ export function adminRoutes(deps: AdminRouteDeps): Hono<ServerEnv> {
   // sessions and invites referencing them cascade (data-model.md deletion
   // rules: sessions carry ON DELETE CASCADE, so removing a user ends their
   // sessions). No storage object is touched (FR-014). Removal is
-  // idempotent: an unknown id yields 204.
-  app.delete("/users", (c) => {
+  // idempotent: an unknown id yields 204. Every rclone sync key of the
+  // user is revoked at OVH FIRST (deny-all, delete key, delete its OVH
+  // user); on the first failure the JiveDrive user is kept, with the keys
+  // not yet revoked, so the admin can retry.
+  app.delete("/users", async (c) => {
     const id = c.req.query("id") ?? "";
     if (id === "") {
       return jsonError(c, 400, "A user id is required", "bad_request");
@@ -251,8 +262,37 @@ export function adminRoutes(deps: AdminRouteDeps): Hono<ServerEnv> {
         "remove_self",
       );
     }
-    deleteUser(db, id);
-    return c.body(null, 204);
+    // Under the user's sync lock so an in-flight key creation cannot
+    // record a new key after the keys were listed here.
+    return deps.syncLock.run(id, async () => {
+      const credentials = listSyncCredentials(db, id);
+      if (credentials.length > 0) {
+        const { ovh } = deps;
+        if (ovh === null) {
+          return jsonError(
+            c,
+            503,
+            "This user has rclone sync keys, but rclone sync is not enabled on this server, so they cannot be removed",
+            "sync_disabled",
+          );
+        }
+        for (const credential of credentials) {
+          try {
+            await revokeSyncCredential(ovh, db, credential);
+          } catch (error) {
+            console.error(error);
+            return jsonError(
+              c,
+              502,
+              "Could not revoke the user's sync keys at the storage provider; the user was not removed. Please try again.",
+              "storage_provider_error",
+            );
+          }
+        }
+      }
+      deleteUser(db, id);
+      return c.body(null, 204);
+    });
   });
 
   // Reset a user's passkeys (FR-006, US2): delete every credential row,

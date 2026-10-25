@@ -54,6 +54,7 @@ const config: AppConfig = {
     enrollmentToken: null,
   },
   webauthn: { rpId: "localhost", origin: "http://localhost:5173" },
+  ovh: null,
 };
 
 /** A fake Bun.serve server env whose requestIP is deterministic. */

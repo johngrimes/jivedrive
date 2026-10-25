@@ -109,13 +109,6 @@ export async function apiFetch<T>(
 }
 
 /**
- * @returns the healthcheck body
- */
-export function getHealth(): Promise<{ status: string }> {
-  return apiFetch<{ status: string }>("/healthcheck");
-}
-
-/**
  * @returns the signed-in user, or null when signed out
  */
 export function getMe(): Promise<{ user: User | null }> {
@@ -746,4 +739,88 @@ export interface ScanStatus {
  */
 export function getScanStatus(): Promise<{ scans: ScanStatus[] }> {
   return apiFetch<{ scans: ScanStatus[] }>("/api/admin/scan-status");
+}
+
+/** An S3 sync key as listed back to its owner (the secret is never stored). */
+export interface SyncCredential {
+  /** The S3 access key ID. */
+  accessKeyId: string;
+  /** The owner's label for the key, e.g. "Laptop". */
+  label: string;
+  /** ISO 8601 creation timestamp. */
+  createdAt: string;
+}
+
+/** Response of GET /api/sync-credentials. */
+export interface ListSyncCredentialsResponse {
+  /** False when rclone sync is not configured on this server. */
+  enabled: boolean;
+  /** The caller's keys, newest first; empty when disabled. */
+  credentials: SyncCredential[];
+  /** The maximum number of keys per user. */
+  limit: number;
+}
+
+/**
+ * Response of POST /api/sync-credentials: the new key plus everything
+ * needed to configure rclone. `secretAccessKey` is returned only here.
+ */
+export interface CreateSyncCredentialResponse {
+  credential: SyncCredential;
+  /** The secret access key, shown once and never retrievable again. */
+  secretAccessKey: string;
+  /** A ready-to-paste rclone.conf block defining the `jivedrive` remote. */
+  rcloneConfig: string;
+  /** The S3 endpoint URL. */
+  endpoint: string;
+  /** The S3 region. */
+  region: string;
+  /** The bucket holding the caller's files. */
+  bucket: string;
+  /** The caller's prefix within the bucket (ends in "/" or is empty). */
+  prefix: string;
+}
+
+/**
+ * List the caller's rclone sync keys and whether sync is enabled.
+ *
+ * @returns the enabled flag, the keys (newest first) and the per-user limit
+ * @throws {ApiClientError} on failure
+ */
+export function listSyncCredentials(): Promise<ListSyncCredentialsResponse> {
+  return apiFetch<ListSyncCredentialsResponse>("/api/sync-credentials");
+}
+
+/**
+ * Issue a new S3 key scoped to the caller's own space.
+ *
+ * @param label - the key's label (trimmed server-side, 1-64 characters)
+ * @returns the key, its one-time secret and the rclone settings
+ * @throws {ApiClientError} on failure; codes include "invalid_label",
+ *   "credential_limit", "unsupported_prefix", "sync_disabled" and
+ *   "storage_provider_error"
+ */
+export function createSyncCredential(
+  label: string,
+): Promise<CreateSyncCredentialResponse> {
+  return apiFetch<CreateSyncCredentialResponse>("/api/sync-credentials", {
+    method: "POST",
+    body: JSON.stringify({ label }),
+  });
+}
+
+/**
+ * Revoke one of the caller's sync keys; it stops working within a few
+ * minutes.
+ *
+ * @param accessKeyId - the key's access key ID
+ * @throws {ApiClientError} on failure; codes include "not_found",
+ *   "sync_disabled" and "storage_provider_error"
+ */
+export async function revokeSyncCredential(accessKeyId: string): Promise<void> {
+  await apiFetch<void>(
+    `/api/sync-credentials/${encodeURIComponent(accessKeyId)}`,
+    { method: "DELETE" },
+    { noBody: true },
+  );
 }

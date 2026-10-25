@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { Context, ErrorHandler, MiddlewareHandler } from "hono";
+import type { ErrorHandler, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
 import { serveStatic } from "hono/bun";
 import { existsSync, readFileSync } from "node:fs";
@@ -24,6 +24,10 @@ import { publicShareRoutes } from "./routes/publicShare";
 import { adminRoutes } from "./routes/admin";
 import { sharesRoutes } from "./routes/shares";
 import { usersRoutes } from "./routes/users";
+import { syncCredentialsRoutes } from "./routes/syncCredentials";
+import { createOvhClient } from "./ovh";
+import type { OvhFetch } from "./ovh";
+import { createKeyedLock } from "./syncCredentials";
 import { createS3Client } from "./s3/client";
 import type { ScanCounts } from "./search/indexer";
 import { startScanScheduler } from "./search/scheduler";
@@ -72,6 +76,11 @@ export interface ServerDeps {
    * runs in-process against the S3 client.
    */
   submitScan?: (user: User) => Promise<ScanCounts>;
+  /**
+   * Replacement `fetch` for OVH API calls (tests); defaults to the global
+   * fetch. Used only when OVH is configured.
+   */
+  ovhFetch?: OvhFetch;
 }
 
 /**
@@ -153,6 +162,15 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
       store: rateLimitStore,
     }),
   );
+  // Sync credential management is a file-domain operation too, so it
+  // shares the files family bucket like /api/shares/*.
+  app.use(
+    "/api/sync-credentials/*",
+    createRateLimitMiddleware(deps.config, "files", {
+      now: deps.rateLimitNow,
+      store: rateLimitStore,
+    }),
+  );
 
   // Auth routes (passkey registration, sign-in, logout, current user),
   // mounted under /auth per the API contract.
@@ -200,6 +218,24 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
     }),
   );
 
+  // rclone sync credentials. The OVH client is null when the OVH
+  // variables are unset (feature disabled); one per-user lock serialises
+  // key creation against itself and against admin user deletion.
+  const ovh = deps.config.ovh
+    ? createOvhClient(deps.config.ovh, { fetch: deps.ovhFetch })
+    : null;
+  const syncLock = createKeyedLock();
+  app.route(
+    "/api/sync-credentials",
+    syncCredentialsRoutes({
+      config: deps.config,
+      db: deps.db,
+      requireUser: requireUser(deps.db, deps.config.sessionIdleDays),
+      ovh,
+      lock: syncLock,
+    }),
+  );
+
   // Public share links (009-short-share-links): anonymous, unmounted
   // under /s with the shareLinks rate-limit middleware registered above.
   app.route("/s", publicShareRoutes({ db: deps.db, s3Client }));
@@ -216,6 +252,8 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
       s3Client,
       scanStatus,
       submitScan: deps.submitScan,
+      ovh,
+      syncLock,
     }),
   );
 
@@ -291,16 +329,6 @@ export function requireUser(
     c.set("user", user);
     await next();
   };
-}
-
-/**
- * Read the signed-in user from the request context.
- *
- * @param c - Hono context
- * @returns the user set by {@link requireUser}
- */
-export function getUser(c: Context<ServerEnv>): User {
-  return c.get("user");
 }
 
 /**

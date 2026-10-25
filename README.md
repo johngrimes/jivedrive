@@ -28,6 +28,10 @@ Authentication is WebAuthn passkeys only - no passwords.
 - Uncluttered rows: each listing and search row keeps its actions (file
   Download/Share/Move/Delete, own-folder Share) behind a single "⋯" menu,
   and clicking a file's name in the listing downloads it.
+- Sync with rclone (optional): from Settings, every user can issue
+  labelled S3 keys scoped to their own bucket and prefix and copy a ready
+  `rclone.conf`, to sync their drive to a computer with `rclone sync` or
+  `rclone bisync`. See [Sync with rclone](#sync-with-rclone).
 
 ## Local development
 
@@ -111,6 +115,15 @@ error listing every problem when missing or invalid.
 | `JIVEDRIVE_WEBAUTHN_ORIGIN`              | `http://localhost:5173` | in production     | WebAuthn relying party origin (must be https in production)                     |
 | `JIVEDRIVE_SEARCH_SCAN_INTERVAL_SECONDS` | `3600`                  | no                | Seconds between background search-index scans of each user's space              |
 | `JIVEDRIVE_SEARCH_INDEX_MAX_BYTES`       | `10485760`              | no                | Maximum object size (bytes) eligible for search content extraction (10 MiB)     |
+| `JIVEDRIVE_OVH_ENDPOINT`                 | unset                   | for rclone sync   | OVHcloud API: `ovh-eu`, `ovh-ca`, `ovh-us` or an http(s) base URL               |
+| `JIVEDRIVE_OVH_PROJECT_ID`               | unset                   | for rclone sync   | Public Cloud project owning the Object Storage users                            |
+| `JIVEDRIVE_OVH_APPLICATION_KEY`          | unset                   | for rclone sync   | OVHcloud API application key (secret)                                           |
+| `JIVEDRIVE_OVH_APPLICATION_SECRET`       | unset                   | for rclone sync   | OVHcloud API application secret (secret)                                        |
+| `JIVEDRIVE_OVH_CONSUMER_KEY`             | unset                   | for rclone sync   | OVHcloud API consumer key (secret)                                              |
+
+The `JIVEDRIVE_OVH_*` variables are optional and all-or-nothing (empty
+counts as unset): with all five unset rclone sync is disabled; if any is
+set, all five must be, or startup fails listing the missing ones.
 
 ## Passkey setup
 
@@ -168,6 +181,75 @@ re-downloaded, so scans of stable spaces are cheap. An admin can force an
 immediate reconciliation for any user from the Admin users page ("Rebuild
 search index"), which reports how many objects were indexed, re-extracted,
 and removed.
+
+## Sync with rclone
+
+When the `JIVEDRIVE_OVH_*` variables are set, the Settings page (the gear
+in the header, shown to every signed-in user) has a "Sync with rclone"
+section. A user creates a labelled key (up to 10, read-write, never
+expiring) and is shown, once, a copyable `rclone.conf` block, the example
+commands `rclone sync jivedrive: ~/JiveDrive` and, for two-way sync (the
+local folder must exist first, or bisync fails with "directory not
+found"):
+
+```sh
+mkdir -p ~/JiveDrive
+rclone bisync jivedrive: ~/JiveDrive --resync  # first run only
+```
+
+plus the raw values. JiveDrive never stores the secret; each key can be
+revoked on its own. A new key can take up to about a minute to start
+working. When the feature is not configured the page says so.
+
+How it works: for every key the server creates a dedicated OVHcloud Object
+Storage user (role `objectstore_operator`, description
+`jivedrive:<username>`) through the OVHcloud API, attaches a policy that
+allows listing, reading, writing and deleting only under the user's own
+prefix (and denies listing buckets), then mints the S3 key for it. There
+is one OVHcloud user per key, so admins will see several
+`jivedrive:<username>` users in the OVHcloud console for a user with
+several keys. Revoking a key replaces its user's policy with deny-all,
+then deletes the key and the OVHcloud user; the key stops working within
+a few minutes (OVHcloud caches credentials, so deleting a key alone does
+not stop it promptly). When an admin removes a JiveDrive user, all of
+their keys are revoked this way first; if that fails, the JiveDrive user
+is kept so the admin can retry. A user whose prefix contains `*` or `?`
+cannot be given sync keys.
+
+Limitations: folders shared with the user are not included; changes made
+through rclone appear in search after the next background scan; moving or
+deleting files through rclone breaks existing share links to them.
+
+### Creating the OVHcloud API token
+
+1. Create an application at `https://ca.api.ovh.com/createApp/` (or the
+   `eu`/`us` equivalent matching `JIVEDRIVE_OVH_ENDPOINT`) to get the
+   application key and secret.
+2. Request a consumer key restricted to the project's Object Storage users,
+   with unlimited validity, via the API:
+
+   ```sh
+   curl -X POST https://ca.api.ovh.com/1.0/auth/credential \
+     -H "X-Ovh-Application: <application key>" \
+     -H "Content-Type: application/json" \
+     -d '{"accessRules": [
+       {"method": "GET", "path": "/cloud/project/<project id>/user"},
+       {"method": "POST", "path": "/cloud/project/<project id>/user"},
+       {"method": "DELETE", "path": "/cloud/project/<project id>/user"},
+       {"method": "GET", "path": "/cloud/project/<project id>/user/*"},
+       {"method": "POST", "path": "/cloud/project/<project id>/user/*"},
+       {"method": "DELETE", "path": "/cloud/project/<project id>/user/*"}
+     ]}'
+   ```
+
+   The response holds the `consumerKey` and a `validationUrl`: open the
+   URL, sign in to the OVHcloud account, and choose an unlimited validity.
+   Avoid the `createToken` web form: it mangled the `*` in the access-rule
+   paths when this was set up.
+
+3. Set `JIVEDRIVE_OVH_APPLICATION_KEY`, `JIVEDRIVE_OVH_APPLICATION_SECRET`
+   and `JIVEDRIVE_OVH_CONSUMER_KEY` (secrets), plus `JIVEDRIVE_OVH_ENDPOINT`
+   and `JIVEDRIVE_OVH_PROJECT_ID`.
 
 ## Deployment
 

@@ -78,6 +78,15 @@ jivedrive:
     JIVEDRIVE_S3_REGION: "sgp"
     JIVEDRIVE_WEBAUTHN_RP_ID: "drive.grimes.id.au"
     JIVEDRIVE_WEBAUTHN_ORIGIN: "https://drive.grimes.id.au"
+    # rclone sync credentials (Settings > Sync with rclone), optional and
+    # all-or-nothing: set these two AND the three OVH API credentials in
+    # secretConfig, or none (any partial set stops the app from starting).
+    # The OVHcloud API endpoint (ovh-eu, ovh-ca, ovh-us or a base URL) and
+    # the Public Cloud project that owns the Object Storage users are not
+    # secret; production uses ovh-ca and b4d5ce269b194d08a7b41d0fb10e3a3b
+    # (the CI deploy passes them from repository variables):
+    # JIVEDRIVE_OVH_ENDPOINT: "ovh-ca"
+    # JIVEDRIVE_OVH_PROJECT_ID: "b4d5ce269b194d08a7b41d0fb10e3a3b"
     # Optional bootstrap admin provisioned at first start. Unset by default;
     # to provision one, uncomment and set these (the enrollment token below
     # is REQUIRED whenever the username is set - see the chart README):
@@ -97,6 +106,12 @@ jivedrive:
     # --set) instead of in jivedrive.config. REQUIRED (≥16 chars) whenever
     # JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME is set; see the chart README.
     # JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN: ""
+    # OVHcloud API credentials for rclone sync (see the chart README for
+    # creating them). Leave all three empty, with the endpoint and project
+    # ID unset, to keep the feature disabled.
+    JIVEDRIVE_OVH_APPLICATION_KEY: ""
+    JIVEDRIVE_OVH_APPLICATION_SECRET: ""
+    JIVEDRIVE_OVH_CONSUMER_KEY: ""
 
   # Kubernetes Service in front of the server. No Ingress is created by
   # this chart: expose the service with your own Ingress, a LoadBalancer,

@@ -40,6 +40,78 @@ export interface WebAuthnConfig {
   origin: string;
 }
 
+/**
+ * OVHcloud API access used to issue prefix-scoped S3 keys for rclone sync.
+ * Null in {@link AppConfig} when the feature is disabled.
+ */
+export interface OvhConfig {
+  /** API base URL without a trailing slash, e.g. https://ca.api.ovh.com/1.0. */
+  endpoint: string;
+  applicationKey: string;
+  applicationSecret: string;
+  consumerKey: string;
+  /** Public Cloud project that owns the Object Storage users. */
+  projectId: string;
+}
+
+/** OVH API endpoint aliases accepted by `JIVEDRIVE_OVH_ENDPOINT`. */
+const OVH_ENDPOINT_ALIASES: Record<string, string> = {
+  "ovh-eu": "https://eu.api.ovh.com/1.0",
+  "ovh-ca": "https://ca.api.ovh.com/1.0",
+  "ovh-us": "https://api.us.ovhcloud.com/1.0",
+};
+
+/** The OVH variables, all of which must be set to enable rclone sync. */
+const OVH_VARIABLES = [
+  "JIVEDRIVE_OVH_ENDPOINT",
+  "JIVEDRIVE_OVH_APPLICATION_KEY",
+  "JIVEDRIVE_OVH_APPLICATION_SECRET",
+  "JIVEDRIVE_OVH_CONSUMER_KEY",
+  "JIVEDRIVE_OVH_PROJECT_ID",
+] as const;
+
+/**
+ * Parse the optional OVH settings: all unset (or empty) disables rclone
+ * sync; a partial set is an error listing the missing variables.
+ */
+function parseOvhConfig(
+  env: Record<string, string | undefined>,
+  errors: string[],
+): OvhConfig | null {
+  const missing = OVH_VARIABLES.filter((name) => !env[name]);
+  if (missing.length === OVH_VARIABLES.length) return null;
+  if (missing.length > 0) {
+    errors.push(
+      `rclone sync needs every OVH variable or none; missing: ${missing.join(", ")}`,
+    );
+    return null;
+  }
+  const rawEndpoint = env.JIVEDRIVE_OVH_ENDPOINT as string;
+  let endpoint = OVH_ENDPOINT_ALIASES[rawEndpoint];
+  if (endpoint === undefined) {
+    let protocol = "";
+    try {
+      protocol = new URL(rawEndpoint).protocol;
+    } catch {
+      // Reported below as neither an alias nor a URL.
+    }
+    if (protocol !== "http:" && protocol !== "https:") {
+      errors.push(
+        `JIVEDRIVE_OVH_ENDPOINT must be ovh-eu, ovh-ca, ovh-us or an http(s) URL, got "${rawEndpoint}"`,
+      );
+      return null;
+    }
+    endpoint = rawEndpoint.replace(/\/+$/, "");
+  }
+  return {
+    endpoint,
+    applicationKey: env.JIVEDRIVE_OVH_APPLICATION_KEY as string,
+    applicationSecret: env.JIVEDRIVE_OVH_APPLICATION_SECRET as string,
+    consumerKey: env.JIVEDRIVE_OVH_CONSUMER_KEY as string,
+    projectId: env.JIVEDRIVE_OVH_PROJECT_ID as string,
+  };
+}
+
 /** The validated application configuration. */
 export interface AppConfig {
   nodeEnv: "development" | "production" | "test";
@@ -80,6 +152,8 @@ export interface AppConfig {
   s3: S3Config;
   bootstrapAdmin: BootstrapAdminConfig;
   webauthn: WebAuthnConfig;
+  /** rclone sync via OVH-issued S3 keys; null when not configured. */
+  ovh: OvhConfig | null;
 }
 
 /** Normalise a storage prefix: no leading slash, no ".." segment, exactly
@@ -132,7 +206,9 @@ function parseIntPositive(
  * @param env - environment variable map, defaults to `process.env`
  * @returns the validated configuration
  * @throws {Error} when any required variable is missing or invalid; the
- *   message lists every problem found
+ *   message lists every problem found. The `JIVEDRIVE_OVH_*` variables are
+ *   optional: all unset (or empty) disables rclone sync; once any is set,
+ *   all five must be.
  * @example
  * ```ts
  * const config = loadConfig(process.env);
@@ -334,6 +410,8 @@ export function loadConfig(
     }
   }
 
+  const ovh = parseOvhConfig(env, errors);
+
   if (errors.length > 0) {
     throw new Error(`Invalid configuration:\n- ${errors.join("\n- ")}`);
   }
@@ -374,5 +452,6 @@ export function loadConfig(
       rpId: rpId ?? "localhost",
       origin: origin ?? "http://localhost:5173",
     },
+    ovh,
   };
 }

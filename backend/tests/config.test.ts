@@ -401,3 +401,115 @@ describe("loadConfig", () => {
     ).toThrow(/JIVEDRIVE_WEBAUTHN_ORIGIN/);
   });
 });
+
+describe("loadConfig OVH sync settings", () => {
+  /** A complete OVH configuration using the ovh-ca alias. */
+  const ovhEnv: Record<string, string | undefined> = {
+    JIVEDRIVE_OVH_ENDPOINT: "ovh-ca",
+    JIVEDRIVE_OVH_APPLICATION_KEY: "app-key",
+    JIVEDRIVE_OVH_APPLICATION_SECRET: "app-secret",
+    JIVEDRIVE_OVH_CONSUMER_KEY: "consumer-key",
+    JIVEDRIVE_OVH_PROJECT_ID: "b4d5ce269b194d08a7b41d0fb10e3a3b",
+  };
+
+  it("is disabled (null) when every OVH variable is unset", () => {
+    expect(loadConfig(minimalEnv).ovh).toBeNull();
+  });
+
+  it("is disabled when every OVH variable is an empty string", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      JIVEDRIVE_OVH_ENDPOINT: "",
+      JIVEDRIVE_OVH_APPLICATION_KEY: "",
+      JIVEDRIVE_OVH_APPLICATION_SECRET: "",
+      JIVEDRIVE_OVH_CONSUMER_KEY: "",
+      JIVEDRIVE_OVH_PROJECT_ID: "",
+    });
+    expect(config.ovh).toBeNull();
+  });
+
+  it("rejects the endpoint and project ID set without any API credentials", () => {
+    let message = "";
+    try {
+      loadConfig({
+        ...minimalEnv,
+        JIVEDRIVE_OVH_ENDPOINT: "ovh-ca",
+        JIVEDRIVE_OVH_PROJECT_ID: "b4d5ce269b194d08a7b41d0fb10e3a3b",
+        JIVEDRIVE_OVH_APPLICATION_KEY: "",
+        JIVEDRIVE_OVH_APPLICATION_SECRET: "",
+        JIVEDRIVE_OVH_CONSUMER_KEY: "",
+      });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain("JIVEDRIVE_OVH_APPLICATION_KEY");
+    expect(message).toContain("JIVEDRIVE_OVH_APPLICATION_SECRET");
+    expect(message).toContain("JIVEDRIVE_OVH_CONSUMER_KEY");
+    expect(message).not.toContain("JIVEDRIVE_OVH_PROJECT_ID");
+  });
+
+  it("parses a complete configuration, resolving the endpoint alias", () => {
+    expect(loadConfig({ ...minimalEnv, ...ovhEnv }).ovh).toEqual({
+      endpoint: "https://ca.api.ovh.com/1.0",
+      applicationKey: "app-key",
+      applicationSecret: "app-secret",
+      consumerKey: "consumer-key",
+      projectId: "b4d5ce269b194d08a7b41d0fb10e3a3b",
+    });
+  });
+
+  it("resolves every endpoint alias", () => {
+    const resolveAlias = (alias: string) =>
+      loadConfig({ ...minimalEnv, ...ovhEnv, JIVEDRIVE_OVH_ENDPOINT: alias })
+        .ovh?.endpoint;
+    expect(resolveAlias("ovh-eu")).toBe("https://eu.api.ovh.com/1.0");
+    expect(resolveAlias("ovh-ca")).toBe("https://ca.api.ovh.com/1.0");
+    expect(resolveAlias("ovh-us")).toBe("https://api.us.ovhcloud.com/1.0");
+  });
+
+  it("accepts an explicit http(s) base URL, dropping a trailing slash", () => {
+    const resolveUrl = (url: string) =>
+      loadConfig({ ...minimalEnv, ...ovhEnv, JIVEDRIVE_OVH_ENDPOINT: url }).ovh
+        ?.endpoint;
+    expect(resolveUrl("http://localhost:5298")).toBe("http://localhost:5298");
+    expect(resolveUrl("https://example.test/1.0/")).toBe(
+      "https://example.test/1.0",
+    );
+  });
+
+  it("rejects an endpoint that is neither an alias nor an http(s) URL", () => {
+    expect(() =>
+      loadConfig({
+        ...minimalEnv,
+        ...ovhEnv,
+        JIVEDRIVE_OVH_ENDPOINT: "ovh-xx",
+      }),
+    ).toThrow(/JIVEDRIVE_OVH_ENDPOINT/);
+    expect(() =>
+      loadConfig({
+        ...minimalEnv,
+        ...ovhEnv,
+        JIVEDRIVE_OVH_ENDPOINT: "ftp://example.test",
+      }),
+    ).toThrow(/JIVEDRIVE_OVH_ENDPOINT/);
+  });
+
+  it("rejects a partial configuration, listing every missing variable", () => {
+    let message = "";
+    try {
+      loadConfig({
+        ...minimalEnv,
+        JIVEDRIVE_OVH_ENDPOINT: "ovh-ca",
+        JIVEDRIVE_OVH_APPLICATION_KEY: "app-key",
+        JIVEDRIVE_OVH_CONSUMER_KEY: "",
+      });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain("JIVEDRIVE_OVH_APPLICATION_SECRET");
+    expect(message).toContain("JIVEDRIVE_OVH_CONSUMER_KEY");
+    expect(message).toContain("JIVEDRIVE_OVH_PROJECT_ID");
+    expect(message).not.toContain("JIVEDRIVE_OVH_APPLICATION_KEY");
+    expect(message).not.toContain("JIVEDRIVE_OVH_ENDPOINT");
+  });
+});

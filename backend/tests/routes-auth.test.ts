@@ -77,6 +77,7 @@ const config: AppConfig = {
     enrollmentToken: "bootstrap-enrollment-token",
   },
   webauthn: { rpId, origin },
+  ovh: null,
 };
 
 /** Options for {@link createAppWithDb}. */

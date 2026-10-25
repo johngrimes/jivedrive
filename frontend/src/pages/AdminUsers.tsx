@@ -14,7 +14,7 @@
  * checkbox), generated-link card with readonly input + copy `btn`,
  * invites and users tables with status `badge`s, and a `modal modal-open`
  * removal confirmation (research R5). Navigation lives in the AppShell
- * drawer/sidebar (US1), so the page renders only its content card.
+ * header, so the page renders only its content card.
  *
  * Mobile-first (US3, FR-006/007): breakpoint-hidden column values (role
  * below `sm`; bucket/prefix and expires/created below `md`) stack as
