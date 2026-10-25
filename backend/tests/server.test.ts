@@ -20,7 +20,6 @@ import { createSession, sessionCookie } from "../src/auth/sessions";
 import {
   createApp,
   errorHandler,
-  getUser,
   requireUser,
   startSearchIndexer,
 } from "../src/server";
@@ -64,6 +63,7 @@ const config: AppConfig = {
     enrollmentToken: null,
   },
   webauthn: { rpId: "localhost", origin: "http://localhost:5173" },
+  ovh: null,
 };
 
 const databases: Database[] = [];
@@ -199,7 +199,7 @@ describe("session auth middleware", () => {
     const db = createDb();
     const app = new Hono<ServerEnv>();
     app.use("/protected", requireUser(db));
-    app.get("/protected", (c) => c.json({ user: getUser(c).username }));
+    app.get("/protected", (c) => c.json({ user: c.get("user").username }));
     app.onError(errorHandler());
 
     const res = await app.request("/protected");
@@ -214,7 +214,7 @@ describe("session auth middleware", () => {
     const db = createDb();
     const app = new Hono<ServerEnv>();
     app.use("/protected", requireUser(db));
-    app.get("/protected", (c) => c.json({ user: getUser(c).username }));
+    app.get("/protected", (c) => c.json({ user: c.get("user").username }));
     app.onError(errorHandler());
 
     const res = await app.request("/protected", {
@@ -237,7 +237,7 @@ describe("session auth middleware", () => {
 
     const app = new Hono<ServerEnv>();
     app.use("/protected", requireUser(db));
-    app.get("/protected", (c) => c.json({ user: getUser(c).username }));
+    app.get("/protected", (c) => c.json({ user: c.get("user").username }));
     app.onError(errorHandler());
 
     const res = await app.request("/protected", {
@@ -257,7 +257,7 @@ describe("session auth middleware", () => {
 
     const app = new Hono<ServerEnv>();
     app.use("/protected", requireUser(db));
-    app.get("/protected", (c) => c.json({ user: getUser(c) }));
+    app.get("/protected", (c) => c.json({ user: c.get("user") }));
     app.onError(errorHandler());
 
     const res = await app.request("/protected", {
@@ -281,7 +281,7 @@ describe("session auth middleware", () => {
 
     const app = new Hono<ServerEnv>();
     app.use("/protected", requireUser(db));
-    app.get("/protected", (c) => c.json({ user: getUser(c).username }));
+    app.get("/protected", (c) => c.json({ user: c.get("user").username }));
     app.onError(errorHandler());
 
     const res = await app.request("/protected", { headers: { cookie } });

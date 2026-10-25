@@ -536,14 +536,6 @@ export function deleteLegacyCredentialsByUser(
 }
 
 /**
- * @param db - database connection
- * @param id - credential id
- */
-export function deleteCredential(db: Database, id: string): void {
-  db.query("DELETE FROM passkey_credentials WHERE id = ?").run(id);
-}
-
-/**
  * Update the signature counter (and optional last-used time) of a credential.
  *
  * @param db - database connection
@@ -861,6 +853,117 @@ export function getShareById(db: Database, id: string): Share | null {
  */
 export function deleteShare(db: Database, id: string): void {
   db.query("DELETE FROM shares WHERE id = ?").run(id);
+}
+
+/** An S3 key issued for rclone sync; the secret is never stored. */
+export interface SyncCredential {
+  /** S3 access key id, unique at OVH. */
+  accessKeyId: string;
+  userId: string;
+  /**
+   * The OVH Public Cloud user dedicated to this key (numeric at OVH,
+   * stored as text); revoking the key denies and deletes this user.
+   */
+  ovhUserId: string;
+  /** User-chosen label, trimmed, 1-64 characters. */
+  label: string;
+  createdAt: string;
+}
+
+/** Input for {@link createSyncCredential}. */
+export interface CreateSyncCredentialInput {
+  accessKeyId: string;
+  userId: string;
+  ovhUserId: string;
+  label: string;
+  createdAt?: string;
+}
+
+/**
+ * Record an issued sync key and its dedicated OVH user (without the
+ * secret).
+ *
+ * @param db - database connection
+ * @param input - credential fields (createdAt defaults to now)
+ * @returns the stored credential
+ */
+export function createSyncCredential(
+  db: Database,
+  input: CreateSyncCredentialInput,
+): SyncCredential {
+  const credential: SyncCredential = {
+    accessKeyId: input.accessKeyId,
+    userId: input.userId,
+    ovhUserId: input.ovhUserId,
+    label: input.label,
+    createdAt: input.createdAt ?? new Date().toISOString(),
+  };
+  db.query(
+    "INSERT INTO sync_credentials (accessKeyId, userId, ovhUserId, label, createdAt) VALUES (?, ?, ?, ?, ?)",
+  ).run(
+    credential.accessKeyId,
+    credential.userId,
+    credential.ovhUserId,
+    credential.label,
+    credential.createdAt,
+  );
+  return credential;
+}
+
+/**
+ * @param db - database connection
+ * @param userId - JiveDrive user id
+ * @returns the user's sync keys, newest first
+ */
+export function listSyncCredentials(
+  db: Database,
+  userId: string,
+): SyncCredential[] {
+  const rows = db
+    .query(
+      "SELECT * FROM sync_credentials WHERE userId = ? ORDER BY createdAt DESC, rowid DESC",
+    )
+    .all(userId) as SyncCredential[];
+  return rows.map((row) => ({ ...row }));
+}
+
+/**
+ * @param db - database connection
+ * @param userId - JiveDrive user id
+ * @returns how many sync keys the user holds
+ */
+export function countSyncCredentials(db: Database, userId: string): number {
+  const row = db
+    .query("SELECT COUNT(*) AS n FROM sync_credentials WHERE userId = ?")
+    .get(userId) as { n: number } | undefined;
+  return row?.n ?? 0;
+}
+
+/**
+ * @param db - database connection
+ * @param accessKeyId - S3 access key id
+ * @returns the sync key, or null
+ */
+export function getSyncCredential(
+  db: Database,
+  accessKeyId: string,
+): SyncCredential | null {
+  const row = db
+    .query("SELECT * FROM sync_credentials WHERE accessKeyId = ?")
+    .get(accessKeyId) as SyncCredential | undefined;
+  return row ? { ...row } : null;
+}
+
+/**
+ * Delete a sync key's row (after it was revoked at OVH).
+ *
+ * @param db - database connection
+ * @param accessKeyId - S3 access key id
+ */
+export function deleteSyncCredential(db: Database, accessKeyId: string): void {
+  db.query("DELETE FROM sync_credentials WHERE accessKeyId = ?").run(
+    accessKeyId,
+  );
 }
 
 /** Lifetime → expiry offset in seconds; 30d is a full 30 days (FR-004). */

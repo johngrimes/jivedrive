@@ -66,8 +66,7 @@ function asFileEntry(result: SearchResult): FileEntry {
  * Rebuilt on daisyUI primitives (T015): the page title, toolbar (item
  * count + upload control), breadcrumbs and listing are daisyUI-styled,
  * and action errors surface as an `alert alert-error`. Navigation lives
- * in the AppShell drawer/sidebar (US1), so the page renders only its
- * content card.
+ * in the AppShell header, so the page renders only its content card.
  *
  * Navigation state is `{ space, prefix }` synced with the URL (R12): own
  * space keeps the existing `/files?prefix=` shape; shared spaces use

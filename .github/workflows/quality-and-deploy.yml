@@ -177,10 +177,19 @@ jobs:
     #   JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN - gates the bootstrap
     #     admin's first passkey (>=16 chars); required whenever
     #     JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME is set (values-ci.yaml)
+    #   JIVEDRIVE_OVH_APPLICATION_KEY / JIVEDRIVE_OVH_APPLICATION_SECRET /
+    #     JIVEDRIVE_OVH_CONSUMER_KEY - OVHcloud API token for rclone sync
+    #     credentials (see the chart README); optional, see below
     #   GHCR_PULL_USERNAME / GHCR_PULL_TOKEN - GitHub username + classic PAT
     #     with read:packages; the cluster pulls the image from the private
     #     GHCR package via the ghcr-pull image pull secret (GitHub Packages
     #     authentication only supports classic PATs, not fine-grained)
+    # Repository variables (optional) read by this job:
+    #   JIVEDRIVE_OVH_ENDPOINT / JIVEDRIVE_OVH_PROJECT_ID - OVHcloud API
+    #     endpoint (production: ovh-ca) and Public Cloud project id for rclone
+    #     sync. All five JIVEDRIVE_OVH_* values are all-or-nothing: define
+    #     the two variables and the three secrets together, or none (sync
+    #     disabled); a partial set stops the app from starting.
     steps:
       - uses: actions/checkout@v5
 
@@ -322,7 +331,12 @@ jobs:
             --set jivedrive.image.tag=${{ steps.tag.outputs.sha }} \
             --set jivedrive.secretConfig.JIVEDRIVE_S3_ACCESS_KEY_ID='${{ secrets.JIVEDRIVE_S3_ACCESS_KEY_ID }}' \
             --set jivedrive.secretConfig.JIVEDRIVE_S3_SECRET_ACCESS_KEY='${{ secrets.JIVEDRIVE_S3_SECRET_ACCESS_KEY }}' \
-            --set jivedrive.secretConfig.JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN='${{ secrets.JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN }}'
+            --set jivedrive.secretConfig.JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN='${{ secrets.JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN }}' \
+            --set jivedrive.secretConfig.JIVEDRIVE_OVH_APPLICATION_KEY='${{ secrets.JIVEDRIVE_OVH_APPLICATION_KEY }}' \
+            --set jivedrive.secretConfig.JIVEDRIVE_OVH_APPLICATION_SECRET='${{ secrets.JIVEDRIVE_OVH_APPLICATION_SECRET }}' \
+            --set jivedrive.secretConfig.JIVEDRIVE_OVH_CONSUMER_KEY='${{ secrets.JIVEDRIVE_OVH_CONSUMER_KEY }}' \
+            --set jivedrive.config.JIVEDRIVE_OVH_ENDPOINT='${{ vars.JIVEDRIVE_OVH_ENDPOINT }}' \
+            --set jivedrive.config.JIVEDRIVE_OVH_PROJECT_ID='${{ vars.JIVEDRIVE_OVH_PROJECT_ID }}'
 
       - name: Verify rollout
         run: kubectl rollout status deployment/jivedrive-deployment -n jivedrive --timeout=120s

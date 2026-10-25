@@ -52,6 +52,7 @@ const config: AppConfig = {
     enrollmentToken: null,
   },
   webauthn: { rpId: "localhost", origin: "http://localhost:5173" },
+  ovh: null,
 };
 
 const bucket = "jivedrive-prod";

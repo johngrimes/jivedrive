@@ -186,6 +186,7 @@ describe("migrateFromDir", () => {
       "005_search_index.sql",
       "006_share_links.sql",
       "007_search_folders.sql",
+      "008_sync_credentials.sql",
     ]);
 
     // Every table from data-model.md exists.
@@ -197,6 +198,7 @@ describe("migrateFromDir", () => {
       "shares",
       "share_links",
       "search_folders",
+      "sync_credentials",
     ]) {
       expect(
         db
@@ -606,6 +608,73 @@ describe("migrateFromDir", () => {
     expect(db.query("SELECT COUNT(*) AS n FROM share_links").get()).toEqual({
       n: 0,
     });
+  });
+
+  it("008 adds the sync_credentials table with one OVH user per key", () => {
+    const db = createDb();
+    migrateFromDir(db, migrationsDir);
+
+    const credentialColumns = db
+      .query("PRAGMA table_info(sync_credentials)")
+      .all() as Array<{ name: string; notnull: number; pk: number }>;
+    expect(credentialColumns.map((c) => c.name)).toEqual([
+      "accessKeyId",
+      "userId",
+      "ovhUserId",
+      "label",
+      "createdAt",
+    ]);
+    expect(credentialColumns.find((c) => c.name === "accessKeyId")?.pk).toBe(1);
+    for (const column of credentialColumns) {
+      if (column.name === "accessKeyId") continue;
+      expect(column.notnull).toBe(1);
+    }
+    expect(
+      db
+        .query(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sync_accounts'",
+        )
+        .get(),
+    ).toBeNull();
+
+    const foreignKeys = db
+      .query("PRAGMA foreign_key_list(sync_credentials)")
+      .all() as Array<{
+      table: string;
+      from: string;
+      to: string;
+      on_delete: string;
+    }>;
+    expect(foreignKeys).toHaveLength(1);
+    expect(foreignKeys[0]!.table).toBe("users");
+    expect(foreignKeys[0]!.from).toBe("userId");
+    expect(foreignKeys[0]!.to).toBe("id");
+    expect(foreignKeys[0]!.on_delete).toBe("CASCADE");
+
+    const indexList = db
+      .query("PRAGMA index_list(sync_credentials)")
+      .all() as Array<{ name: string }>;
+    const userIndex = indexList.find(
+      (index) => index.name === "idx_sync_credentials_user_id",
+    );
+    expect(userIndex).toBeTruthy();
+    expect(
+      db
+        .query("SELECT * FROM pragma_index_info(?)")
+        .all(userIndex!.name) as Array<{ name: string }>,
+    ).toEqual([expect.objectContaining({ name: "userId" })]);
+
+    // Deleting the user cascades the credential rows.
+    db.run(
+      "INSERT INTO users (id, username, bucket, prefix, isAdmin, createdAt) VALUES ('u1', 'alice', 'jivedrive-prod', 'users/alice/', 0, '2026-10-25T00:00:00.000Z')",
+    );
+    db.run(
+      "INSERT INTO sync_credentials (accessKeyId, userId, ovhUserId, label, createdAt) VALUES ('AK1', 'u1', '42', 'laptop', '2026-10-25T00:00:00.000Z')",
+    );
+    db.run("DELETE FROM users WHERE id = 'u1'");
+    expect(
+      db.query("SELECT COUNT(*) AS n FROM sync_credentials").get(),
+    ).toEqual({ n: 0 });
   });
 
   it("is idempotent against the real migrations directory", () => {

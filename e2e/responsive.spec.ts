@@ -95,17 +95,32 @@ test.describe("User Story 1 - responsive navigation", () => {
     await expectTruncated(page, signInState);
   });
 
-  test("a signed-out visitor at 375px sees the brand and Sign in link, no hamburger and no drawer", async ({
+  test("a signed-out visitor at 375px sees the brand and Sign in link", async ({
     page,
   }) => {
     await page.setViewportSize(MOBILE_VIEWPORT);
     await page.goto("/");
     await expect(page.getByRole("link", { name: "JiveDrive" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Sign in" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Open menu" })).toHaveCount(
-      0,
-    );
-    await expect(page.locator(".drawer-side")).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test("a non-admin at 375px has an icon-only Settings link at least 44px tall", async ({
+    page,
+    context,
+  }) => {
+    await context.addCookies([LONG_USERNAME_SESSION_COOKIE]);
+    await page.setViewportSize(MOBILE_VIEWPORT);
+    await page.goto("/files");
+    await expectSignedInAs(page, LONG_USERNAME);
+
+    const settings = page.getByRole("link", { name: "Settings" });
+    await expect(settings).toBeVisible();
+    await expect(settings.locator("svg")).toBeVisible();
+    await expect(settings.getByText("Settings", { exact: true })).toBeHidden();
+    const box = await settings.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.height).toBeGreaterThanOrEqual(44);
     await expectNoHorizontalOverflow(page);
   });
 });
@@ -1325,5 +1340,65 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
       ).toBeVisible();
       await expectNoHorizontalOverflow(page);
     }
+  });
+});
+
+test.describe("rclone sync settings rendered for mobile", () => {
+  test("no horizontal overflow on /settings with the one-time key panel open at 375, 768 and 1280", async ({
+    page,
+    context,
+  }, testInfo) => {
+    // The long-named user owns this check (the sync spec uses its own
+    // users), so the key created here never counts against another
+    // spec's limit; it is revoked at the end.
+    await context.addCookies([LONG_USERNAME_SESSION_COOKIE]);
+    await page.setViewportSize(MOBILE_VIEWPORT);
+    await page.goto("/settings");
+    await expect(
+      page.getByRole("heading", { name: "Sync with rclone" }),
+    ).toBeVisible();
+
+    const label = `responsive-r${testInfo.retry}-${Date.now()}`;
+    await page.getByLabel("Key label").fill(label);
+    await page.getByRole("button", { name: "Create key" }).click();
+    const panel = page.getByRole("region", { name: "New sync key" });
+    await expect(panel).toBeVisible();
+    // At 375px the panel opens below the fold: it is scrolled into view
+    // with focus on its heading.
+    const panelHeading = panel.getByRole("heading", { name: /created$/ });
+    await expect(panelHeading).toBeFocused();
+    await expect(panelHeading).toBeInViewport();
+
+    for (const viewport of [
+      { width: 375, height: 667 },
+      { width: 768, height: 1024 },
+      { width: 1280, height: 800 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await expect(
+        panel.getByLabel("rclone config", { exact: true }),
+      ).toBeVisible();
+      await expectNoHorizontalOverflow(page);
+      for (const control of [
+        panel.getByRole("button", { name: "Copy rclone config" }),
+        panel.getByRole("button", { name: "Copy secret access key" }),
+        panel.getByRole("button", { name: "I've saved it" }),
+      ]) {
+        const box = await control.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.height).toBeGreaterThanOrEqual(44);
+      }
+    }
+
+    await panel.getByRole("button", { name: "I've saved it" }).click();
+    const row = page
+      .getByRole("table", { name: "Sync keys" })
+      .locator("tbody tr", { hasText: label });
+    await row.getByRole("button", { name: `Revoke key ${label}` }).click();
+    await page
+      .getByRole("alertdialog")
+      .getByRole("button", { name: "Revoke key", exact: true })
+      .click();
+    await expect(page.getByText(`Revoked key "${label}"`)).toBeVisible();
   });
 });

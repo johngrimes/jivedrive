@@ -51,9 +51,6 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
   await page.goto("/files");
   await expectSignedInAs(page, "alice");
 
-  // The sidebar's admin link is only visible to admins (alice is not one).
-  await expect(page.getByRole("link", { name: /Manage users/ })).toHaveCount(0);
-
   // Root listing: folders and files, and the loaded item count. Folder
   // rows are links (they navigate); file rows carry button
   // Download/Share/Delete actions.

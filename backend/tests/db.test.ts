@@ -11,7 +11,6 @@ import {
   createShare,
   createShareLink,
   createUser,
-  deleteCredential,
   deleteCredentialsByUser,
   deleteLegacyCredentialsByUser,
   deleteInvite,
@@ -47,6 +46,11 @@ import {
   findActiveShareLink,
   sweepExpiredShareLinks,
   updateCredentialCounter,
+  countSyncCredentials,
+  createSyncCredential,
+  deleteSyncCredential,
+  getSyncCredential,
+  listSyncCredentials,
   updateSessionLastUsed,
   upsertSearchDoc,
 } from "../src/db/repository";
@@ -331,7 +335,7 @@ describe("passkey credentials", () => {
     ]);
   });
 
-  it("reads, deletes and updates a credential", () => {
+  it("reads and updates a credential", () => {
     const db = createDb();
     const user = seedUser(db);
     createCredential(db, { id: "cred-1", userId: user.id, publicKey: "pub" });
@@ -344,9 +348,6 @@ describe("passkey credentials", () => {
     expect(getCredentialById(db, "cred-1")?.lastUsedAt).toBe(
       "2026-08-12T00:00:00.000Z",
     );
-
-    deleteCredential(db, "cred-1");
-    expect(getCredentialById(db, "cred-1")).toBeNull();
   });
 
   it("persists the discoverable flag and returns it from reads (T005)", () => {
@@ -1919,5 +1920,73 @@ describe("search folders (folder search results, #13)", () => {
         userId: string;
       }>,
     ).toEqual([{ userId: bob.id }]);
+  });
+});
+
+describe("sync credentials", () => {
+  it("stores credentials with their OVH user, without secrets, newest first", () => {
+    const db = createDb();
+    const alice = seedUser(db);
+    const bob = seedUser(db, { username: "bob", prefix: "users/bob/" });
+    createSyncCredential(db, {
+      accessKeyId: "AK-OLD",
+      userId: alice.id,
+      ovhUserId: "41",
+      label: "laptop",
+      createdAt: "2026-10-01T00:00:00.000Z",
+    });
+    const newest = createSyncCredential(db, {
+      accessKeyId: "AK-NEW",
+      userId: alice.id,
+      ovhUserId: "42",
+      label: "desktop",
+      createdAt: "2026-10-20T00:00:00.000Z",
+    });
+    createSyncCredential(db, {
+      accessKeyId: "AK-BOB",
+      userId: bob.id,
+      ovhUserId: "43",
+      label: "bob's",
+    });
+
+    expect(newest).toEqual({
+      accessKeyId: "AK-NEW",
+      userId: alice.id,
+      ovhUserId: "42",
+      label: "desktop",
+      createdAt: "2026-10-20T00:00:00.000Z",
+    });
+    expect(listSyncCredentials(db, alice.id)).toEqual([
+      newest,
+      expect.objectContaining({ accessKeyId: "AK-OLD", ovhUserId: "41" }),
+    ]);
+    expect(countSyncCredentials(db, alice.id)).toBe(2);
+    expect(getSyncCredential(db, "AK-BOB")).toEqual(
+      expect.objectContaining({ userId: bob.id, ovhUserId: "43" }),
+    );
+    expect(
+      db.query("PRAGMA table_info(sync_credentials)").all() as Array<{
+        name: string;
+      }>,
+    ).not.toContainEqual(expect.objectContaining({ name: "secret" }));
+
+    deleteSyncCredential(db, "AK-OLD");
+    expect(getSyncCredential(db, "AK-OLD")).toBeNull();
+    expect(countSyncCredentials(db, alice.id)).toBe(1);
+  });
+
+  it("removes the credentials when the user is deleted", () => {
+    const db = createDb();
+    const alice = seedUser(db);
+    createSyncCredential(db, {
+      accessKeyId: "AK1",
+      userId: alice.id,
+      ovhUserId: "42",
+      label: "laptop",
+    });
+
+    deleteUser(db, alice.id);
+
+    expect(getSyncCredential(db, "AK1")).toBeNull();
   });
 });

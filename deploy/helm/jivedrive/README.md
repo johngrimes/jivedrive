@@ -17,8 +17,8 @@ accessed over the S3 API.
   mounted instead, so data is ephemeral until persistence is enabled).
 - Health probes: startup, liveness and readiness, all against
   `/healthcheck`.
-- Non-sensitive configuration passed via a ConfigMap; S3 credentials passed
-  via a Kubernetes Secret (`secretConfig`).
+- Non-sensitive configuration passed via a ConfigMap; S3 and OVHcloud API
+  credentials passed via a Kubernetes Secret (`secretConfig`).
 - Runs as a non-root user (the image's `bun` user, UID 1000).
 - Hardened container defaults: read-only root filesystem with the SQLite
   volume writable at `/data` (plus an `emptyDir` mounted at `/tmp` for
@@ -153,7 +153,7 @@ All values live under the `jivedrive` top-level key. Values are grouped as
 | `jivedrive.tolerations` | Tolerations for pod scheduling | `[]` |
 | `jivedrive.affinity` | Affinity rules for pod scheduling | `{}` |
 | `jivedrive.config` | Map of non-sensitive `JIVEDRIVE_*` environment variables | see below |
-| `jivedrive.secretConfig` | Map of sensitive `JIVEDRIVE_*` environment variables (S3 credentials) | empty keys |
+| `jivedrive.secretConfig` | Map of sensitive `JIVEDRIVE_*` environment variables (S3 and OVHcloud API credentials) | empty keys |
 | `jivedrive.service.type` | Kubernetes Service type | `ClusterIP` |
 | `jivedrive.service.port` | Service port | `80` |
 | `jivedrive.persistence.enabled` | Mount a PVC for the SQLite database | `false` |
@@ -194,11 +194,49 @@ defaults, except where the chart defaults to the production deployment
 | `JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN` | Bootstrap admin enrollment token. A secret: put it in `jivedrive.secretConfig`, not `jivedrive.config`. REQUIRED (at least 16 characters) whenever `JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME` is set; enroll the admin by opening `/register?token=<token>` | unset (none) |
 | `JIVEDRIVE_WEBAUTHN_RP_ID` | WebAuthn relying party id; must match the site's registrable domain | `drive.grimes.id.au` |
 | `JIVEDRIVE_WEBAUTHN_ORIGIN` | WebAuthn relying party origin; must be the https origin users sign in from | `https://drive.grimes.id.au` |
+| `JIVEDRIVE_OVH_ENDPOINT` | OVHcloud API for rclone sync credentials: `ovh-eu`, `ovh-ca`, `ovh-us` or an http(s) base URL (production: `ovh-ca`) | unset (commented example) |
+| `JIVEDRIVE_OVH_PROJECT_ID` | Public Cloud project that owns the per-key Object Storage users; not a secret (production: `b4d5ce269b194d08a7b41d0fb10e3a3b`) | unset (commented example) |
+| `JIVEDRIVE_OVH_APPLICATION_KEY` | OVHcloud API application key (secret; in `secretConfig`) | `""` |
+| `JIVEDRIVE_OVH_APPLICATION_SECRET` | OVHcloud API application secret (secret; in `secretConfig`) | `""` |
+| `JIVEDRIVE_OVH_CONSUMER_KEY` | OVHcloud API consumer key (secret; in `secretConfig`) | `""` |
 
 The app refuses to start when `JIVEDRIVE_S3_ACCESS_KEY_ID` or
 `JIVEDRIVE_S3_SECRET_ACCESS_KEY` is missing, and in production
 (`NODE_ENV=production`, set by the image) when the WebAuthn variables are
-missing or not https.
+missing or not https. The five `JIVEDRIVE_OVH_*` variables are
+all-or-nothing: with all of them empty or unset rclone sync is disabled;
+if any is set, all five must be, or the app refuses to start.
+
+### rclone sync credentials
+
+With the OVH variables set, every user can issue S3 keys scoped to their
+own bucket and prefix from the Settings page and sync their drive with
+rclone. The server creates one OVHcloud Object Storage user per key
+(description `jivedrive:<username>`, so the OVHcloud console shows one such
+user per issued key) with a prefix-scoped policy. Revoking a key sets a
+deny-all policy, then deletes the key and its OVHcloud user; it stops
+working within a few minutes. Removing a JiveDrive user revokes all of
+their keys first. See the
+[top-level README](../../../README.md#sync-with-rclone) for details.
+
+To create the API token:
+
+1. Create an application at `https://ca.api.ovh.com/createApp/` (matching
+   `JIVEDRIVE_OVH_ENDPOINT`) for the application key and secret.
+2. `POST https://ca.api.ovh.com/1.0/auth/credential` with header
+   `X-Ovh-Application: <application key>` and `accessRules` allowing `GET`,
+   `POST` and `DELETE` on both `/cloud/project/<project id>/user` and
+   `/cloud/project/<project id>/user/*`. Open the returned `validationUrl`,
+   sign in, and choose an unlimited validity; the response's `consumerKey`
+   is the consumer key. Do not use the `createToken` web form: it mangled
+   the `*` in the access-rule paths.
+3. Set all five together: the endpoint and project ID in `jivedrive.config`
+   and the three credentials as secrets, e.g.
+   `--set jivedrive.secretConfig.JIVEDRIVE_OVH_APPLICATION_KEY=...`. The CI
+   deploy job passes the endpoint and project ID from the repository
+   variables `JIVEDRIVE_OVH_ENDPOINT` and `JIVEDRIVE_OVH_PROJECT_ID`, and
+   the credentials from the GitHub secrets of the same names; with none of
+   them defined, all five are empty and sync is disabled.
 
 ### Security hardening
 
