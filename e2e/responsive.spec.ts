@@ -955,6 +955,17 @@ test.describe("User Story 4 - dialogs and auth screens verified on mobile", () =
     const copied = await page.evaluate(() => navigator.clipboard.readText());
     expect(copied).toBe(link);
 
+    // The expiry note sits above the action row with clear space, never
+    // under or against the buttons (even with the copied alert showing).
+    const note = dialog.getByText("Anyone with this link can download");
+    await expect(note).toBeVisible();
+    const noteBox = (await note.boundingBox())!;
+    const actionsTop = Math.min(
+      (await dialog.getByRole("button", { name: "Copied" }).boundingBox())!.y,
+      (await doneButton.boundingBox())!.y,
+    );
+    expect(noteBox.y + noteBox.height + 12).toBeLessThanOrEqual(actionsTop);
+
     // Done closes the dialog; the open dialog never scrolls horizontally.
     await doneButton.click();
     await expect(dialog).toHaveCount(0);
