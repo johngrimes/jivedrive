@@ -1,5 +1,8 @@
 import { generateShareToken } from "../shareLinks";
-import { UNUSED_CLIENT_TTL_SECONDS } from "../oauth";
+import {
+  NEVER_GRANTED_CLIENT_TTL_SECONDS,
+  UNUSED_CLIENT_TTL_SECONDS,
+} from "../oauth";
 import { randomUUID } from "node:crypto";
 import type { Database } from "bun:sqlite";
 
@@ -1737,7 +1740,9 @@ export function getOAuthClient(
   clientId: string,
 ): OAuthClient | null {
   const row = db
-    .query("SELECT * FROM oauth_clients WHERE clientId = ?")
+    .query(
+      "SELECT clientId, clientName, redirectUris, createdAt FROM oauth_clients WHERE clientId = ?",
+    )
     .get(clientId) as OAuthClientRow | undefined;
   if (!row) return null;
   return { ...row, redirectUris: JSON.parse(row.redirectUris) as string[] };
@@ -1811,7 +1816,8 @@ export function consumeOAuthAuthorizationRequest(
 }
 
 /**
- * Store a grant (one approved consent).
+ * Store a grant (one approved consent) and stamp the client's
+ * `lastGrantedAt`, which decides how long it outlives its grants.
  *
  * @param db - database connection
  * @param input - grant fields (lastUsedAt starts null)
@@ -1821,9 +1827,14 @@ export function createOAuthGrant(
   db: Database,
   input: { id: string; userId: string; clientId: string; createdAt: string },
 ): OAuthGrant {
-  db.query(
-    "INSERT INTO oauth_grants (id, userId, clientId, createdAt, lastUsedAt) VALUES (?, ?, ?, ?, NULL)",
-  ).run(input.id, input.userId, input.clientId, input.createdAt);
+  db.transaction(() => {
+    db.query(
+      "INSERT INTO oauth_grants (id, userId, clientId, createdAt, lastUsedAt) VALUES (?, ?, ?, ?, NULL)",
+    ).run(input.id, input.userId, input.clientId, input.createdAt);
+    db.query(
+      "UPDATE oauth_clients SET lastGrantedAt = ? WHERE clientId = ?",
+    ).run(input.createdAt, input.clientId);
+  })();
   return { ...input, lastUsedAt: null };
 }
 
@@ -2027,14 +2038,20 @@ export function markOAuthRefreshTokenUsed(
  * tokens and refresh tokens (used refresh tokens are kept until they
  * expire so a replay is still detected and revokes the grant), dead
  * grants (nothing usable left, see {@link OAUTH_GRANT_ALIVE_SQL}), and
- * clients registered more than 30 days ago that hold no grant.
+ * clients without grants: never-granted ones registered at least 1 day
+ * ago (bounds anonymous registration), formerly granted ones whose last
+ * grant was at least 30 days ago (a client's cached client_id survives a
+ * revoke-and-reconnect).
  *
  * @param db - database connection
  * @param now - current time, defaults to now
  */
 export function sweepExpiredOAuth(db: Database, now: Date = new Date()): void {
   const iso = now.toISOString();
-  const staleClientCutoff = new Date(
+  const neverGrantedCutoff = new Date(
+    now.getTime() - NEVER_GRANTED_CLIENT_TTL_SECONDS * 1000,
+  ).toISOString();
+  const formerlyGrantedCutoff = new Date(
     now.getTime() - UNUSED_CLIENT_TTL_SECONDS * 1000,
   ).toISOString();
   db.transaction(() => {
@@ -2048,7 +2065,7 @@ export function sweepExpiredOAuth(db: Database, now: Date = new Date()): void {
     db.query("DELETE FROM oauth_access_tokens WHERE expiresAt <= ?").run(iso);
     db.query("DELETE FROM oauth_refresh_tokens WHERE expiresAt <= ?").run(iso);
     db.query(
-      "DELETE FROM oauth_clients WHERE createdAt <= ? AND NOT EXISTS (SELECT 1 FROM oauth_grants g WHERE g.clientId = oauth_clients.clientId)",
-    ).run(staleClientCutoff);
+      "DELETE FROM oauth_clients WHERE NOT EXISTS (SELECT 1 FROM oauth_grants g WHERE g.clientId = oauth_clients.clientId) AND ((lastGrantedAt IS NULL AND createdAt <= ?) OR lastGrantedAt <= ?)",
+    ).run(neverGrantedCutoff, formerlyGrantedCutoff);
   })();
 }

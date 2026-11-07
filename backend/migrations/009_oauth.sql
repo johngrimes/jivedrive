@@ -10,7 +10,11 @@ CREATE TABLE oauth_clients (
   clientName    TEXT NOT NULL,
   -- JSON array of exact redirect URIs.
   redirectUris  TEXT NOT NULL,
-  createdAt     TEXT NOT NULL
+  createdAt     TEXT NOT NULL,
+  -- Set whenever a grant is created. NULL (never granted): swept 1 day
+  -- after registration; otherwise 30 days after the last grant once the
+  -- client holds no grants.
+  lastGrantedAt TEXT
 );
 
 -- Pending consent: created by /oauth/authorize, consumed by approve/deny.

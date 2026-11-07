@@ -26,8 +26,17 @@ export const AUTHORIZATION_CODE_TTL_SECONDS = 60;
 /** Pending consent request lifetime: 10 minutes. */
 export const AUTHORIZATION_REQUEST_TTL_SECONDS = 600;
 
-/** A registered client with no grants is swept after 30 days. */
+/**
+ * A client that had grants but holds none now is swept 30 days after
+ * its last grant (Claude may reconnect with its cached client_id).
+ */
 export const UNUSED_CLIENT_TTL_SECONDS = 30 * 86400;
+
+/**
+ * A client that never obtained a grant is swept after 1 day, bounding
+ * what anonymous registration can store.
+ */
+export const NEVER_GRANTED_CLIENT_TTL_SECONDS = 86400;
 
 /** RFC 7636 code verifier: 43-128 unreserved characters. */
 const CODE_VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/;

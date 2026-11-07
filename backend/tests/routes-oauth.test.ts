@@ -191,9 +191,24 @@ describe("POST /oauth/register", () => {
     expect(res.status).toBe(201);
   });
 
-  it("refuses request bodies over 16 KiB with 413 on register, token and revoke", async () => {
+  it("accepts a registration with ten 2048-character redirect URIs", async () => {
+    const { app } = createOAuthApp(databases);
+    const base = "https://x.example/";
+    const uris = Array.from(
+      { length: 10 },
+      (_, i) => `${base}${i}${"a".repeat(2047 - base.length)}`,
+    );
+    for (const uri of uris) expect(uri).toHaveLength(2048);
+    const res = await register(app, {
+      client_name: "Claude",
+      redirect_uris: uris,
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it("refuses request bodies over 32 KiB with 413 on register, token and revoke", async () => {
     const { app, db } = createOAuthApp(databases);
-    const big = "a".repeat(16 * 1024 + 1);
+    const big = "a".repeat(32 * 1024 + 1);
     const requests: Array<[string, string, string]> = [
       [
         "/oauth/register",

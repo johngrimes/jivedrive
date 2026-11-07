@@ -345,6 +345,54 @@ describe("OAuth repository", () => {
     expect(getOAuthClient(db, "client-1")).not.toBeNull();
   });
 
+  it("sweeps never-granted clients after 1 day, formerly granted ones 30 days after their last grant", () => {
+    const { db, alice } = createDb();
+    createOAuthClient(db, {
+      clientId: "never",
+      clientName: "Never",
+      redirectUris: ["https://x.example/cb"],
+      createdAt: T0,
+    });
+    for (const [clientId, grantedAt] of [
+      ["early", at(10)],
+      ["late", at(20 * 86400)],
+    ] as const) {
+      createOAuthClient(db, {
+        clientId,
+        clientName: clientId,
+        redirectUris: ["https://x.example/cb"],
+        createdAt: T0,
+      });
+      createOAuthGrant(db, {
+        id: `g-${clientId}`,
+        userId: alice.id,
+        clientId,
+        createdAt: grantedAt,
+      });
+      deleteOAuthGrant(db, `g-${clientId}`);
+    }
+    expect(
+      db
+        .query("SELECT lastGrantedAt FROM oauth_clients WHERE clientId = ?")
+        .get("early"),
+    ).toEqual({ lastGrantedAt: at(10) });
+
+    sweepExpiredOAuth(db, new Date(at(86400 - 1)));
+    expect(getOAuthClient(db, "never")).not.toBeNull();
+    sweepExpiredOAuth(db, new Date(at(86400)));
+    expect(getOAuthClient(db, "never")).toBeNull();
+    expect(getOAuthClient(db, "early")).not.toBeNull();
+
+    sweepExpiredOAuth(db, new Date(at(30 * 86400 + 9)));
+    expect(getOAuthClient(db, "early")).not.toBeNull();
+    sweepExpiredOAuth(db, new Date(at(30 * 86400 + 10)));
+    expect(getOAuthClient(db, "early")).toBeNull();
+    // Registered long ago, but granted 20 days in: kept until day 50.
+    expect(getOAuthClient(db, "late")).not.toBeNull();
+    sweepExpiredOAuth(db, new Date(at(50 * 86400)));
+    expect(getOAuthClient(db, "late")).toBeNull();
+  });
+
   it("sweeps expired rows and stale clients without grants", () => {
     const { db, alice } = createDb();
     seedGrantWithTokens(db, alice.id, "g1");

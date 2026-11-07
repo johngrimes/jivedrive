@@ -63,10 +63,11 @@ const CODE_CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const MAX_STATE_LENGTH = 1024;
 
 /**
- * Largest request body accepted by the unauthenticated POST endpoints;
- * registration (10 URIs of at most 2048 characters) fits comfortably.
+ * Largest request body accepted by the unauthenticated POST endpoints.
+ * A maximal registration (10 redirect URIs of 2048 characters, about
+ * 20.5 KiB of JSON plus a 100-character name) fits within 32 KiB.
  */
-const MAX_BODY_BYTES = 16 * 1024;
+const MAX_BODY_BYTES = 32 * 1024;
 
 /** Dependencies for {@link oauthRoutes}. */
 export interface OAuthRouteDeps {
