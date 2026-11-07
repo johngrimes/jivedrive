@@ -298,10 +298,9 @@ shared with them, exactly like the web app. There is no tool to delete
 files. Share links created by the assistant are the same anonymous
 `<origin>/s/<token>` links as the web app's Share action: owned by the
 user, working for anyone until they expire, and never revocable early.
-`read_file` refuses files larger than
-`JIVEDRIVE_SEARCH_INDEX_MAX_BYTES` and binary formats other than images.
-Files written by the assistant appear in search after the next background
-index scan, like uploads.
+`read_file` refuses files larger than `JIVEDRIVE_SEARCH_INDEX_MAX_BYTES`
+and binary formats other than images. Files written by the assistant
+appear in search after the next background index scan, like uploads.
 
 ### How it works
 
