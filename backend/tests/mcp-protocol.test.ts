@@ -248,6 +248,16 @@ describe("MCP methods", () => {
     }
   });
 
+  it("serverInfo builds icon URLs on the origin it is given", () => {
+    expect(
+      serverInfo("https://drive.grimes.id.au").icons.map((icon) => icon.src),
+    ).toEqual([
+      "https://drive.grimes.id.au/icon-512.png",
+      "https://drive.grimes.id.au/icon-192.png",
+      "https://drive.grimes.id.au/favicon.svg",
+    ]);
+  });
+
   it("every advertised icon is a static asset matching its declared type and size", () => {
     for (const icon of serverInfo(ORIGIN).icons) {
       const bytes = readFileSync(
