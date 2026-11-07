@@ -216,15 +216,23 @@ function createMockS3Client(): S3Client {
         });
         return {};
       }
-      case "PutObjectCommand":
-        // Server-side writes: folder creation's zero-byte marker objects.
-        // Browser uploads PUT to the mock HTTP server instead.
+      case "PutObjectCommand": {
+        // Server-side writes: folder creation's zero-byte marker objects
+        // and MCP write_file text. Browser uploads PUT to the mock HTTP
+        // server instead.
+        const body =
+          typeof input.Body === "string"
+            ? new TextEncoder().encode(input.Body)
+            : input.Body instanceof Uint8Array
+              ? new Uint8Array(input.Body)
+              : new Uint8Array();
         objectStore.set(input.Key as string, {
-          body: "",
-          size: 0,
+          body,
+          size: body.byteLength,
           lastModified: new Date().toISOString(),
         });
         return {};
+      }
       case "GetObjectCommand": {
         const object = objectStore.get(input.Key as string);
         if (!object) {
@@ -491,6 +499,18 @@ createShare(db, {
 });
 seedObject("users/nora/existing/notes.txt", "nora's notes", 12);
 seedObject("users/otto/team/plan.txt", "team plan", 9);
+
+// A dedicated user for the MCP connector spec (mcp.spec.ts): mia
+// authorizes fake MCP clients, which read and write her notes/ folder
+// through /mcp, then revokes them from Settings. No other spec signs in
+// as her, so her grants and written files never shift another spec.
+const mia = createUser(db, {
+  username: "mia",
+  bucket: "jivedrive-prod",
+  prefix: "users/mia/",
+});
+createSession(db, mia.id, { token: "mcp-session" });
+seedObject("users/mia/notes/hello.txt", "hello from mia");
 
 const future = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();

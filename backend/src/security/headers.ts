@@ -16,8 +16,10 @@
  * extension, not a weakening. The storage origin is derived by server.ts
  * from `config.s3.endpoint`.
  *
- * `Cache-Control: no-store` applies to `/api/*`, `/auth/*` and the
- * healthcheck (FR-010); the SPA itself stays cacheable. HSTS
+ * `Cache-Control: no-store` applies to every API surface ({@link
+ * isApiPath}: `/api/*`, `/auth/*`, the OAuth `/oauth/*` and
+ * `/.well-known/*` endpoints, `/mcp`) and the healthcheck (FR-010); the
+ * SPA itself stays cacheable. HSTS
  * (`max-age=31536000; includeSubDomains`) is sent only in production —
  * the terminator also sends it, and in development plain-HTTP localhost
  * must not pin HTTPS.
@@ -33,6 +35,26 @@ import type { ServerEnv } from "../server";
 
 /** HSTS value sent on every production response. */
 export const HSTS_VALUE = "max-age=31536000; includeSubDomains";
+
+/** Path prefixes that are API surfaces: JSON 404s and no-store caching. */
+const API_PATH_PREFIXES = ["/api", "/auth", "/oauth", "/.well-known", "/mcp"];
+
+/**
+ * Whether a request path belongs to an API surface: one of the API
+ * prefixes as a whole path segment (so the SPA's `/authorize` consent
+ * page is not mistaken for `/auth`), or the healthcheck.
+ *
+ * @param path - request path
+ * @returns true for API paths
+ */
+export function isApiPath(path: string): boolean {
+  return (
+    path === "/healthcheck" ||
+    API_PATH_PREFIXES.some(
+      (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+    )
+  );
+}
 
 /**
  * Build the Content-Security-Policy value (research R6 plus the
@@ -85,12 +107,7 @@ export function createSecurityHeadersMiddleware(
     c.header("X-Content-Type-Options", "nosniff");
     c.header("Referrer-Policy", "same-origin");
     c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-    const path = c.req.path;
-    if (
-      path.startsWith("/api") ||
-      path.startsWith("/auth") ||
-      path === "/healthcheck"
-    ) {
+    if (isApiPath(c.req.path)) {
       c.header("Cache-Control", "no-store");
     }
     if (sendHsts) {

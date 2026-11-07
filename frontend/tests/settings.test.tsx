@@ -94,12 +94,19 @@ type RouteHandler = (
 
 /**
  * Stub global fetch to serve the sync-credentials API. Routes are keyed by
- * "METHOD url"; each call gets a fresh Response.
+ * "METHOD url"; each call gets a fresh Response. The Connected apps list
+ * the page also loads defaults to empty unless a route overrides it.
  *
- * @param routes - the stubbed routes
+ * @param overrides - the stubbed routes, overriding the defaults
  * @returns the fetch mock for assertions
  */
-function stubSyncApi(routes: Record<string, StubRoute | RouteHandler>): Mock {
+function stubSyncApi(
+  overrides: Record<string, StubRoute | RouteHandler>,
+): Mock {
+  const routes: Record<string, StubRoute | RouteHandler> = {
+    "GET /api/oauth/grants": { status: 200, body: { grants: [] } },
+    ...overrides,
+  };
   const fetchMock = vi
     .fn()
     .mockImplementation(
@@ -562,7 +569,11 @@ describe("SettingsPage", () => {
     });
 
     expect(container.querySelector('[role="alertdialog"]')).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      fetchMock.mock.calls.filter(
+        ([, init]) => (init as RequestInit | undefined)?.method === "DELETE",
+      ),
+    ).toHaveLength(0);
     expect(
       container.querySelector('table[aria-label="Sync keys"]')?.textContent,
     ).toContain("Laptop");
@@ -611,5 +622,33 @@ describe("SettingsPage", () => {
     const link = admin.querySelector('a[href="/admin"]');
     expect(link).not.toBeNull();
     expect(link?.textContent).toContain("Manage users");
+  });
+
+  it("shows the Connected apps section with the caller's grants", async () => {
+    stubSyncApi({
+      "GET /api/sync-credentials": listRoute(),
+      "GET /api/oauth/grants": {
+        status: 200,
+        body: {
+          grants: [
+            {
+              id: "g1",
+              clientName: "Claude",
+              createdAt: "2026-11-01T09:30:00.000Z",
+              lastUsedAt: null,
+            },
+          ],
+        },
+      },
+    });
+    const container = await renderSettings();
+
+    const headings = Array.from(container.querySelectorAll("h2")).map((h) =>
+      h.textContent?.trim(),
+    );
+    expect(headings).toEqual(["Sync with rclone", "Connected apps"]);
+    expect(
+      container.querySelector('[aria-label="Connected apps"]')?.textContent,
+    ).toContain("Claude");
   });
 });

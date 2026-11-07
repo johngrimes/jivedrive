@@ -32,6 +32,12 @@ Authentication is WebAuthn passkeys only - no passwords.
   labelled S3 keys scoped to their own bucket and prefix and copy a ready
   `rclone.conf`, to sync their drive to a computer with `rclone sync` or
   `rclone bisync`. See [Sync with rclone](#sync-with-rclone).
+- MCP server for AI assistants: Claude (claude.ai, Claude Desktop) and
+  other MCP clients can connect to `<origin>/mcp` as a custom connector,
+  signing in with a passkey and approving access via OAuth. The assistant
+  can list, search and read files, create folders, write text files and
+  move files - never delete them or create share links. See
+  [MCP server](#mcp-server-ai-assistants).
 
 ## Local development
 
@@ -51,8 +57,9 @@ overmind start
 
 [overmind](https://github.com/DarthSim/overmind) launches the processes listed
 in the `Procfile`: the backend on `http://localhost:3000` and the Vite dev
-server on `http://localhost:5173`. The Vite server proxies `/api`, `/auth` and
-`/healthcheck` to the backend (see `frontend/vite.config.ts`), so browse to
+server on `http://localhost:5173`. The Vite server proxies `/api`, `/auth`,
+`/healthcheck`, `/s`, `/mcp`, `/oauth` and `/.well-known` to the backend (see
+`frontend/vite.config.ts`), so browse to
 `http://localhost:5173`. Use `overmind start web` or `overmind start api` to
 run a single process, and `overmind open` to open the web process in your
 browser.
@@ -250,6 +257,71 @@ deleting files through rclone breaks existing share links to them.
 3. Set `JIVEDRIVE_OVH_APPLICATION_KEY`, `JIVEDRIVE_OVH_APPLICATION_SECRET`
    and `JIVEDRIVE_OVH_CONSUMER_KEY` (secrets), plus `JIVEDRIVE_OVH_ENDPOINT`
    and `JIVEDRIVE_OVH_PROJECT_ID`.
+
+## MCP server (AI assistants)
+
+JiveDrive is a remote [Model Context Protocol](https://modelcontextprotocol.io)
+server at `<origin>/mcp` (`https://drive.grimes.id.au/mcp` in production),
+so an AI assistant can work with a user's drive on their behalf.
+
+### Connecting Claude
+
+In Claude (claude.ai or Claude Desktop), open Settings → Connectors → Add
+custom connector, and enter `https://drive.grimes.id.au/mcp` as the URL
+(leave the OAuth client fields empty). Claude opens a JiveDrive consent
+page: sign in with your passkey if prompted, check the app name and the
+list of what it can do, and choose **Allow**. Any MCP client that supports
+the MCP authorization spec (OAuth 2.1 with dynamic client registration and
+PKCE) connects the same way.
+
+Every connection is listed under **Connected apps** in Settings with when
+it was connected and last used; **Revoke** cuts it off immediately. A
+connection unused for 30 days expires (its refresh token lapses) and drops
+off the list; the app must then be connected again. Removing a user
+removes their connections.
+
+### Tools
+
+| Tool            | What it does                                                                                                        |
+| --------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `list_spaces`   | Lists the user's own drive (`own`) and each folder shared with them (`shared:<id>`)                                 |
+| `list_folder`   | Lists a folder's subfolders and files, 1000 entries per page                                                        |
+| `search`        | The same search as the Files page (names and content, own drive and shared folders, 50 results)                     |
+| `read_file`     | Text files as text, PDF/DOCX as extracted text, images as images; text is paged 100,000 characters at a time        |
+| `create_folder` | Creates a folder inside an existing folder                                                                          |
+| `write_file`    | Writes a UTF-8 text file (up to 10 MiB) into an existing folder; replaces an existing file only with `overwrite`    |
+| `move_file`     | Moves a file to another existing folder of the same space, refusing name clashes (share links and search follow it) |
+
+Every tool is limited to the user's own bucket and prefix and the folders
+shared with them, exactly like the web app. There is no tool to delete
+files or create share links. `read_file` refuses files larger than
+`JIVEDRIVE_SEARCH_INDEX_MAX_BYTES` and binary formats other than images.
+Files written by the assistant appear in search after the next background
+index scan, like uploads.
+
+### How it works
+
+The endpoint speaks the stateless Streamable HTTP transport: JSON-RPC 2.0
+over `POST /mcp` with JSON responses (no SSE streams or sessions).
+JiveDrive is its own minimal OAuth 2.1 authorization server, all derived
+from `JIVEDRIVE_WEBAUTHN_ORIGIN` with no extra configuration:
+
+- Discovery: `/.well-known/oauth-protected-resource` (RFC 9728) and
+  `/.well-known/oauth-authorization-server` (RFC 8414); an unauthenticated
+  `/mcp` call returns `401` with a `WWW-Authenticate` header pointing at
+  the resource metadata.
+- `/oauth/register`: dynamic client registration (RFC 7591) for public
+  clients with `https` or loopback `http` redirect URIs.
+- `/oauth/authorize` → the `/authorize` consent page → `/oauth/token`:
+  authorization code grant with PKCE (S256 only) and the `resource`
+  parameter (RFC 8707).
+- Access tokens last 1 hour; refresh tokens last 30 days and rotate on
+  every use, and presenting a used refresh token revokes the connection.
+  Tokens are stored only as SHA-256 hashes. `/oauth/revoke` (RFC 7009)
+  revokes a connection from the client side.
+
+Behind your own Ingress, route `/mcp`, `/oauth/*` and `/.well-known/*` to
+the Service along with everything else.
 
 ## Deployment
 

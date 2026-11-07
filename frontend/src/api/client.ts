@@ -824,3 +824,104 @@ export async function revokeSyncCredential(accessKeyId: string): Promise<void> {
     { noBody: true },
   );
 }
+
+/** A pending OAuth authorization request awaiting the user's consent. */
+export interface AuthorizationRequest {
+  /** The request id from the consent URL. */
+  id: string;
+  /** The client's self-declared name, e.g. "Claude". */
+  clientName: string;
+  /** Host of the redirect URI the browser returns to after the decision. */
+  redirectHost: string;
+  /** ISO 8601 time after which the request can no longer be decided. */
+  expiresAt: string;
+}
+
+/** The user's decision on an authorization request. */
+export type AuthorizationDecision = "approve" | "deny";
+
+/** Response of POST /api/oauth/requests/:id/approve and /deny. */
+export interface AuthorizationDecisionResponse {
+  /** Where to send the browser: the client's redirect URI with the result. */
+  redirectTo: string;
+}
+
+/**
+ * Load a pending OAuth authorization request for the consent page.
+ *
+ * @param id - the request id from `/authorize?request=<id>`
+ * @returns the request's client name, redirect host and expiry
+ * @throws {ApiClientError} on failure; an unknown, expired or already
+ *   decided request is a 404 with code "not_found"
+ */
+export function getAuthorizationRequest(
+  id: string,
+): Promise<AuthorizationRequest> {
+  return apiFetch<AuthorizationRequest>(
+    `/api/oauth/requests/${encodeURIComponent(id)}`,
+  );
+}
+
+/**
+ * Approve or deny a pending OAuth authorization request. The request is
+ * consumed either way; the caller sends the browser to `redirectTo`.
+ *
+ * @param id - the request id
+ * @param decision - "approve" to connect the app, "deny" to refuse
+ * @returns the URL to send the browser to
+ * @throws {ApiClientError} on failure; an unknown, expired or already
+ *   decided request is a 404 with code "not_found"
+ */
+export function decideAuthorizationRequest(
+  id: string,
+  decision: AuthorizationDecision,
+): Promise<AuthorizationDecisionResponse> {
+  return apiFetch<AuthorizationDecisionResponse>(
+    `/api/oauth/requests/${encodeURIComponent(id)}/${decision}`,
+    { method: "POST" },
+  );
+}
+
+/** An app the user has connected to their drive via OAuth. */
+export interface ConnectedApp {
+  /** The grant id, used to revoke it. */
+  id: string;
+  /** The client's self-declared name. */
+  clientName: string;
+  /** ISO 8601 time the user approved the connection. */
+  createdAt: string;
+  /** ISO 8601 time the app last used its access, or null if never. */
+  lastUsedAt: string | null;
+}
+
+/** Response of GET /api/oauth/grants. */
+export interface ListConnectedAppsResponse {
+  /** The caller's connected apps, newest first. */
+  grants: ConnectedApp[];
+}
+
+/**
+ * List the apps the caller has connected to their drive.
+ *
+ * @returns the caller's grants, newest first
+ * @throws {ApiClientError} on failure
+ */
+export function listConnectedApps(): Promise<ListConnectedAppsResponse> {
+  return apiFetch<ListConnectedAppsResponse>("/api/oauth/grants");
+}
+
+/**
+ * Disconnect an app: its grant and every token it holds stop working
+ * immediately.
+ *
+ * @param id - the grant id
+ * @throws {ApiClientError} on failure; an unknown grant or one belonging to
+ *   someone else is a 404 with code "not_found"
+ */
+export async function revokeConnectedApp(id: string): Promise<void> {
+  await apiFetch<void>(
+    `/api/oauth/grants/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    { noBody: true },
+  );
+}

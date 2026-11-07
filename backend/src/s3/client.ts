@@ -347,3 +347,93 @@ export async function createFolderMarker(
     }),
   );
 }
+
+/** An object's bytes and stored content type, from {@link getObject}. */
+export interface ObjectBody {
+  bytes: Uint8Array;
+  /** Stored Content-Type, when the object has one. */
+  contentType: string | null;
+}
+
+/**
+ * Read an object body from an SDK GetObject output. The SDK delivers a
+ * stream (with `transformToByteArray`); test and e2e fakes deliver plain
+ * strings or byte arrays, so all three are accepted.
+ *
+ * @param body - the GetObject output's Body member
+ * @returns the object bytes
+ * @throws {Error} when the body is none of the accepted shapes
+ */
+export async function readObjectBody(body: unknown): Promise<Uint8Array> {
+  if (typeof body === "string") return new TextEncoder().encode(body);
+  if (body instanceof Uint8Array) return body;
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    "transformToByteArray" in body &&
+    typeof body.transformToByteArray === "function"
+  ) {
+    const bytes: unknown = await body.transformToByteArray();
+    if (bytes instanceof Uint8Array) return bytes;
+  }
+  throw new Error("Unsupported S3 object body");
+}
+
+/**
+ * Download an object's bytes. Callers bound the size first (via
+ * {@link headObject}): the whole body is buffered in memory.
+ *
+ * @param client - S3 client
+ * @param bucket - bucket name
+ * @param userPrefix - the effective scope prefix the key must sit under
+ * @param key - full object key
+ * @returns the bytes and stored content type
+ * @throws {RangeError} when the key is outside the prefix
+ */
+export async function getObject(
+  client: S3Client,
+  bucket: string,
+  userPrefix: string,
+  key: string,
+): Promise<ObjectBody> {
+  assertKeyInScope(userPrefix, key);
+  const output = await client.send(
+    new GetObjectCommand({ Bucket: bucket, Key: key }),
+  );
+  return {
+    bytes: await readObjectBody(output.Body),
+    contentType: output.ContentType ?? null,
+  };
+}
+
+/**
+ * Write (create or replace) an object with the given bytes and content
+ * type in a single PUT.
+ *
+ * @param client - S3 client
+ * @param bucket - bucket name
+ * @param userPrefix - the effective scope prefix the key must sit under
+ * @param key - full object key
+ * @param body - object bytes
+ * @param contentType - Content-Type to store
+ * @throws {RangeError} when the key is outside the prefix
+ */
+export async function putObject(
+  client: S3Client,
+  bucket: string,
+  userPrefix: string,
+  key: string,
+  body: Uint8Array,
+  contentType: string,
+): Promise<void> {
+  assertKeyInScope(userPrefix, key);
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: body,
+      ContentLength: body.length,
+      ContentType: contentType,
+    }),
+  );
+}
