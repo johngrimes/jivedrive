@@ -13,6 +13,7 @@ import {
   rpc,
 } from "./mcp-test-helpers";
 import type { RpcResponse } from "./mcp-test-helpers";
+import { MCP_MAX_BODY_BYTES } from "../src/routes/mcp";
 
 afterEach(closeMcpTestDatabases);
 
@@ -25,6 +26,42 @@ describe("POST /mcp transport", () => {
       { user: null },
     );
     expect(res.status).toBe(401);
+  });
+
+  it("refuses a body over the limit with 413 and a JSON-RPC error", async () => {
+    const { app } = createMcpTestEnv();
+    const res = await postRaw(app, "x".repeat(MCP_MAX_BODY_BYTES + 1));
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as RpcResponse;
+    expect(body).toMatchObject({ jsonrpc: "2.0", id: null });
+    expect(body.error?.code).toBe(-32600);
+    expect(body.error?.message).toContain("too large");
+  });
+
+  it("authenticates before applying the body limit", async () => {
+    const { app } = createMcpTestEnv();
+    const res = await postRaw(app, "x".repeat(MCP_MAX_BODY_BYTES + 1), {
+      user: null,
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("accepts a body that fills a maximal JSON-escaped write_file call", async () => {
+    const { app } = createMcpTestEnv();
+    // 10 MiB of control characters, each escaped to six bytes ("\u0001").
+    const content = "\u0001".repeat(10 * 1024 * 1024);
+    const res = await postRaw(
+      app,
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "write_file", arguments: { path: "a.txt", content } },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as RpcResponse;
+    expect(body.result).toBeDefined();
   });
 
   it("answers malformed JSON with a -32700 parse error", async () => {

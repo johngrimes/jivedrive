@@ -275,8 +275,10 @@ the MCP authorization spec (OAuth 2.1 with dynamic client registration and
 PKCE) connects the same way.
 
 Every connection is listed under **Connected apps** in Settings with when
-it was connected and last used; **Revoke** cuts it off immediately.
-Removing a user removes their connections.
+it was connected and last used; **Revoke** cuts it off immediately. A
+connection unused for 30 days expires (its refresh token lapses) and drops
+off the list; the app must then be connected again. Removing a user
+removes their connections.
 
 ### Tools
 

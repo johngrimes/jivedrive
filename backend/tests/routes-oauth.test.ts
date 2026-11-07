@@ -175,11 +175,63 @@ describe("POST /oauth/register", () => {
       [42],
       ["custom-scheme://cb"],
       Array.from({ length: 11 }, (_, i) => `https://x.example/${i}`),
+      [`https://x.example/${"a".repeat(2049 - "https://x.example/".length)}`],
     ]) {
       const res = await register(app, { client_name: "X", redirect_uris });
       expect(res.status).toBe(400);
       expect(await oauthError(res)).toBe("invalid_redirect_uri");
     }
+  });
+
+  it("accepts a redirect URI of exactly 2048 characters", async () => {
+    const { app } = createOAuthApp(databases);
+    const uri = `https://x.example/${"a".repeat(2048 - "https://x.example/".length)}`;
+    expect(uri).toHaveLength(2048);
+    const res = await register(app, { redirect_uris: [uri] });
+    expect(res.status).toBe(201);
+  });
+
+  it("refuses request bodies over 16 KiB with 413 on register, token and revoke", async () => {
+    const { app, db } = createOAuthApp(databases);
+    const big = "a".repeat(16 * 1024 + 1);
+    const requests: Array<[string, string, string]> = [
+      [
+        "/oauth/register",
+        "application/json",
+        JSON.stringify({
+          client_name: "X",
+          redirect_uris: [REDIRECT_URI],
+          pad: big,
+        }),
+      ],
+      [
+        "/oauth/token",
+        "application/x-www-form-urlencoded",
+        new URLSearchParams({
+          grant_type: "refresh_token",
+          pad: big,
+        }).toString(),
+      ],
+      [
+        "/oauth/revoke",
+        "application/x-www-form-urlencoded",
+        new URLSearchParams({ token: big }).toString(),
+      ],
+    ];
+    for (const [path, type, body] of requests) {
+      const res = await app.request(path, {
+        method: "POST",
+        headers: { "content-type": type },
+        body,
+      });
+      expect(res.status).toBe(413);
+      const json = (await res.json()) as OAuthErrorBody;
+      expect(json.error).toBe("invalid_request");
+      expect(json.error_description).toBeTruthy();
+    }
+    expect(db.query("SELECT COUNT(*) AS n FROM oauth_clients").get()).toEqual({
+      n: 0,
+    });
   });
 
   it("rejects bad client metadata", async () => {
@@ -272,6 +324,30 @@ describe("GET /oauth/authorize", () => {
       expect(location.searchParams.get("state")).toBe("xyz");
       expect(location.searchParams.get("iss")).toBe(ORIGIN);
     }
+  });
+
+  it("redirects a state over 1024 characters with invalid_request and stores nothing", async () => {
+    const { app, db } = createOAuthApp(databases);
+    const clientId = await registerClient(app);
+    const ok = await app.request(
+      authorizeUrl(clientId, { state: "s".repeat(1024) }),
+    );
+    expect(ok.headers.get("location")).toStartWith("/authorize?request=");
+    db.query("DELETE FROM oauth_authorization_requests").run();
+
+    const res = await app.request(
+      authorizeUrl(clientId, { state: "s".repeat(1025) }),
+    );
+    expect(res.status).toBe(302);
+    const location = new URL(res.headers.get("location") ?? "");
+    expect(`${location.origin}${location.pathname}`).toBe(REDIRECT_URI);
+    expect(location.searchParams.get("error")).toBe("invalid_request");
+    expect(location.searchParams.get("iss")).toBe(ORIGIN);
+    // The oversized state is neither stored nor echoed back.
+    expect(location.searchParams.get("state")).toBeNull();
+    expect(
+      db.query("SELECT COUNT(*) AS n FROM oauth_authorization_requests").get(),
+    ).toEqual({ n: 0 });
   });
 });
 

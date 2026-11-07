@@ -84,16 +84,19 @@ export function verifyPkceS256(verifier: string, challenge: string): boolean {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
+/** Longest redirect URI a client may register. */
+export const MAX_REDIRECT_URI_LENGTH = 2048;
+
 /**
- * Whether a redirect URI may be registered: an absolute `https:` URL, or
- * `http:` on a loopback host (localhost, 127.0.0.1, [::1]); never with a
- * fragment.
+ * Whether a redirect URI may be registered: at most 2048 characters, an
+ * absolute `https:` URL, or `http:` on a loopback host (localhost,
+ * 127.0.0.1, [::1]); never with a fragment.
  *
  * @param uri - candidate redirect URI
  * @returns true when the URI is acceptable
  */
 export function isAllowedRedirectUri(uri: string): boolean {
-  if (uri.includes("#")) return false;
+  if (uri.length > MAX_REDIRECT_URI_LENGTH || uri.includes("#")) return false;
   let url: URL;
   try {
     url = new URL(uri);

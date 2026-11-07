@@ -1698,6 +1698,14 @@ interface OAuthClientRow {
 }
 
 /**
+ * SQL predicate (over grant alias `g`, bound `$now` ISO time) that holds
+ * while a grant can still be used: it has an unexpired access token, an
+ * unexpired unused refresh token, or an unexpired unused code. A grant
+ * failing it (e.g. after 30 idle days) is dead: unlisted and swept.
+ */
+const OAUTH_GRANT_ALIVE_SQL = `(EXISTS (SELECT 1 FROM oauth_access_tokens a WHERE a.grantId = g.id AND a.expiresAt > $now) OR EXISTS (SELECT 1 FROM oauth_refresh_tokens r WHERE r.grantId = g.id AND r.usedAt IS NULL AND r.expiresAt > $now) OR EXISTS (SELECT 1 FROM oauth_codes o WHERE o.grantId = g.id AND o.usedAt IS NULL AND o.expiresAt > $now))`;
+
+/**
  * Store a registered client.
  *
  * @param db - database connection
@@ -1838,12 +1846,13 @@ export function getOAuthGrant(db: Database, id: string): OAuthGrant | null {
 export function listOAuthGrantsByUser(
   db: Database,
   userId: string,
+  now: Date = new Date(),
 ): OAuthGrantSummary[] {
   const rows = db
     .query(
-      "SELECT g.id, g.userId, g.clientId, c.clientName, g.createdAt, g.lastUsedAt FROM oauth_grants g JOIN oauth_clients c ON c.clientId = g.clientId WHERE g.userId = ? ORDER BY g.createdAt DESC, g.rowid DESC",
+      `SELECT g.id, g.userId, g.clientId, c.clientName, g.createdAt, g.lastUsedAt FROM oauth_grants g JOIN oauth_clients c ON c.clientId = g.clientId WHERE g.userId = $userId AND ${OAUTH_GRANT_ALIVE_SQL} ORDER BY g.createdAt DESC, g.rowid DESC`,
     )
-    .all(userId) as OAuthGrantSummary[];
+    .all({ $userId: userId, $now: now.toISOString() }) as OAuthGrantSummary[];
   return rows.map((row) => ({ ...row }));
 }
 
@@ -2016,7 +2025,8 @@ export function markOAuthRefreshTokenUsed(
 /**
  * Delete dead OAuth rows: expired authorization requests, codes, access
  * tokens and refresh tokens (used refresh tokens are kept until they
- * expire so a replay is still detected and revokes the grant), and
+ * expire so a replay is still detected and revokes the grant), dead
+ * grants (nothing usable left, see {@link OAUTH_GRANT_ALIVE_SQL}), and
  * clients registered more than 30 days ago that hold no grant.
  *
  * @param db - database connection
@@ -2028,6 +2038,9 @@ export function sweepExpiredOAuth(db: Database, now: Date = new Date()): void {
     now.getTime() - UNUSED_CLIENT_TTL_SECONDS * 1000,
   ).toISOString();
   db.transaction(() => {
+    db.query(
+      `DELETE FROM oauth_grants WHERE id IN (SELECT g.id FROM oauth_grants g WHERE NOT ${OAUTH_GRANT_ALIVE_SQL})`,
+    ).run({ $now: iso });
     db.query(
       "DELETE FROM oauth_authorization_requests WHERE expiresAt <= ?",
     ).run(iso);

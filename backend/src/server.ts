@@ -436,9 +436,13 @@ export function main(): void {
   // rows at startup, mirroring the session sweep — dead rows never
   // serve, and a restarted replica starts with a clean link table.
   sweepExpiredShareLinks(db);
-  // Expired OAuth requests, codes and tokens, and long-unused clients,
-  // are swept at startup too; lookups check expiry lazily in between.
+  // Expired OAuth requests, codes and tokens, dead grants and long-unused
+  // clients are swept at startup and then hourly (hourly refreshes add a
+  // used refresh token per grant each hour); lookups check expiry lazily
+  // in between. The timer is unref'd so it never holds the process open.
   sweepExpiredOAuth(db);
+  const oauthSweepIntervalMs = 60 * 60 * 1000;
+  setInterval(() => sweepExpiredOAuth(db), oauthSweepIntervalMs).unref();
   // One shared registry: the admin scan-status route reads what the
   // background scheduler and the reindex endpoint record.
   const scanStatus = createScanStatusRegistry();

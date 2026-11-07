@@ -139,12 +139,14 @@ export function oauthGrantsRoutes(deps: OAuthGrantsRouteDeps): Hono<ServerEnv> {
 
   app.get("/grants", (c) =>
     c.json({
-      grants: listOAuthGrantsByUser(db, c.get("user").id).map((grant) => ({
-        id: grant.id,
-        clientName: grant.clientName,
-        createdAt: grant.createdAt,
-        lastUsedAt: grant.lastUsedAt,
-      })),
+      grants: listOAuthGrantsByUser(db, c.get("user").id, new Date(now())).map(
+        (grant) => ({
+          id: grant.id,
+          clientName: grant.clientName,
+          createdAt: grant.createdAt,
+          lastUsedAt: grant.lastUsedAt,
+        }),
+      ),
     }),
   );
 

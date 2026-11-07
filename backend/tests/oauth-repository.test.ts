@@ -172,7 +172,14 @@ describe("OAuth repository", () => {
       createdAt: at(20),
     });
     touchOAuthGrant(db, "g1", at(30));
-    expect(listOAuthGrantsByUser(db, alice.id)).toEqual([
+    for (const id of ["g1", "g2"]) {
+      createOAuthRefreshToken(db, {
+        tokenHash: `r-${id}`,
+        grantId: id,
+        expiresAt: at(30 * 86400),
+      });
+    }
+    expect(listOAuthGrantsByUser(db, alice.id, new Date(at(100)))).toEqual([
       {
         id: "g2",
         userId: alice.id,
@@ -191,6 +198,91 @@ describe("OAuth repository", () => {
       },
     ]);
     expect(getOAuthGrant(db, "g3")?.userId).toBe(bob.id);
+  });
+
+  it("treats a grant with nothing usable left as dead: unlisted and swept", () => {
+    const { db, alice } = createDb();
+    // live-code: only an unused, unexpired code.
+    createOAuthGrant(db, {
+      id: "live-code",
+      userId: alice.id,
+      clientId: "client-1",
+      createdAt: T0,
+    });
+    createOAuthCode(db, {
+      codeHash: "c-live",
+      grantId: "live-code",
+      redirectUri: "https://claude.ai/cb",
+      codeChallenge: "x",
+      resource: "r",
+      expiresAt: at(60),
+    });
+    // live-access: only an unexpired access token.
+    createOAuthGrant(db, {
+      id: "live-access",
+      userId: alice.id,
+      clientId: "client-1",
+      createdAt: T0,
+    });
+    createOAuthAccessToken(db, {
+      tokenHash: "a-live",
+      grantId: "live-access",
+      expiresAt: at(3600),
+    });
+    // live-refresh: an unused refresh token valid for 30 days.
+    createOAuthGrant(db, {
+      id: "live-refresh",
+      userId: alice.id,
+      clientId: "client-1",
+      createdAt: T0,
+    });
+    createOAuthRefreshToken(db, {
+      tokenHash: "r-live",
+      grantId: "live-refresh",
+      expiresAt: at(30 * 86400),
+    });
+    // dead-used: its only refresh token and code were already used.
+    createOAuthGrant(db, {
+      id: "dead-used",
+      userId: alice.id,
+      clientId: "client-1",
+      createdAt: T0,
+    });
+    createOAuthRefreshToken(db, {
+      tokenHash: "r-used",
+      grantId: "dead-used",
+      expiresAt: at(30 * 86400),
+    });
+    markOAuthRefreshTokenUsed(db, "r-used", at(1));
+    createOAuthCode(db, {
+      codeHash: "c-used",
+      grantId: "dead-used",
+      redirectUri: "https://claude.ai/cb",
+      codeChallenge: "x",
+      resource: "r",
+      expiresAt: at(60),
+    });
+    markOAuthCodeUsed(db, "c-used", at(1));
+
+    const ids = (now: string) =>
+      listOAuthGrantsByUser(db, alice.id, new Date(now))
+        .map((g) => g.id)
+        .sort();
+    expect(ids(at(10))).toEqual(["live-access", "live-code", "live-refresh"]);
+    // The code expires at 60 s, the access token at 1 h.
+    expect(ids(at(60))).toEqual(["live-access", "live-refresh"]);
+    expect(ids(at(3600))).toEqual(["live-refresh"]);
+    // 30 idle days later the refresh token has expired too.
+    expect(ids(at(30 * 86400))).toEqual([]);
+
+    sweepExpiredOAuth(db, new Date(at(3600)));
+    expect(getOAuthGrant(db, "dead-used")).toBeNull();
+    expect(getOAuthGrant(db, "live-code")).toBeNull();
+    expect(getOAuthGrant(db, "live-access")).toBeNull();
+    expect(getOAuthGrant(db, "live-refresh")).not.toBeNull();
+    sweepExpiredOAuth(db, new Date(at(30 * 86400)));
+    expect(getOAuthGrant(db, "live-refresh")).toBeNull();
+    expect(count(db, "oauth_grants")).toBe(0);
   });
 
   it("marks codes and refresh tokens used exactly once", () => {

@@ -12,6 +12,7 @@
  */
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config";
@@ -57,6 +58,15 @@ const DEFAULT_CLIENT_NAME = "Unnamed client";
 
 /** A PKCE S256 challenge: base64url SHA-256 (43 characters). */
 const CODE_CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+/** Longest `state` accepted at /oauth/authorize (it is stored). */
+const MAX_STATE_LENGTH = 1024;
+
+/**
+ * Largest request body accepted by the unauthenticated POST endpoints;
+ * registration (10 URIs of at most 2048 characters) fits comfortably.
+ */
+const MAX_BODY_BYTES = 16 * 1024;
 
 /** Dependencies for {@link oauthRoutes}. */
 export interface OAuthRouteDeps {
@@ -173,8 +183,22 @@ export function oauthRoutes(deps: OAuthRouteDeps): Hono<ServerEnv> {
     c.json(buildAuthorizationServerMetadata(config)),
   );
 
+  // Anonymous endpoints must not accept unbounded bodies (stored rows,
+  // memory): over-limit requests get 413 with an RFC 6749-style body.
+  const limitBody = bodyLimit({
+    maxSize: MAX_BODY_BYTES,
+    onError: (c) =>
+      c.json(
+        {
+          error: "invalid_request",
+          error_description: `Request body exceeds ${MAX_BODY_BYTES} bytes`,
+        },
+        413,
+      ),
+  });
+
   // RFC 7591 dynamic registration of public clients.
-  app.post("/oauth/register", async (c) => {
+  app.post("/oauth/register", limitBody, async (c) => {
     let body: unknown;
     try {
       body = await c.req.json();
@@ -255,16 +279,24 @@ export function oauthRoutes(deps: OAuthRouteDeps): Hono<ServerEnv> {
         400,
       );
     }
+    // An oversized state is the invalid parameter, so it is not echoed.
+    const stateOk = q.state === undefined || q.state.length <= MAX_STATE_LENGTH;
     const fail = (error: string, description: string) =>
       c.redirect(
         appendQuery(redirectUri, {
           error,
           error_description: description,
-          state: q.state,
+          state: stateOk ? q.state : undefined,
           iss: issuer,
         }),
         302,
       );
+    if (!stateOk) {
+      return fail(
+        "invalid_request",
+        `state must be at most ${MAX_STATE_LENGTH} characters`,
+      );
+    }
     if (q.response_type !== "code") {
       return fail("unsupported_response_type", "response_type must be code");
     }
@@ -301,7 +333,7 @@ export function oauthRoutes(deps: OAuthRouteDeps): Hono<ServerEnv> {
     return c.redirect(`/authorize?request=${request.id}`, 302);
   });
 
-  app.post("/oauth/token", async (c) => {
+  app.post("/oauth/token", limitBody, async (c) => {
     c.header("Cache-Control", "no-store");
     const params = await readParams(c);
     const at = new Date(now());
@@ -409,7 +441,7 @@ export function oauthRoutes(deps: OAuthRouteDeps): Hono<ServerEnv> {
 
   // RFC 7009: always 200; a token presented by the client that owns it
   // revokes the whole grant (access and refresh tokens alike).
-  app.post("/oauth/revoke", async (c) => {
+  app.post("/oauth/revoke", limitBody, async (c) => {
     const { token, client_id } = await readParams(c);
     if (token && client_id) {
       const tokenHash = hashOAuthSecret(token);

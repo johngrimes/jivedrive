@@ -189,6 +189,23 @@ describe("connected apps API", () => {
     ).toBe(401);
   });
 
+  it("omits a grant whose refresh token expired after 30 idle days", async () => {
+    const { app, clock } = createOAuthApp(databases);
+    await connect(app);
+    const list = async () =>
+      (
+        (await (
+          await app.request("/api/oauth/grants", {
+            headers: { cookie: aliceCookie },
+          })
+        ).json()) as { grants: GrantBody[] }
+      ).grants;
+    clock.now += 30 * 86400 * 1000 - 1000;
+    expect(await list()).toHaveLength(1);
+    clock.now += 1000;
+    expect(await list()).toEqual([]);
+  });
+
   it("lists only the caller's grants, newest first", async () => {
     const { app, db, clock } = createOAuthApp(databases);
     const created1 = new Date(clock.now).toISOString();
