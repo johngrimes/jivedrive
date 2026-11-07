@@ -156,6 +156,11 @@ export function ShareModal({ file, space = "own", onClose }: ShareModalProps) {
           </p>
         )}
 
+        <p className="mt-2 text-xs opacity-70">
+          Anyone with this link can download the file until it expires. Links
+          cannot be listed or revoked early - they expire on their own.
+        </p>
+
         {error && (
           <p className="alert alert-error mt-3" role="alert">
             {error}
@@ -182,11 +187,6 @@ export function ShareModal({ file, space = "own", onClose }: ShareModalProps) {
             Done
           </button>
         </div>
-
-        <p className="text-xs opacity-70">
-          Anyone with this link can download the file until it expires. Links
-          cannot be listed or revoked early - they expire on their own.
-        </p>
       </div>
       <button
         className="modal-backdrop"
