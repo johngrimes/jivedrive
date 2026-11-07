@@ -209,9 +209,10 @@ test("a user connects an MCP client, it uses the drive, and revoking cuts it off
   );
   await openConsent(page, context, client, "state-allow");
   await expect(
-    page.getByText("cannot delete files or create share links", {
-      exact: false,
-    }),
+    page.getByText("Create public share links to files", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("It cannot delete files.", { exact: true }),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Allow" }).click();
@@ -252,6 +253,7 @@ test("a user connects an MCP client, it uses the drive, and revoking cuts it off
   const names = (list.body?.result?.tools ?? []).map((t) => t.name);
   expect(names.sort()).toEqual([
     "create_folder",
+    "create_share_link",
     "list_folder",
     "list_spaces",
     "move_file",
@@ -284,6 +286,21 @@ test("a user connects an MCP client, it uses the drive, and revoking cuts it off
     content: "again",
   });
   expect(clash.isError).toBe(true);
+
+  // A share link created by the assistant opens anonymously (the request
+  // fixture carries no session cookie) and serves the file's bytes.
+  const link = await callTool(
+    request,
+    tokens.access_token,
+    "create_share_link",
+    { path: "notes/hello.txt", expiresIn: "1h" },
+  );
+  expect(link.isError).toBeFalsy();
+  const url = (link.structuredContent as { url: string }).url;
+  expect(url).toMatch(/^http:\/\/localhost:5173\/s\/[A-Za-z0-9]{12}$/);
+  const opened = await request.get(url);
+  expect(opened.status()).toBe(200);
+  expect(await opened.text()).toContain("hello from mia");
 
   // The written file is visible in the web listing.
   await page.goto("/files?prefix=notes%2F");

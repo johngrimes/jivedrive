@@ -88,7 +88,7 @@ describe("/mcp behind OAuth", () => {
     );
   });
 
-  test("an issued access token lists the seven tools", async () => {
+  test("an issued access token lists the eight tools", async () => {
     const { app } = createOAuthApp(databases);
     const { tokens } = await connect(app);
     const res = await rpc(app, "tools/list", {}, tokens.access_token);
@@ -96,6 +96,7 @@ describe("/mcp behind OAuth", () => {
     const body = (await res.json()) as RpcBody;
     expect((body.result?.tools ?? []).map((t) => t.name).sort()).toEqual([
       "create_folder",
+      "create_share_link",
       "list_folder",
       "list_spaces",
       "move_file",

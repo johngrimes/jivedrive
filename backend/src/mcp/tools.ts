@@ -1,7 +1,8 @@
 /**
  * The MCP drive tools: `list_spaces`, `list_folder`, `search`,
- * `read_file`, `create_folder`, `write_file` and `move_file`, exposing the
- * signed-in user's own space and the folders shared with them.
+ * `read_file`, `create_folder`, `write_file`, `move_file` and
+ * `create_share_link`, exposing the signed-in user's own space and the
+ * folders shared with them.
  *
  * Every tool addresses storage as a `space` (`"own"` or
  * `"shared:<shareId>"`, resolved through the same resolver as
@@ -14,8 +15,12 @@
 import type { S3Client } from "@aws-sdk/client-s3";
 import type { Database } from "bun:sqlite";
 import type { AppConfig } from "../config";
-import type { User } from "../db/repository";
-import { getUserById, listSharesByRecipient } from "../db/repository";
+import type { ShareLinkLifetime, User } from "../db/repository";
+import {
+  createShareLink,
+  getUserById,
+  listSharesByRecipient,
+} from "../db/repository";
 import {
   createFolder,
   listFolder,
@@ -53,6 +58,17 @@ export const WRITE_MAX_BYTES = 10 * 1024 * 1024;
 /** Folder listing page size (the S3 protocol limit). */
 const LIST_PAGE_SIZE = 1000;
 
+/** Share-link lifetimes `create_share_link` accepts, as in the web app. */
+const SHARE_LINK_LIFETIMES: readonly ShareLinkLifetime[] = [
+  "1h",
+  "24h",
+  "7d",
+  "30d",
+];
+
+/** Share-link lifetime when `expiresIn` is omitted (the web app's default). */
+const SHARE_LINK_DEFAULT_LIFETIME: ShareLinkLifetime = "7d";
+
 /** Instructions returned by `initialize`. */
 export const SERVER_INSTRUCTIONS =
   "JiveDrive gives you access to the signed-in user's file storage. " +
@@ -63,8 +79,10 @@ export const SERVER_INSTRUCTIONS =
   'never start with "/", and use "" for the root folder. Use list_folder ' +
   "to browse and search to find files by name or content, then read_file " +
   "to read them. You can create folders, write text files (refused if " +
-  "the file exists unless overwrite is true) and move files between " +
-  "folders of the same space. You cannot delete files or create share links.";
+  "the file exists unless overwrite is true), move files between " +
+  "folders of the same space and create share links: public links to " +
+  "one file that anyone can open without signing in until they expire. " +
+  "You cannot delete files.";
 
 /** The `space` argument schema shared by most tools. */
 const SPACE_SCHEMA = {
@@ -244,6 +262,35 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       openWorldHint: false,
     },
   },
+  {
+    name: "create_share_link",
+    title: "Create share link",
+    description:
+      "Create a public link to one file. Anyone with the link can download the file without signing in until it expires; it cannot be revoked early, so only create one when the user wants the file shared. Creating a link again for the same file and lifetime returns the existing link.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        space: SPACE_SCHEMA,
+        path: {
+          type: "string",
+          description: "File path relative to the space root.",
+        },
+        expiresIn: {
+          type: "string",
+          enum: SHARE_LINK_LIFETIMES,
+          description: `How long the link works: ${SHARE_LINK_LIFETIMES.join(", ")} (default ${SHARE_LINK_DEFAULT_LIFETIME}).`,
+        },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
 ];
 
 /** A tool failure the model can act on. */
@@ -297,6 +344,28 @@ async function scopeFolderExists(
     scope.prefix,
     scope.prefix + folder + "/",
   );
+}
+
+/**
+ * The tool error for a file path with no object: a folder is named as
+ * such, anything else is not found.
+ *
+ * @param ctx - tool context
+ * @param scope - effective scope
+ * @param path - validated file path
+ * @returns the tool error
+ */
+async function missingFileError(
+  ctx: ToolContext,
+  scope: ResolvedScope,
+  path: string,
+): Promise<ToolResult> {
+  if (await scopeFolderExists(ctx, scope, path)) {
+    return toolError(
+      `"${path}" is a folder; use list_folder to see its contents`,
+    );
+  }
+  return toolError(`File not found: "${path}"`);
 }
 
 /** `list_spaces`: the own space plus every resolvable incoming share. */
@@ -468,14 +537,7 @@ async function readFileTool(
   const max = ctx.config.searchIndexMaxBytes;
 
   const head = await headObject(ctx.s3Client, scope.bucket, scope.prefix, key);
-  if (head === null) {
-    if (await scopeFolderExists(ctx, scope, path)) {
-      return toolError(
-        `"${path}" is a folder; use list_folder to see its contents`,
-      );
-    }
-    return toolError(`File not found: "${path}"`);
-  }
+  if (head === null) return missingFileError(ctx, scope, path);
   const tooLarge = (size: number) =>
     toolError(
       `"${path}" is too large to read (${size} bytes; the limit is ${max} bytes)`,
@@ -658,6 +720,44 @@ async function moveFileTool(
   return toolSuccess({ path: moved.value.toKey.slice(scope.prefix.length) });
 }
 
+/**
+ * `create_share_link`: the `/api/files/share-url` semantics for one
+ * existing file. The link belongs to the caller (also for a file in a
+ * shared space) and is deduplicated per caller, file and lifetime.
+ */
+async function createShareLinkTool(
+  ctx: ToolContext,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  const file = parseFilePath(args.path);
+  if (!file.ok) return toolError(file.error);
+  const expiresIn =
+    args.expiresIn === undefined ? SHARE_LINK_DEFAULT_LIFETIME : args.expiresIn;
+  if (!(SHARE_LINK_LIFETIMES as readonly unknown[]).includes(expiresIn)) {
+    return toolError(
+      `expiresIn must be one of ${SHARE_LINK_LIFETIMES.join(", ")}`,
+    );
+  }
+  const scope = resolveSpaceArg(ctx, args.space);
+  if ("content" in scope) return scope;
+  const key = scope.prefix + file.path;
+  const head = await headObject(ctx.s3Client, scope.bucket, scope.prefix, key);
+  if (head === null) return missingFileError(ctx, scope, file.path);
+  // The row stores the resolved bucket and key, so the anonymous /s route
+  // serves it without re-deriving scope; headObject has already asserted
+  // the key lies inside the scope.
+  const link = createShareLink(ctx.db, {
+    ownerUserId: ctx.user.id,
+    bucket: scope.bucket,
+    objectKey: key,
+    expiresIn: expiresIn as ShareLinkLifetime,
+  });
+  return toolSuccess({
+    url: `${ctx.config.webauthn.origin}/s/${link.token}`,
+    expiresAt: link.expiresAt,
+  });
+}
+
 /** Tool implementations by name. */
 const HANDLERS: Record<
   string,
@@ -673,6 +773,7 @@ const HANDLERS: Record<
   create_folder: createFolderTool,
   write_file: writeFileTool,
   move_file: moveFileTool,
+  create_share_link: createShareLinkTool,
 };
 
 /**
