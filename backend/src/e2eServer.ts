@@ -38,6 +38,8 @@ interface MockObject {
   size: number;
   /** ISO 8601 timestamp. */
   lastModified: string;
+  /** Content-Type from a server-side PutObject, served back on download. */
+  contentType?: string;
 }
 
 /** In-memory mock object store keyed by full object key. */
@@ -218,7 +220,7 @@ function createMockS3Client(): S3Client {
       }
       case "PutObjectCommand": {
         // Server-side writes: folder creation's zero-byte marker objects
-        // and MCP write_file text. Browser uploads PUT to the mock HTTP
+        // and MCP write_file content. Browser uploads PUT to the mock HTTP
         // server instead.
         const body =
           typeof input.Body === "string"
@@ -229,6 +231,7 @@ function createMockS3Client(): S3Client {
         objectStore.set(input.Key as string, {
           body,
           size: body.byteLength,
+          contentType: input.ContentType as string | undefined,
           lastModified: new Date().toISOString(),
         });
         return {};
@@ -240,7 +243,7 @@ function createMockS3Client(): S3Client {
           err.name = "NoSuchKey";
           throw err;
         }
-        return { Body: object.body };
+        return { Body: object.body, ContentType: object.contentType };
       }
       default:
         throw new Error(`Unhandled mock S3 command: ${name}`);
@@ -687,6 +690,7 @@ mockS3.get("/:bucket/*", (c) => {
   if (!object) return c.json({ error: "NoSuchKey" }, 404);
   const fileName = encodeURIComponent(key.split("/").pop() ?? "download");
   c.header("Content-Disposition", `attachment; filename="${fileName}"`);
+  if (object.contentType) c.header("Content-Type", object.contentType);
   return c.body(object.body);
 });
 

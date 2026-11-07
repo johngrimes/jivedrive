@@ -642,6 +642,139 @@ describe("write_file", () => {
     });
     expect(result.isError).toBe(true);
   });
+
+  it("writes base64 content as exact bytes with a guessed binary type", async () => {
+    const env = createMcpTestEnv();
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0x0a]);
+    const result = await callTool(env.app, "write_file", {
+      path: "pic.PNG",
+      content: Buffer.from(bytes).toString("base64"),
+      encoding: "base64",
+    });
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent).toEqual({ path: "pic.PNG", size: 7 });
+    const stored = env.store.get("users/alice/pic.PNG");
+    expect(stored?.body).toEqual(bytes);
+    expect(stored?.contentType).toBe("image/png");
+
+    for (const [path, type] of [
+      ["report.pdf", "application/pdf"],
+      [
+        "sheet.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ],
+      ["bundle.zip", "application/zip"],
+      ["notes.md", "text/markdown"],
+      ["blob.xyz", "application/octet-stream"],
+      ["no-extension", "application/octet-stream"],
+    ]) {
+      const written = await callTool(env.app, "write_file", {
+        path,
+        content: "AAEC",
+        encoding: "base64",
+      });
+      expect(written.isError).toBeUndefined();
+      expect(env.store.get(`users/alice/${path}`)?.contentType).toBe(type);
+    }
+  });
+
+  it("treats an explicit text encoding like the default", async () => {
+    const env = createMcpTestEnv();
+    await callTool(env.app, "write_file", {
+      path: "a.csv",
+      content: "AAEC",
+      encoding: "text",
+    });
+    const stored = env.store.get("users/alice/a.csv");
+    expect(new TextDecoder().decode(stored?.body)).toBe("AAEC");
+    expect(stored?.contentType).toBe("text/csv; charset=utf-8");
+  });
+
+  it("stores an explicit contentType verbatim for either encoding", async () => {
+    const env = createMcpTestEnv();
+    await callTool(env.app, "write_file", {
+      path: "data.bin",
+      content: "AAEC",
+      encoding: "base64",
+      contentType: "image/x-custom",
+    });
+    expect(env.store.get("users/alice/data.bin")?.contentType).toBe(
+      "image/x-custom",
+    );
+    await callTool(env.app, "write_file", {
+      path: "page.txt",
+      content: "<p>hi</p>",
+      contentType: 'text/html; charset="utf-8"',
+    });
+    expect(env.store.get("users/alice/page.txt")?.contentType).toBe(
+      'text/html; charset="utf-8"',
+    );
+  });
+
+  it("refuses malformed base64, encodings and content types", async () => {
+    const env = createMcpTestEnv();
+    for (const [content, label] of [
+      ["AAE", "missing padding"],
+      ["AA=C", "padding in the middle"],
+      ["AA\nEC", "whitespace"],
+      ["AA-_", "base64url alphabet"],
+      ["AAF=", "non-zero trailing bits"],
+    ]) {
+      const result = await callTool(env.app, "write_file", {
+        path: "a.bin",
+        content,
+        encoding: "base64",
+      });
+      expect(result.isError, label).toBe(true);
+      expect(textOf(result), label).toContain("base64");
+    }
+    for (const encoding of ["hex", 1, false]) {
+      const result = await callTool(env.app, "write_file", {
+        path: "a.bin",
+        content: "AAEC",
+        encoding,
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("encoding");
+    }
+    for (const contentType of [
+      "image",
+      "image/png\r\nX-Evil: 1",
+      "image/png; charset",
+      "",
+      1,
+      `image/${"x".repeat(256)}`,
+    ]) {
+      const result = await callTool(env.app, "write_file", {
+        path: "a.bin",
+        content: "AAEC",
+        encoding: "base64",
+        contentType,
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("contentType");
+    }
+    expect(env.store.size).toBe(0);
+  });
+
+  it("limits base64 content to 10 MiB of decoded bytes", async () => {
+    const env = createMcpTestEnv();
+    const max = 10 * 1024 * 1024;
+    const atLimit = await callTool(env.app, "write_file", {
+      path: "max.bin",
+      content: Buffer.alloc(max, 7).toString("base64"),
+      encoding: "base64",
+    });
+    expect(atLimit.structuredContent).toEqual({ path: "max.bin", size: max });
+    const over = await callTool(env.app, "write_file", {
+      path: "over.bin",
+      content: Buffer.alloc(max + 1, 7).toString("base64"),
+      encoding: "base64",
+    });
+    expect(over.isError).toBe(true);
+    expect(textOf(over)).toContain("10 MiB");
+    expect(env.store.has("users/alice/over.bin")).toBe(false);
+  });
 });
 
 describe("move_file", () => {

@@ -34,8 +34,9 @@ import { SERVER_INSTRUCTIONS, TOOL_DEFINITIONS, callTool } from "../mcp/tools";
  * message is a `write_file` call carrying 10 MiB of UTF-8 content, and
  * JSON escaping can inflate that up to 6x (each control character becomes
  * `\u00XX`), so 64 MiB leaves headroom for a maximal call plus its
- * envelope. It only bounds memory: `write_file`'s own 10 MiB check is the
- * real content limit.
+ * envelope. Base64 content needs no escaping, so a maximal binary write
+ * (10 MiB decoded, about 13.4 MiB of base64) is smaller. It only bounds
+ * memory: `write_file`'s own 10 MiB check is the real content limit.
  */
 export const MCP_MAX_BODY_BYTES = 64 * 1024 * 1024;
 

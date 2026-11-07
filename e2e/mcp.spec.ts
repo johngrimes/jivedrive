@@ -302,6 +302,29 @@ test("a user connects an MCP client, it uses the drive, and revoking cuts it off
   expect(opened.status()).toBe(200);
   expect(await opened.text()).toContain("hello from mia");
 
+  // A binary file written as base64 is stored byte for byte with a type
+  // guessed from its extension, so its share link serves it as an image.
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0]);
+  const pngPath = `notes/pixel-r${testInfo.retry}.png`;
+  const binary = await callTool(request, tokens.access_token, "write_file", {
+    path: pngPath,
+    content: png.toString("base64"),
+    encoding: "base64",
+  });
+  expect(binary.isError).toBeFalsy();
+  const pngLink = await callTool(
+    request,
+    tokens.access_token,
+    "create_share_link",
+    { path: pngPath, expiresIn: "1h" },
+  );
+  const pngOpened = await request.get(
+    (pngLink.structuredContent as { url: string }).url,
+  );
+  expect(pngOpened.status()).toBe(200);
+  expect(pngOpened.headers()["content-type"]).toBe("image/png");
+  expect(Buffer.from(await pngOpened.body())).toEqual(png);
+
   // The written file is visible in the web listing.
   await page.goto("/files?prefix=notes%2F");
   await expect(

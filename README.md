@@ -35,7 +35,7 @@ Authentication is WebAuthn passkeys only - no passwords.
 - MCP server for AI assistants: Claude (claude.ai, Claude Desktop) and
   other MCP clients can connect to `<origin>/mcp` as a custom connector,
   signing in with a passkey and approving access via OAuth. The assistant
-  can list, search and read files, create folders, write text files, move
+  can list, search and read files, create folders, write files of any type, move
   files and create short share links - never delete files. See
   [MCP server](#mcp-server-ai-assistants).
 
@@ -282,16 +282,16 @@ removes their connections.
 
 ### Tools
 
-| Tool                | What it does                                                                                                                               |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `list_spaces`       | Lists the user's own drive (`own`) and each folder shared with them (`shared:<id>`)                                                        |
-| `list_folder`       | Lists a folder's subfolders and files, 1000 entries per page                                                                               |
-| `search`            | The same search as the Files page (names and content, own drive and shared folders, 50 results)                                            |
-| `read_file`         | Text files as text, PDF/DOCX as extracted text, images as images; text is paged 100,000 characters at a time                               |
-| `create_folder`     | Creates a folder inside an existing folder                                                                                                 |
-| `write_file`        | Writes a UTF-8 text file (up to 10 MiB) into an existing folder; replaces an existing file only with `overwrite`                           |
-| `move_file`         | Moves a file to another existing folder of the same space, refusing name clashes (share links and search follow it)                        |
-| `create_share_link` | Creates a short share link to an existing file (`1h`, `24h`, `7d` or `30d`, default `7d`); the same file and lifetime return the same link |
+| Tool                | What it does                                                                                                                                                                                                                                          |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_spaces`       | Lists the user's own drive (`own`) and each folder shared with them (`shared:<id>`)                                                                                                                                                                   |
+| `list_folder`       | Lists a folder's subfolders and files, 1000 entries per page                                                                                                                                                                                          |
+| `search`            | The same search as the Files page (names and content, own drive and shared folders, 50 results)                                                                                                                                                       |
+| `read_file`         | Text files as text, PDF/DOCX as extracted text, images as images; text is paged 100,000 characters at a time                                                                                                                                          |
+| `create_folder`     | Creates a folder inside an existing folder                                                                                                                                                                                                            |
+| `write_file`        | Writes a file (up to 10 MiB) into an existing folder: text as-is or any binary type as base64 (`encoding: "base64"`), with the Content-Type guessed from the extension unless `contentType` is given; replaces an existing file only with `overwrite` |
+| `move_file`         | Moves a file to another existing folder of the same space, refusing name clashes (share links and search follow it)                                                                                                                                   |
+| `create_share_link` | Creates a short share link to an existing file (`1h`, `24h`, `7d` or `30d`, default `7d`); the same file and lifetime return the same link                                                                                                            |
 
 Every tool is limited to the user's own bucket and prefix and the folders
 shared with them, exactly like the web app. There is no tool to delete

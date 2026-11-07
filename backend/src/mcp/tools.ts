@@ -52,7 +52,7 @@ export interface ToolContext {
 /** Characters of text returned per `read_file` call. */
 export const READ_PAGE_CHARS = 100_000;
 
-/** Maximum UTF-8 size of `write_file` content in bytes (10 MiB). */
+/** Maximum size of `write_file` content in bytes, after decoding (10 MiB). */
 export const WRITE_MAX_BYTES = 10 * 1024 * 1024;
 
 /** Folder listing page size (the S3 protocol limit). */
@@ -78,8 +78,9 @@ export const SERVER_INSTRUCTIONS =
   'to "own". Paths are relative to the space root, use "/" separators, ' +
   'never start with "/", and use "" for the root folder. Use list_folder ' +
   "to browse and search to find files by name or content, then read_file " +
-  "to read them. You can create folders, write text files (refused if " +
-  "the file exists unless overwrite is true), move files between " +
+  "to read them. You can create folders, write files of any type (text " +
+  "as-is, binary as base64; refused if the file exists unless overwrite " +
+  "is true), move files between " +
   "folders of the same space and create share links: public links to " +
   "one file that anyone can open without signing in until they expire. " +
   "You cannot delete files.";
@@ -208,7 +209,7 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     name: "write_file",
     title: "Write file",
     description:
-      "Write a UTF-8 text file (at most 10 MiB). The parent folder must already exist. An existing file is refused unless overwrite is true, in which case it is replaced.",
+      'Write a file of any type (at most 10 MiB). Send text as-is (encoding "text", the default) or any bytes as base64 (encoding "base64"), e.g. images, PDFs, spreadsheets or archives. The Content-Type is guessed from the extension unless contentType is given. The parent folder must already exist. An existing file is refused unless overwrite is true, in which case it is replaced.',
     inputSchema: {
       type: "object",
       properties: {
@@ -217,7 +218,22 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
           type: "string",
           description: "File path relative to the space root.",
         },
-        content: { type: "string", description: "The file's text content." },
+        content: {
+          type: "string",
+          description:
+            'The file\'s content: UTF-8 text, or standard padded base64 when encoding is "base64".',
+        },
+        encoding: {
+          type: "string",
+          enum: ["text", "base64"],
+          description:
+            'How content is encoded: "text" (default) or "base64" for binary files.',
+        },
+        contentType: {
+          type: "string",
+          description:
+            'Media type to store, e.g. "image/png" (default: guessed from the file extension).',
+        },
         overwrite: {
           type: "boolean",
           description: "Replace an existing file (default false).",
@@ -619,7 +635,7 @@ async function createFolderTool(
   return toolSuccess({ name: created.value.name, path: created.value.prefix });
 }
 
-/** Content types guessed for written files, by extension. */
+/** Content types guessed for written files, by lowercased extension. */
 const CONTENT_TYPES_BY_EXTENSION: Record<string, string> = {
   txt: "text/plain",
   md: "text/markdown",
@@ -636,9 +652,104 @@ const CONTENT_TYPES_BY_EXTENSION: Record<string, string> = {
   yaml: "application/yaml",
   yml: "application/yaml",
   svg: "image/svg+xml",
+  ics: "text/calendar",
+  rtf: "application/rtf",
+  pdf: "application/pdf",
+  doc: "application/msword",
+  xls: "application/vnd.ms-excel",
+  ppt: "application/vnd.ms-powerpoint",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  odt: "application/vnd.oasis.opendocument.text",
+  ods: "application/vnd.oasis.opendocument.spreadsheet",
+  odp: "application/vnd.oasis.opendocument.presentation",
+  epub: "application/epub+zip",
+  ...IMAGE_TYPES_BY_EXTENSION,
+  avif: "image/avif",
+  bmp: "image/bmp",
+  heic: "image/heic",
+  ico: "image/vnd.microsoft.icon",
+  tif: "image/tiff",
+  tiff: "image/tiff",
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  flac: "audio/flac",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+  webm: "video/webm",
+  zip: "application/zip",
+  gz: "application/gzip",
+  tar: "application/x-tar",
+  "7z": "application/x-7z-compressed",
+  woff: "font/woff",
+  woff2: "font/woff2",
+  ttf: "font/ttf",
+  otf: "font/otf",
+  wasm: "application/wasm",
 };
 
-/** `write_file`: write UTF-8 text, refusing existing files unless asked. */
+/** Longest `contentType` argument `write_file` accepts, in characters. */
+const CONTENT_TYPE_MAX_LENGTH = 255;
+
+/**
+ * A media type as RFC 9110 defines it: `type/subtype` tokens with optional
+ * `; name=value` parameters (token or quoted-string values). Rejecting
+ * anything else keeps control characters out of the stored header.
+ */
+const CONTENT_TYPE_PATTERN =
+  /^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+(?:[ \t]*;[ \t]*[!#$%&'*+.^_`|~0-9A-Za-z-]+=(?:[!#$%&'*+.^_`|~0-9A-Za-z-]+|"(?:[\t\x20-\x21\x23-\x5b\x5d-\x7e]|\\[\t\x20-\x7e])*"))*$/;
+
+/**
+ * Decode `write_file` content into the bytes to store. Base64 must be
+ * canonical standard-alphabet base64 (padded, no whitespace): anything
+ * that does not re-encode to itself is refused rather than decoded
+ * leniently into bytes the assistant did not mean.
+ *
+ * @param content - the `content` argument
+ * @param encoding - `"text"` (UTF-8) or `"base64"`
+ * @returns the bytes, or an error message
+ */
+function decodeContent(
+  content: string,
+  encoding: "text" | "base64",
+): { ok: true; bytes: Uint8Array } | { ok: false; error: string } {
+  if (encoding === "text") {
+    const bytes = new TextEncoder().encode(content);
+    if (bytes.length > WRITE_MAX_BYTES) {
+      return {
+        ok: false,
+        error: `content is ${bytes.length} bytes of UTF-8; the limit is 10 MiB (${WRITE_MAX_BYTES} bytes)`,
+      };
+    }
+    return { ok: true, bytes };
+  }
+  const bytes = Buffer.from(content, "base64");
+  if (bytes.toString("base64") !== content) {
+    return {
+      ok: false,
+      error:
+        "content is not valid base64: use the standard alphabet (A-Z, a-z, 0-9, +, /) with = padding and no whitespace",
+    };
+  }
+  if (bytes.length > WRITE_MAX_BYTES) {
+    return {
+      ok: false,
+      error: `content decodes to ${bytes.length} bytes; the limit is 10 MiB (${WRITE_MAX_BYTES} bytes)`,
+    };
+  }
+  return { ok: true, bytes };
+}
+
+/**
+ * `write_file`: write UTF-8 text or base64-encoded bytes, refusing
+ * existing files unless asked. The stored Content-Type is the explicit
+ * `contentType` verbatim, or else guessed from the extension (with
+ * `; charset=utf-8` for text writes), falling back to `text/plain` for
+ * text and `application/octet-stream` for base64.
+ */
 async function writeFileTool(
   ctx: ToolContext,
   args: Record<string, unknown>,
@@ -648,16 +759,28 @@ async function writeFileTool(
   if (typeof args.content !== "string") {
     return toolError("content is required and must be a string");
   }
+  const encoding = args.encoding ?? "text";
+  if (encoding !== "text" && encoding !== "base64") {
+    return toolError('encoding must be "text" or "base64"');
+  }
+  const contentType = args.contentType;
+  if (
+    contentType !== undefined &&
+    (typeof contentType !== "string" ||
+      contentType.length > CONTENT_TYPE_MAX_LENGTH ||
+      !CONTENT_TYPE_PATTERN.test(contentType))
+  ) {
+    return toolError(
+      `contentType must be a media type such as "image/png" or "text/html; charset=utf-8" (at most ${CONTENT_TYPE_MAX_LENGTH} characters)`,
+    );
+  }
   const overwrite = args.overwrite ?? false;
   if (typeof overwrite !== "boolean") {
     return toolError("overwrite must be a boolean");
   }
-  const bytes = new TextEncoder().encode(args.content);
-  if (bytes.length > WRITE_MAX_BYTES) {
-    return toolError(
-      `content is ${bytes.length} bytes of UTF-8; the limit is 10 MiB (${WRITE_MAX_BYTES} bytes)`,
-    );
-  }
+  const decoded = decodeContent(args.content, encoding);
+  if (!decoded.ok) return toolError(decoded.error);
+  const bytes = decoded.bytes;
   const scope = resolveSpaceArg(ctx, args.space);
   if ("content" in scope) return scope;
   const path = file.path;
@@ -677,15 +800,19 @@ async function writeFileTool(
       `A file named "${name}" already exists at "${path}"; pass overwrite: true to replace it`,
     );
   }
-  const baseType =
-    CONTENT_TYPES_BY_EXTENSION[extensionOf(name)] ?? "text/plain";
+  const guessed = CONTENT_TYPES_BY_EXTENSION[extensionOf(name)];
+  const storedType =
+    contentType ??
+    (encoding === "text"
+      ? `${guessed ?? "text/plain"}; charset=utf-8`
+      : (guessed ?? "application/octet-stream"));
   await putObject(
     ctx.s3Client,
     scope.bucket,
     scope.prefix,
     key,
     bytes,
-    `${baseType}; charset=utf-8`,
+    storedType,
   );
   return toolSuccess({ path, size: bytes.length });
 }
