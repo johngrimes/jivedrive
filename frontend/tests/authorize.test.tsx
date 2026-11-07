@@ -235,9 +235,10 @@ describe("AuthorizePage", () => {
       "Create folders",
       "Write new files, and replace existing files when asked",
       "Move files",
+      "Create public share links to files",
     ]);
     expect(text).toContain("in your drive and in folders shared with you");
-    expect(text).toContain("It cannot delete files or create share links.");
+    expect(text).toContain("It cannot delete files.");
     expect(button(container, "Allow")?.className).toContain("min-h-11");
     expect(button(container, "Deny")?.className).toContain("min-h-11");
   });

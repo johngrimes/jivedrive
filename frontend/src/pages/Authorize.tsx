@@ -38,6 +38,7 @@ const CAPABILITIES = [
   "Create folders",
   "Write new files, and replace existing files when asked",
   "Move files",
+  "Create public share links to files",
 ];
 
 /** The consent request's loading state. */
@@ -215,9 +216,7 @@ function Consent({ requestId, username }: ConsentProps) {
             <li key={capability}>{capability}</li>
           ))}
         </ul>
-        <p className="font-semibold">
-          It cannot delete files or create share links.
-        </p>
+        <p className="font-semibold">It cannot delete files.</p>
       </div>
 
       <p className="text-xs opacity-60">

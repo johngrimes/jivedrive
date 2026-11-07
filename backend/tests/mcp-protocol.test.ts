@@ -211,7 +211,7 @@ describe("MCP methods", () => {
     expect(res.result).toEqual({});
   });
 
-  it("tools/list lists exactly the seven tools with schemas and annotations", async () => {
+  it("tools/list lists exactly the eight tools with schemas and annotations", async () => {
     const { app } = createMcpTestEnv();
     const res = await rpc(app, "tools/list");
     const tools = res.result?.tools as Array<{
@@ -222,6 +222,7 @@ describe("MCP methods", () => {
     }>;
     expect(tools.map((t) => t.name).sort()).toEqual([
       "create_folder",
+      "create_share_link",
       "list_folder",
       "list_spaces",
       "move_file",
@@ -241,6 +242,12 @@ describe("MCP methods", () => {
     expect(byName.get("read_file")?.annotations.readOnlyHint).toBe(true);
     expect(byName.get("write_file")?.annotations.readOnlyHint).toBe(false);
     expect(byName.get("write_file")?.annotations.destructiveHint).toBe(true);
+    expect(byName.get("create_share_link")?.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
   });
 
   it("tools/call with an unknown tool is invalid params", async () => {

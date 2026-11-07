@@ -35,8 +35,8 @@ Authentication is WebAuthn passkeys only - no passwords.
 - MCP server for AI assistants: Claude (claude.ai, Claude Desktop) and
   other MCP clients can connect to `<origin>/mcp` as a custom connector,
   signing in with a passkey and approving access via OAuth. The assistant
-  can list, search and read files, create folders, write text files and
-  move files - never delete them or create share links. See
+  can list, search and read files, create folders, write text files, move
+  files and create short share links - never delete files. See
   [MCP server](#mcp-server-ai-assistants).
 
 ## Local development
@@ -282,19 +282,23 @@ removes their connections.
 
 ### Tools
 
-| Tool            | What it does                                                                                                        |
-| --------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `list_spaces`   | Lists the user's own drive (`own`) and each folder shared with them (`shared:<id>`)                                 |
-| `list_folder`   | Lists a folder's subfolders and files, 1000 entries per page                                                        |
-| `search`        | The same search as the Files page (names and content, own drive and shared folders, 50 results)                     |
-| `read_file`     | Text files as text, PDF/DOCX as extracted text, images as images; text is paged 100,000 characters at a time        |
-| `create_folder` | Creates a folder inside an existing folder                                                                          |
-| `write_file`    | Writes a UTF-8 text file (up to 10 MiB) into an existing folder; replaces an existing file only with `overwrite`    |
-| `move_file`     | Moves a file to another existing folder of the same space, refusing name clashes (share links and search follow it) |
+| Tool                | What it does                                                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `list_spaces`       | Lists the user's own drive (`own`) and each folder shared with them (`shared:<id>`)                                                        |
+| `list_folder`       | Lists a folder's subfolders and files, 1000 entries per page                                                                               |
+| `search`            | The same search as the Files page (names and content, own drive and shared folders, 50 results)                                            |
+| `read_file`         | Text files as text, PDF/DOCX as extracted text, images as images; text is paged 100,000 characters at a time                               |
+| `create_folder`     | Creates a folder inside an existing folder                                                                                                 |
+| `write_file`        | Writes a UTF-8 text file (up to 10 MiB) into an existing folder; replaces an existing file only with `overwrite`                           |
+| `move_file`         | Moves a file to another existing folder of the same space, refusing name clashes (share links and search follow it)                        |
+| `create_share_link` | Creates a short share link to an existing file (`1h`, `24h`, `7d` or `30d`, default `7d`); the same file and lifetime return the same link |
 
 Every tool is limited to the user's own bucket and prefix and the folders
 shared with them, exactly like the web app. There is no tool to delete
-files or create share links. `read_file` refuses files larger than
+files. Share links created by the assistant are the same anonymous
+`<origin>/s/<token>` links as the web app's Share action: owned by the
+user, working for anyone until they expire, and never revocable early.
+`read_file` refuses files larger than
 `JIVEDRIVE_SEARCH_INDEX_MAX_BYTES` and binary formats other than images.
 Files written by the assistant appear in search after the next background
 index scan, like uploads.

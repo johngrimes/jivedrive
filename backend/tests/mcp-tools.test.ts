@@ -1,5 +1,5 @@
 /**
- * Tool tests for the MCP endpoint: the seven drive tools over the
+ * Tool tests for the MCP endpoint: the eight drive tools over the
  * signed-in user's own space and folders shared with them, with scope
  * containment (constitution IV) proven against an in-memory fake S3
  * bucket that records every command.
@@ -107,6 +107,7 @@ describe("scope containment", () => {
         ["write_file", { path, content: "x" }],
         ["move_file", { path, toFolder: "" }],
         ["move_file", { path: "a.txt", toFolder: path }],
+        ["create_share_link", { path }],
       ] as const) {
         const result = await callTool(env.app, tool, args, "bob");
         expect(result.isError).toBe(true);
@@ -134,6 +135,12 @@ describe("scope containment", () => {
         env.app,
         "write_file",
         { space: `shared:${env.carolShareId}`, path: "x.txt", content: "x" },
+        "bob",
+      ),
+      await callTool(
+        env.app,
+        "create_share_link",
+        { space: `shared:${env.carolShareId}`, path: "x.txt" },
         "bob",
       ),
       // The owner cannot use their own share id as a space either.
@@ -710,5 +717,120 @@ describe("move_file", () => {
       ),
     ).toBe("other");
     expect(env.store.has("users/alice/a.txt")).toBe(true);
+  });
+});
+
+describe("create_share_link", () => {
+  /** The token of a `<origin>/s/<token>` link, asserting its shape. */
+  function tokenOf(url: unknown): string {
+    expect(url).toMatch(/^http:\/\/localhost:5173\/s\/[A-Za-z0-9]{12}$/);
+    return (url as string).slice((url as string).lastIndexOf("/") + 1);
+  }
+
+  it("creates a 7-day link to an own file by default", async () => {
+    const env = createMcpTestEnv();
+    putFake(env.store, "users/alice/docs/report.pdf", "%PDF");
+    const before = Date.now();
+    const result = await callTool(env.app, "create_share_link", {
+      path: "docs/report.pdf",
+    });
+    expect(result.isError).toBeUndefined();
+    const { url, expiresAt } = result.structuredContent as {
+      url: string;
+      expiresAt: string;
+    };
+    expect(Object.keys(result.structuredContent!).sort()).toEqual([
+      "expiresAt",
+      "url",
+    ]);
+    const row = getShareLinkByToken(env.db, tokenOf(url));
+    expect(row).toMatchObject({
+      ownerUserId: env.alice.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/docs/report.pdf",
+      expiresIn: "7d",
+      expiresAt,
+    });
+    const sevenDays = 7 * 24 * 3600 * 1000;
+    expect(Date.parse(expiresAt)).toBeGreaterThanOrEqual(before + sevenDays);
+    expect(Date.parse(expiresAt)).toBeLessThanOrEqual(Date.now() + sevenDays);
+    // Nothing is written to storage; the file is only checked.
+    expect(env.calls.filter((c) => c.name !== "HeadObjectCommand")).toEqual([]);
+  });
+
+  it("honours expiresIn and returns the same link for the same file and lifetime", async () => {
+    const env = createMcpTestEnv();
+    putFake(env.store, "users/alice/a.txt", "x");
+    const hour = await callTool(env.app, "create_share_link", {
+      path: "a.txt",
+      expiresIn: "1h",
+    });
+    const token = tokenOf(hour.structuredContent?.url);
+    expect(getShareLinkByToken(env.db, token)?.expiresIn).toBe("1h");
+    const again = await callTool(env.app, "create_share_link", {
+      path: "a.txt",
+      expiresIn: "1h",
+    });
+    expect(again.structuredContent).toEqual(hour.structuredContent!);
+    const month = await callTool(env.app, "create_share_link", {
+      path: "a.txt",
+      expiresIn: "30d",
+    });
+    expect(tokenOf(month.structuredContent?.url)).not.toBe(token);
+    expect(
+      getShareLinkByToken(env.db, tokenOf(month.structuredContent?.url))
+        ?.expiresIn,
+    ).toBe("30d");
+  });
+
+  it("links a file inside a folder shared with the caller, owned by the caller", async () => {
+    const env = sharedEnv();
+    putFake(env.store, "users/alice/team/plan.md", "# Plan");
+    const result = await callTool(
+      env.app,
+      "create_share_link",
+      { space: `shared:${env.teamShareId}`, path: "plan.md", expiresIn: "24h" },
+      "bob",
+    );
+    expect(result.isError).toBeUndefined();
+    expect(
+      getShareLinkByToken(env.db, tokenOf(result.structuredContent?.url)),
+    ).toMatchObject({
+      ownerUserId: env.bob.id,
+      bucket: "jivedrive-prod",
+      objectKey: "users/alice/team/plan.md",
+      expiresIn: "24h",
+    });
+  });
+
+  it("refuses a missing file, a folder and an invalid lifetime without creating a link", async () => {
+    const env = createMcpTestEnv();
+    putFake(env.store, "users/alice/docs/a.txt", "x");
+    const missing = await callTool(env.app, "create_share_link", {
+      path: "nope.txt",
+    });
+    expect(missing.isError).toBe(true);
+    expect(textOf(missing)).toContain('File not found: "nope.txt"');
+    const folder = await callTool(env.app, "create_share_link", {
+      path: "docs",
+    });
+    expect(folder.isError).toBe(true);
+    expect(textOf(folder)).toContain('"docs" is a folder');
+    for (const expiresIn of ["2d", "", 7, null]) {
+      const bad = await callTool(env.app, "create_share_link", {
+        path: "docs/a.txt",
+        expiresIn,
+      });
+      expect(bad.isError).toBe(true);
+      expect(textOf(bad)).toContain(
+        "expiresIn must be one of 1h, 24h, 7d, 30d",
+      );
+    }
+    const count = env.db
+      .query("SELECT COUNT(*) AS n FROM share_links")
+      .get() as {
+      n: number;
+    };
+    expect(count.n).toBe(0);
   });
 });
