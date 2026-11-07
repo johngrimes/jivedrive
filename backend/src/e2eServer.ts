@@ -38,7 +38,7 @@ interface MockObject {
   size: number;
   /** ISO 8601 timestamp. */
   lastModified: string;
-  /** Stored Content-Type, served back on download like real S3. */
+  /** Content-Type from a server-side PutObject, served back on download. */
   contentType?: string;
 }
 
