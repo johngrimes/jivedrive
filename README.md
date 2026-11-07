@@ -306,6 +306,11 @@ appear in search after the next background index scan, like uploads.
 
 The endpoint speaks the stateless Streamable HTTP transport: JSON-RPC 2.0
 over `POST /mcp` with JSON responses (no SSE streams or sessions).
+`initialize` reports the app icons in `serverInfo.icons` (the MCP
+2025-11-25 field, sent to every client): `<origin>/icon-512.png`,
+`<origin>/icon-192.png` and `<origin>/favicon.svg`. Claude does not use
+these for custom connectors yet; it shows a favicon looked up by domain.
+
 JiveDrive is its own minimal OAuth 2.1 authorization server, all derived
 from `JIVEDRIVE_WEBAUTHN_ORIGIN` with no extra configuration:
 
