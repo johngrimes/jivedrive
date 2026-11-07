@@ -1,4 +1,5 @@
 import { generateShareToken } from "../shareLinks";
+import { UNUSED_CLIENT_TTL_SECONDS } from "../oauth";
 import { randomUUID } from "node:crypto";
 import type { Database } from "bun:sqlite";
 
@@ -1615,4 +1616,426 @@ function keyPrefixFilter(
         args: [keyPrefix, keyPrefix],
       }
     : { clause: "", args: [] };
+}
+
+// ---------------------------------------------------------------------------
+// OAuth 2.1 (remote MCP clients). Codes and tokens are stored only as
+// SHA-256 hex hashes (see ../oauth.ts); every timestamp is an ISO string,
+// so expiry comparisons are plain string comparisons. Grants cascade from
+// users and clients, and codes/tokens cascade from grants.
+// ---------------------------------------------------------------------------
+
+/** A dynamically registered public OAuth client. */
+export interface OAuthClient {
+  clientId: string;
+  /** Self-declared name shown on the consent page. */
+  clientName: string;
+  /** Exact redirect URIs accepted at /oauth/authorize. */
+  redirectUris: string[];
+  createdAt: string;
+}
+
+/** A pending consent created by /oauth/authorize. */
+export interface OAuthAuthorizationRequest {
+  id: string;
+  clientId: string;
+  redirectUri: string;
+  state: string | null;
+  codeChallenge: string;
+  resource: string;
+  scope: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+/** One approved consent: a user's authorization of a client. */
+export interface OAuthGrant {
+  id: string;
+  userId: string;
+  clientId: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+/** A grant joined with its client's name, for the connected-apps list. */
+export interface OAuthGrantSummary extends OAuthGrant {
+  clientName: string;
+}
+
+/** A single-use authorization code (hashed). */
+export interface OAuthCode {
+  codeHash: string;
+  grantId: string;
+  redirectUri: string;
+  codeChallenge: string;
+  resource: string;
+  expiresAt: string;
+  /** Set when exchanged; a second exchange revokes the grant. */
+  usedAt: string | null;
+}
+
+/** A hashed access token. */
+export interface OAuthAccessToken {
+  tokenHash: string;
+  grantId: string;
+  expiresAt: string;
+}
+
+/** A hashed refresh token; usedAt is set once rotated. */
+export interface OAuthRefreshToken {
+  tokenHash: string;
+  grantId: string;
+  expiresAt: string;
+  usedAt: string | null;
+}
+
+/** Raw oauth_clients row (redirect URIs as JSON text). */
+interface OAuthClientRow {
+  clientId: string;
+  clientName: string;
+  redirectUris: string;
+  createdAt: string;
+}
+
+/**
+ * Store a registered client.
+ *
+ * @param db - database connection
+ * @param client - client fields
+ * @returns the stored client
+ */
+export function createOAuthClient(
+  db: Database,
+  client: OAuthClient,
+): OAuthClient {
+  db.query(
+    "INSERT INTO oauth_clients (clientId, clientName, redirectUris, createdAt) VALUES (?, ?, ?, ?)",
+  ).run(
+    client.clientId,
+    client.clientName,
+    JSON.stringify(client.redirectUris),
+    client.createdAt,
+  );
+  return { ...client, redirectUris: [...client.redirectUris] };
+}
+
+/**
+ * @param db - database connection
+ * @param clientId - client id
+ * @returns the client, or null when unknown
+ */
+export function getOAuthClient(
+  db: Database,
+  clientId: string,
+): OAuthClient | null {
+  const row = db
+    .query("SELECT * FROM oauth_clients WHERE clientId = ?")
+    .get(clientId) as OAuthClientRow | undefined;
+  if (!row) return null;
+  return { ...row, redirectUris: JSON.parse(row.redirectUris) as string[] };
+}
+
+/**
+ * Store a pending authorization request.
+ *
+ * @param db - database connection
+ * @param request - request fields
+ * @returns the stored request
+ */
+export function createOAuthAuthorizationRequest(
+  db: Database,
+  request: OAuthAuthorizationRequest,
+): OAuthAuthorizationRequest {
+  db.query(
+    "INSERT INTO oauth_authorization_requests (id, clientId, redirectUri, state, codeChallenge, resource, scope, createdAt, expiresAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    request.id,
+    request.clientId,
+    request.redirectUri,
+    request.state,
+    request.codeChallenge,
+    request.resource,
+    request.scope,
+    request.createdAt,
+    request.expiresAt,
+  );
+  return { ...request };
+}
+
+/**
+ * @param db - database connection
+ * @param id - request id
+ * @param now - current time; a request at or past expiresAt is inactive
+ * @returns the active request, or null when unknown or expired
+ */
+export function getOAuthAuthorizationRequest(
+  db: Database,
+  id: string,
+  now: Date,
+): OAuthAuthorizationRequest | null {
+  const row = db
+    .query("SELECT * FROM oauth_authorization_requests WHERE id = ?")
+    .get(id) as OAuthAuthorizationRequest | undefined;
+  if (!row || row.expiresAt <= now.toISOString()) return null;
+  return { ...row };
+}
+
+/**
+ * Atomically take a pending request: delete it and return it when it was
+ * active, so a request can be decided (approved or denied) only once.
+ *
+ * @param db - database connection
+ * @param id - request id
+ * @param now - current time
+ * @returns the consumed request, or null when unknown or expired
+ */
+export function consumeOAuthAuthorizationRequest(
+  db: Database,
+  id: string,
+  now: Date,
+): OAuthAuthorizationRequest | null {
+  return db.transaction(() => {
+    const request = getOAuthAuthorizationRequest(db, id, now);
+    if (!request) return null;
+    db.query("DELETE FROM oauth_authorization_requests WHERE id = ?").run(id);
+    return request;
+  })();
+}
+
+/**
+ * Store a grant (one approved consent).
+ *
+ * @param db - database connection
+ * @param input - grant fields (lastUsedAt starts null)
+ * @returns the stored grant
+ */
+export function createOAuthGrant(
+  db: Database,
+  input: { id: string; userId: string; clientId: string; createdAt: string },
+): OAuthGrant {
+  db.query(
+    "INSERT INTO oauth_grants (id, userId, clientId, createdAt, lastUsedAt) VALUES (?, ?, ?, ?, NULL)",
+  ).run(input.id, input.userId, input.clientId, input.createdAt);
+  return { ...input, lastUsedAt: null };
+}
+
+/**
+ * @param db - database connection
+ * @param id - grant id
+ * @returns the grant, or null when unknown (or revoked)
+ */
+export function getOAuthGrant(db: Database, id: string): OAuthGrant | null {
+  const row = db.query("SELECT * FROM oauth_grants WHERE id = ?").get(id) as
+    OAuthGrant | undefined;
+  return row ? { ...row } : null;
+}
+
+/**
+ * @param db - database connection
+ * @param userId - JiveDrive user id
+ * @returns the user's grants with client names, newest first
+ */
+export function listOAuthGrantsByUser(
+  db: Database,
+  userId: string,
+): OAuthGrantSummary[] {
+  const rows = db
+    .query(
+      "SELECT g.id, g.userId, g.clientId, c.clientName, g.createdAt, g.lastUsedAt FROM oauth_grants g JOIN oauth_clients c ON c.clientId = g.clientId WHERE g.userId = ? ORDER BY g.createdAt DESC, g.rowid DESC",
+    )
+    .all(userId) as OAuthGrantSummary[];
+  return rows.map((row) => ({ ...row }));
+}
+
+/**
+ * Revoke a grant; its codes and tokens cascade.
+ *
+ * @param db - database connection
+ * @param id - grant id
+ */
+export function deleteOAuthGrant(db: Database, id: string): void {
+  db.query("DELETE FROM oauth_grants WHERE id = ?").run(id);
+}
+
+/**
+ * Record that a grant's access token was used.
+ *
+ * @param db - database connection
+ * @param id - grant id
+ * @param lastUsedAt - ISO time of use
+ */
+export function touchOAuthGrant(
+  db: Database,
+  id: string,
+  lastUsedAt: string,
+): void {
+  db.query("UPDATE oauth_grants SET lastUsedAt = ? WHERE id = ?").run(
+    lastUsedAt,
+    id,
+  );
+}
+
+/**
+ * Store a hashed authorization code (unused).
+ *
+ * @param db - database connection
+ * @param code - code fields without usedAt
+ */
+export function createOAuthCode(
+  db: Database,
+  code: Omit<OAuthCode, "usedAt">,
+): void {
+  db.query(
+    "INSERT INTO oauth_codes (codeHash, grantId, redirectUri, codeChallenge, resource, expiresAt, usedAt) VALUES (?, ?, ?, ?, ?, ?, NULL)",
+  ).run(
+    code.codeHash,
+    code.grantId,
+    code.redirectUri,
+    code.codeChallenge,
+    code.resource,
+    code.expiresAt,
+  );
+}
+
+/**
+ * @param db - database connection
+ * @param codeHash - SHA-256 hex of the code
+ * @returns the code row (used or not, expired or not), or null
+ */
+export function getOAuthCode(db: Database, codeHash: string): OAuthCode | null {
+  const row = db
+    .query("SELECT * FROM oauth_codes WHERE codeHash = ?")
+    .get(codeHash) as OAuthCode | undefined;
+  return row ? { ...row } : null;
+}
+
+/**
+ * Mark a code used, only if it was not already.
+ *
+ * @param db - database connection
+ * @param codeHash - SHA-256 hex of the code
+ * @param usedAt - ISO time of use
+ * @returns true when this call marked it (first use)
+ */
+export function markOAuthCodeUsed(
+  db: Database,
+  codeHash: string,
+  usedAt: string,
+): boolean {
+  return (
+    db
+      .query(
+        "UPDATE oauth_codes SET usedAt = ? WHERE codeHash = ? AND usedAt IS NULL",
+      )
+      .run(usedAt, codeHash).changes === 1
+  );
+}
+
+/**
+ * Store a hashed access token.
+ *
+ * @param db - database connection
+ * @param token - token fields
+ */
+export function createOAuthAccessToken(
+  db: Database,
+  token: OAuthAccessToken,
+): void {
+  db.query(
+    "INSERT INTO oauth_access_tokens (tokenHash, grantId, expiresAt) VALUES (?, ?, ?)",
+  ).run(token.tokenHash, token.grantId, token.expiresAt);
+}
+
+/**
+ * @param db - database connection
+ * @param tokenHash - SHA-256 hex of the token
+ * @returns the token row (expired or not), or null
+ */
+export function getOAuthAccessToken(
+  db: Database,
+  tokenHash: string,
+): OAuthAccessToken | null {
+  const row = db
+    .query("SELECT * FROM oauth_access_tokens WHERE tokenHash = ?")
+    .get(tokenHash) as OAuthAccessToken | undefined;
+  return row ? { ...row } : null;
+}
+
+/**
+ * Store a hashed refresh token (unused).
+ *
+ * @param db - database connection
+ * @param token - token fields without usedAt
+ */
+export function createOAuthRefreshToken(
+  db: Database,
+  token: Omit<OAuthRefreshToken, "usedAt">,
+): void {
+  db.query(
+    "INSERT INTO oauth_refresh_tokens (tokenHash, grantId, expiresAt, usedAt) VALUES (?, ?, ?, NULL)",
+  ).run(token.tokenHash, token.grantId, token.expiresAt);
+}
+
+/**
+ * @param db - database connection
+ * @param tokenHash - SHA-256 hex of the token
+ * @returns the token row (used or not, expired or not), or null
+ */
+export function getOAuthRefreshToken(
+  db: Database,
+  tokenHash: string,
+): OAuthRefreshToken | null {
+  const row = db
+    .query("SELECT * FROM oauth_refresh_tokens WHERE tokenHash = ?")
+    .get(tokenHash) as OAuthRefreshToken | undefined;
+  return row ? { ...row } : null;
+}
+
+/**
+ * Mark a refresh token used (rotated), only if it was not already.
+ *
+ * @param db - database connection
+ * @param tokenHash - SHA-256 hex of the token
+ * @param usedAt - ISO time of rotation
+ * @returns true when this call marked it (first use)
+ */
+export function markOAuthRefreshTokenUsed(
+  db: Database,
+  tokenHash: string,
+  usedAt: string,
+): boolean {
+  return (
+    db
+      .query(
+        "UPDATE oauth_refresh_tokens SET usedAt = ? WHERE tokenHash = ? AND usedAt IS NULL",
+      )
+      .run(usedAt, tokenHash).changes === 1
+  );
+}
+
+/**
+ * Delete dead OAuth rows: expired authorization requests, codes, access
+ * tokens and refresh tokens (used refresh tokens are kept until they
+ * expire so a replay is still detected and revokes the grant), and
+ * clients registered more than 30 days ago that hold no grant.
+ *
+ * @param db - database connection
+ * @param now - current time, defaults to now
+ */
+export function sweepExpiredOAuth(db: Database, now: Date = new Date()): void {
+  const iso = now.toISOString();
+  const staleClientCutoff = new Date(
+    now.getTime() - UNUSED_CLIENT_TTL_SECONDS * 1000,
+  ).toISOString();
+  db.transaction(() => {
+    db.query(
+      "DELETE FROM oauth_authorization_requests WHERE expiresAt <= ?",
+    ).run(iso);
+    db.query("DELETE FROM oauth_codes WHERE expiresAt <= ?").run(iso);
+    db.query("DELETE FROM oauth_access_tokens WHERE expiresAt <= ?").run(iso);
+    db.query("DELETE FROM oauth_refresh_tokens WHERE expiresAt <= ?").run(iso);
+    db.query(
+      "DELETE FROM oauth_clients WHERE createdAt <= ? AND NOT EXISTS (SELECT 1 FROM oauth_grants g WHERE g.clientId = oauth_clients.clientId)",
+    ).run(staleClientCutoff);
+  })();
 }

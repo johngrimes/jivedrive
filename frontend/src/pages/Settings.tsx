@@ -1,6 +1,6 @@
 /**
- * Settings page: every signed-in user's "Sync with rclone" section, plus a
- * "Manage users" link to /admin for admins only.
+ * Settings page: every signed-in user's "Sync with rclone" and "Connected
+ * apps" sections, plus a "Manage users" link to /admin for admins only.
  *
  * Signed-out visitors are redirected to sign in.
  */
@@ -8,6 +8,7 @@ import { Link, Navigate } from "react-router-dom";
 import { PeopleIcon } from "@primer/octicons-react";
 import { useSession } from "../auth/sessionContext";
 import { SyncCredentials } from "../components/SyncCredentials";
+import { ConnectedApps } from "../components/ConnectedApps";
 
 /**
  * Settings page.
@@ -46,6 +47,7 @@ export function SettingsPage() {
         )}
 
         <SyncCredentials />
+        <ConnectedApps />
       </div>
     </div>
   );

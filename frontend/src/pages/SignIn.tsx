@@ -6,6 +6,15 @@ import type { ApiClientError } from "../api/client";
 import { useSession } from "../auth/sessionContext";
 import { DriveIcon } from "../components/icons";
 
+/** Props of {@link SignIn}. */
+export interface SignInProps {
+  /**
+   * Where to go once signed in, e.g. "/authorize?request=abc" when the
+   * sign-in is embedded in the OAuth consent page. Defaults to "/files".
+   */
+  returnTo?: string;
+}
+
 /**
  * Sign-in page.
  *
@@ -15,8 +24,11 @@ import { DriveIcon } from "../components/icons";
  * First-passkey enrollment is token-gated only and happens on the
  * Register page via a full invite link; a username alone can never claim
  * an account (FR-001).
+ *
+ * @param props - where to land after signing in
+ * @returns the sign-in element
  */
-export function SignIn() {
+export function SignIn({ returnTo = "/files" }: SignInProps = {}) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -31,9 +43,9 @@ export function SignIn() {
     );
   }
   if (user) {
-    // A signed-in user visiting the sign-in page goes straight to the
-    // file browser (spec US1 scenario 1).
-    return <Navigate to="/files" replace />;
+    // A signed-in user visiting the sign-in page goes straight on: to the
+    // file browser by default (spec US1 scenario 1).
+    return <Navigate to={returnTo} replace />;
   }
 
   /**
@@ -58,8 +70,8 @@ export function SignIn() {
 
   /**
    * Sign in with a passkey, username-less: fetch bodyless options, run
-   * the assertion ceremony, verify with the requestId, then go to the
-   * files page signed in.
+   * the assertion ceremony, verify with the requestId, then go to
+   * `returnTo` signed in.
    */
   async function handlePasskeySignIn(): Promise<void> {
     setError(null);
@@ -72,7 +84,7 @@ export function SignIn() {
       });
       await postLoginVerify(requestId, credential);
       await refresh();
-      navigate("/files", { replace: true });
+      navigate(returnTo, { replace: true });
     } catch (err) {
       showSignInError(err);
     } finally {

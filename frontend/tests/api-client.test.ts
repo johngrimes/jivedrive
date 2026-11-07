@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   apiFetch,
+  decideAuthorizationRequest,
+  getAuthorizationRequest,
+  listConnectedApps,
+  revokeConnectedApp,
   cancelAdminInvite,
   createAdminInvite,
   createShare,
@@ -958,6 +962,100 @@ describe("sync credentials API", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/sync-credentials/${encodeURIComponent("AKID/odd id")}`,
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+});
+
+describe("OAuth consent and connected apps API", () => {
+  it("getAuthorizationRequest GETs the encoded pending request", async () => {
+    const body = {
+      id: "req/1",
+      clientName: "Claude",
+      redirectHost: "claude.ai",
+      expiresAt: "2026-11-08T10:10:00.000Z",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    expect(await getAuthorizationRequest("req/1")).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/oauth/requests/${encodeURIComponent("req/1")}`,
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("decideAuthorizationRequest POSTs approve or deny and returns redirectTo", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(jsonResponse({ redirectTo: "https://claude.ai/cb" })),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    expect(await decideAuthorizationRequest("r1", "approve")).toEqual({
+      redirectTo: "https://claude.ai/cb",
+    });
+    await decideAuthorizationRequest("r1", "deny");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/oauth/requests/r1/approve",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/oauth/requests/r1/deny",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("decideAuthorizationRequest surfaces not_found for an expired request", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ error: "Not found", code: "not_found" }, 404),
+        ),
+    );
+
+    await expect(
+      decideAuthorizationRequest("gone", "approve"),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
+  });
+
+  it("listConnectedApps GETs the caller's grants", async () => {
+    const body = {
+      grants: [
+        {
+          id: "g1",
+          clientName: "Claude",
+          createdAt: "2026-11-01T09:00:00.000Z",
+          lastUsedAt: null,
+        },
+      ],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    expect(await listConnectedApps()).toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/oauth/grants",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("revokeConnectedApp sends a DELETE with the encoded grant id", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock as unknown as FetchMock);
+
+    await revokeConnectedApp("g/1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/oauth/grants/${encodeURIComponent("g/1")}`,
       expect.objectContaining({ method: "DELETE" }),
     );
   });

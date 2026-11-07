@@ -187,6 +187,7 @@ describe("migrateFromDir", () => {
       "006_share_links.sql",
       "007_search_folders.sql",
       "008_sync_credentials.sql",
+      "009_oauth.sql",
     ]);
 
     // Every table from data-model.md exists.

@@ -10,7 +10,11 @@ import { loadConfig } from "./config";
 import type { AppConfig } from "./config";
 import { migrateFromDir, openDatabase } from "./db/migrate";
 import { bootstrapAdmin } from "./db/bootstrap";
-import { getUserById, sweepExpiredShareLinks } from "./db/repository";
+import {
+  getUserById,
+  sweepExpiredOAuth,
+  sweepExpiredShareLinks,
+} from "./db/repository";
 import type { User } from "./db/repository";
 import {
   SESSION_COOKIE_NAME,
@@ -25,6 +29,10 @@ import { adminRoutes } from "./routes/admin";
 import { sharesRoutes } from "./routes/shares";
 import { usersRoutes } from "./routes/users";
 import { syncCredentialsRoutes } from "./routes/syncCredentials";
+import { oauthRoutes } from "./routes/oauth";
+import { oauthGrantsRoutes } from "./routes/oauthGrants";
+import { mcpRoutes } from "./routes/mcp";
+import { requireBearer } from "./auth/bearer";
 import { createOvhClient } from "./ovh";
 import type { OvhFetch } from "./ovh";
 import { createKeyedLock } from "./syncCredentials";
@@ -40,7 +48,7 @@ import {
   createRateLimitMiddleware,
   createRateLimitStore,
 } from "./security/rateLimit";
-import { createSecurityHeadersMiddleware } from "./security/headers";
+import { createSecurityHeadersMiddleware, isApiPath } from "./security/headers";
 
 /** Variables stored on the Hono context for the current request. */
 export type ServerEnv = {
@@ -81,13 +89,18 @@ export interface ServerDeps {
    * fetch. Used only when OVH is configured.
    */
   ovhFetch?: OvhFetch;
+  /**
+   * Injectable clock for the OAuth server (tests): code, token and
+   * request expiry. Defaults to Date.now.
+   */
+  oauthNow?: () => number;
 }
 
 /**
  * Create the Hono application: healthcheck, middleware wiring, and
  * static serving of the built SPA with a client-side route fallback.
  *
- * Unknown `/api/*` and `/healthcheck` routes return a JSON 404; other
+ * Unknown API routes ({@link isApiPath}) return a JSON 404; other
  * unknown routes fall back to the SPA's index.html.
  *
  * @param deps - configuration, database and static directory
@@ -166,6 +179,30 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
   // shares the files family bucket like /api/shares/*.
   app.use(
     "/api/sync-credentials/*",
+    createRateLimitMiddleware(deps.config, "files", {
+      now: deps.rateLimitNow,
+      store: rateLimitStore,
+    }),
+  );
+  // OAuth protocol endpoints share the auth family (sign-in-like,
+  // unauthenticated); the consent/connected-apps API and the MCP endpoint
+  // are file-domain operations and share the files family.
+  app.use(
+    "/oauth/*",
+    createRateLimitMiddleware(deps.config, "auth", {
+      now: deps.rateLimitNow,
+      store: rateLimitStore,
+    }),
+  );
+  app.use(
+    "/api/oauth/*",
+    createRateLimitMiddleware(deps.config, "files", {
+      now: deps.rateLimitNow,
+      store: rateLimitStore,
+    }),
+  );
+  app.use(
+    "/mcp/*",
     createRateLimitMiddleware(deps.config, "files", {
       now: deps.rateLimitNow,
       store: rateLimitStore,
@@ -257,6 +294,35 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
     }),
   );
 
+  // OAuth 2.1 authorization server for remote MCP clients: metadata and
+  // /oauth/* at the root, consent and connected apps under /api/oauth.
+  app.route(
+    "/",
+    oauthRoutes({ config: deps.config, db: deps.db, now: deps.oauthNow }),
+  );
+  app.route(
+    "/api/oauth",
+    oauthGrantsRoutes({
+      config: deps.config,
+      db: deps.db,
+      requireUser: requireUser(deps.db, deps.config.sessionIdleDays),
+      now: deps.oauthNow,
+    }),
+  );
+
+  // The remote MCP server: drive tools for AI assistants, authenticated
+  // by the OAuth access tokens issued above and scoped exactly like
+  // /api/files (the files rate-limit family is registered above).
+  app.route(
+    "/mcp",
+    mcpRoutes({
+      config: deps.config,
+      db: deps.db,
+      s3Client,
+      requireBearer: requireBearer(deps.db, deps.config, deps.oauthNow),
+    }),
+  );
+
   // Static SPA serving, mounted only when the build output exists. In
   // development the Vite dev server serves the SPA instead.
   const staticDir = deps.staticDir ?? resolve(process.cwd(), "frontend/dist");
@@ -268,11 +334,7 @@ export function createApp(deps: ServerDeps): Hono<ServerEnv> {
   }
 
   app.notFound((c) => {
-    const isApi =
-      c.req.path.startsWith("/api") ||
-      c.req.path.startsWith("/auth") ||
-      c.req.path === "/healthcheck";
-    if (isApi || indexHtml === null) {
+    if (isApiPath(c.req.path) || indexHtml === null) {
       return c.json({ error: "Not found", code: "not_found" }, 404);
     }
     return c.html(indexHtml);
@@ -374,6 +436,9 @@ export function main(): void {
   // rows at startup, mirroring the session sweep — dead rows never
   // serve, and a restarted replica starts with a clean link table.
   sweepExpiredShareLinks(db);
+  // Expired OAuth requests, codes and tokens, and long-unused clients,
+  // are swept at startup too; lookups check expiry lazily in between.
+  sweepExpiredOAuth(db);
   // One shared registry: the admin scan-status route reads what the
   // background scheduler and the reindex endpoint record.
   const scanStatus = createScanStatusRegistry();

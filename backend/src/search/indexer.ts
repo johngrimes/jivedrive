@@ -18,6 +18,7 @@ import {
 } from "../db/repository";
 import type { User } from "../db/repository";
 import { extractable, extractText, extensionOf } from "./extract";
+import { readObjectBody } from "../s3/client";
 
 /** Default page size for listings, matching the S3 protocol limit. */
 const MAX_KEYS = 1000;
@@ -88,28 +89,6 @@ interface ListedObject {
 function baseName(key: string): string {
   const slash = key.lastIndexOf("/");
   return slash === -1 ? key : key.slice(slash + 1);
-}
-
-/**
- * Read an object body from an SDK GetObject output. The SDK delivers a
- * stream (with `transformToByteArray`); test/e2e fakes deliver plain
- * strings or byte arrays, so all three are accepted.
- *
- * @param body - the GetObject output's Body member
- * @returns the object bytes
- */
-async function readObjectBody(body: unknown): Promise<Uint8Array> {
-  if (typeof body === "string") {
-    return new TextEncoder().encode(body);
-  }
-  if (body instanceof Uint8Array) {
-    return body;
-  }
-  const stream = body as { transformToByteArray?: () => Promise<Uint8Array> };
-  if (typeof stream.transformToByteArray === "function") {
-    return stream.transformToByteArray();
-  }
-  throw new Error("Unsupported S3 object body");
 }
 
 /**

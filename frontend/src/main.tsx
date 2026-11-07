@@ -8,6 +8,7 @@ import { Register } from "./pages/Register";
 import { FilesPage } from "./pages/Files";
 import { AdminUsersPage } from "./pages/AdminUsers";
 import { SettingsPage } from "./pages/Settings";
+import { AuthorizePage } from "./pages/Authorize";
 import "./index.css";
 
 const root = document.getElementById("root");
@@ -26,6 +27,7 @@ createRoot(root).render(
             <Route path="/files" element={<FilesPage />} />
             <Route path="/admin" element={<AdminUsersPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/authorize" element={<AuthorizePage />} />
           </Route>
         </Routes>
       </SessionProvider>
