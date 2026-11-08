@@ -410,7 +410,10 @@ test.describe("User Story 2 - file browser rendered for mobile, with octicons", 
     const nameSpan = longRow.locator("span", { hasText: longName });
     await expect(nameSpan).toBeVisible();
     await expectTruncated(page, nameSpan);
-    // The truncated name leaves the row's menu trigger on screen.
+    // The truncated name leaves the row's size and menu trigger on screen.
+    await expect(longRow.getByText("9 B", { exact: true })).toBeInViewport({
+      ratio: 1,
+    });
     await expect(
       longRow.getByRole("button", { name: `Actions for ${longName}` }),
     ).toBeInViewport({ ratio: 1 });

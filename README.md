@@ -27,7 +27,9 @@ Authentication is WebAuthn passkeys only - no passwords.
   folder shared with them, kept fresh by a background index scan.
 - Uncluttered rows: each listing and search row keeps its actions (file
   Download/Share/Move/Delete, own-folder Share) behind a single "⋯" menu,
-  and clicking a file's name in the listing downloads it.
+  and clicking a file's name in the listing downloads it. Each file row in
+  the listing shows the file's size in 1024-based units (e.g. "812 KB",
+  "1.2 MB") beside the menu, at every screen width.
 - Sync with rclone (optional): from Settings, every user can issue
   labelled S3 keys scoped to their own bucket and prefix and copy a ready
   `rclone.conf`, to sync their drive to a computer with `rclone sync` or

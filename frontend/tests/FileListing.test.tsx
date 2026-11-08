@@ -250,3 +250,41 @@ describe("FileListing file actions menu", () => {
     expect(onDownload).toHaveBeenCalledWith(fileEntry);
   });
 });
+
+describe("FileListing file sizes", () => {
+  /** Matches any formatted size, e.g. "512 B" or "1.2 MB". */
+  const SIZE_TEXT = /\d+(\.\d)? (B|KB|MB|GB|TB)/;
+
+  it("shows each file's formatted size beside its name, outside the download link", () => {
+    const container = renderListing({
+      files: [
+        fileEntry,
+        {
+          ...fileEntry,
+          key: "archive.zip",
+          name: "archive.zip",
+          size: 1258291,
+        },
+      ],
+    });
+
+    const [planRow, archiveRow] = rows(container);
+    expect(planRow!.textContent).toBe("plan.txt512 B");
+    expect(archiveRow!.textContent).toBe("archive.zip1.2 MB");
+    expect(archiveRow!.querySelector("a")?.textContent).toBe("archive.zip");
+  });
+
+  it("shows no size on folder or mount rows", () => {
+    const container = renderListing({
+      folders: ["docs"],
+      mounts: [
+        { id: "share-1", folderName: "projects", sharerUsername: "alice" },
+      ],
+      onShareFolder: () => {},
+    });
+
+    for (const row of rows(container)) {
+      expect(row.textContent).not.toMatch(SIZE_TEXT);
+    }
+  });
+});

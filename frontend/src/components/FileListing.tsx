@@ -16,6 +16,7 @@ import {
   HomeIcon,
   PeopleIcon,
 } from "@primer/octicons-react";
+import { formatSize } from "../lib/format";
 import { RowActionsMenu } from "./RowActionsMenu";
 import { fileRowActions } from "./fileRowActions";
 
@@ -361,6 +362,12 @@ export function FileListing({
               <FileIcon aria-hidden="true" className="shrink-0" />
               <span className="truncate">{file.name}</span>
             </a>
+            {/* Fills the gap up to the menu (whose ml-auto then has no
+                space to claim) and never wraps, so a long name truncates
+                before the size is squeezed. */}
+            <span className="flex-1 whitespace-nowrap text-right text-sm tabular-nums opacity-70">
+              {formatSize(file.size)}
+            </span>
             <RowActionsMenu
               name={file.name}
               actions={fileRowActions({
