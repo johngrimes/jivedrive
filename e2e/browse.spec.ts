@@ -58,7 +58,9 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
   await expect(page.getByText("archive.zip")).toBeVisible();
   await expect(page.getByText("5 items")).toBeVisible();
 
-  // The listing is usable at mobile, tablet and desktop widths.
+  // The listing is usable at mobile, tablet and desktop widths, and each
+  // file row shows its size (1024-based units) at every width.
+  const archiveRow = page.locator("li.list-row", { hasText: "archive.zip" });
   for (const viewport of [
     { width: 375, height: 667 },
     { width: 768, height: 1024 },
@@ -66,6 +68,9 @@ test("a signed-in user browses folders, loads more pages and downloads files", a
   ]) {
     await page.setViewportSize(viewport);
     await expect(page.getByText("archive.zip")).toBeVisible();
+    await expect(
+      archiveRow.getByText("1.2 MB", { exact: true }),
+    ).toBeInViewport({ ratio: 1 });
     await expectNoHorizontalOverflow(page);
   }
 
