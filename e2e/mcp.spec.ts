@@ -108,7 +108,10 @@ interface ToolResult {
 /** The JSON-RPC response fields these tests read. */
 interface McpResponse {
   result?: {
-    serverInfo?: { name: string };
+    serverInfo?: {
+      name: string;
+      icons?: { src: string; mimeType: string; sizes: string[] }[];
+    };
     tools?: { name: string }[];
   } & Partial<ToolResult>;
   error?: { code: number; message: string };
@@ -248,6 +251,18 @@ test("a user connects an MCP client, it uses the drive, and revoking cuts it off
   expect(init.body).toMatchObject({
     result: { serverInfo: { name: "jivedrive" } },
   });
+  // The advertised icons are served, unauthenticated, from the app origin.
+  const icons = init.body?.result?.serverInfo?.icons ?? [];
+  expect(icons.map((icon) => icon.src)).toEqual([
+    "http://localhost:5173/icon-512.png",
+    "http://localhost:5173/icon-192.png",
+    "http://localhost:5173/favicon.svg",
+  ]);
+  for (const icon of icons) {
+    const iconRes = await request.get(icon.src);
+    expect(iconRes.status()).toBe(200);
+    expect(iconRes.headers()["content-type"]).toContain(icon.mimeType);
+  }
 
   const list = await mcp(request, tokens.access_token, "tools/list");
   const names = (list.body?.result?.tools ?? []).map((t) => t.name);

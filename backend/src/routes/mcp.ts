@@ -26,6 +26,7 @@ import {
   isSupportedVersion,
   parseMessage,
   rpcError,
+  serverInfo,
 } from "../mcp/protocol";
 import { SERVER_INSTRUCTIONS, TOOL_DEFINITIONS, callTool } from "../mcp/tools";
 
@@ -75,6 +76,7 @@ function methodNotAllowed(c: Context<ServerEnv>): Response {
 export function mcpRoutes(deps: McpRouteDeps): Hono<ServerEnv> {
   const { config, db, s3Client, requireBearer } = deps;
   const origin = config.webauthn.origin;
+  const info = serverInfo(origin);
   const app = new Hono<ServerEnv>();
 
   // DNS-rebinding guard: browsers always send Origin on cross-origin
@@ -133,6 +135,7 @@ export function mcpRoutes(deps: McpRouteDeps): Hono<ServerEnv> {
       const response = await dispatchRequest(message, {
         tools: TOOL_DEFINITIONS,
         instructions: SERVER_INSTRUCTIONS,
+        serverInfo: info,
         callTool: (name, args) => callTool(ctx, name, args),
       });
       return c.json(response, 200);

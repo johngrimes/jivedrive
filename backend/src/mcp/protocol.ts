@@ -197,16 +197,60 @@ export interface DispatchContext {
   ) => Promise<ToolResult>;
   /** Server instructions returned by `initialize`. */
   instructions: string;
+  /** Server identity returned by `initialize`. */
+  serverInfo: ServerInfo;
+}
+
+/** An icon for the server (the MCP 2025-11-25 `Icon` shape). */
+export interface ServerIcon {
+  src: string;
+  mimeType: string;
+  sizes: string[];
 }
 
 /** Server identity reported by `initialize`. */
-export const SERVER_INFO = { name: "jivedrive", version: "0.1.0" } as const;
+export interface ServerInfo {
+  name: string;
+  version: string;
+  icons: ServerIcon[];
+}
+
+/**
+ * The SPA's static app icons (`frontend/public/`), PNG first because
+ * every icon-rendering client must support PNG, SVG last as an extra.
+ */
+const ICONS = [
+  { path: "/icon-512.png", mimeType: "image/png", sizes: ["512x512"] },
+  { path: "/icon-192.png", mimeType: "image/png", sizes: ["192x192"] },
+  { path: "/favicon.svg", mimeType: "image/svg+xml", sizes: ["any"] },
+] as const;
+
+/**
+ * Build the server identity for `initialize`. `icons` is defined by MCP
+ * 2025-11-25 but sent for every negotiated version: older clients
+ * ignore it. Icon URLs are absolute on the app's own origin, the same
+ * origin as `/mcp`, as the spec advises.
+ *
+ * @param origin - the app's origin, e.g. "https://drive.grimes.id.au"
+ * @returns name, version and icons
+ */
+export function serverInfo(origin: string): ServerInfo {
+  return {
+    name: "jivedrive",
+    version: "0.1.0",
+    icons: ICONS.map(({ path, mimeType, sizes }) => ({
+      src: new URL(path, origin).href,
+      mimeType,
+      sizes: [...sizes],
+    })),
+  };
+}
 
 /**
  * Answer one JSON-RPC request.
  *
  * @param request - the classified request
- * @param ctx - tools and server instructions
+ * @param ctx - tools, server instructions and server identity
  * @returns the response to send
  */
 export async function dispatchRequest(
@@ -231,7 +275,7 @@ export async function dispatchRequest(
       return ok({
         protocolVersion: negotiateVersion(params.protocolVersion),
         capabilities: { tools: {} },
-        serverInfo: SERVER_INFO,
+        serverInfo: ctx.serverInfo,
         instructions: ctx.instructions,
       });
     }

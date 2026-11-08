@@ -5,6 +5,8 @@
  * handling (initialize, ping, tools/list).
  */
 import { afterEach, describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   ORIGIN,
   closeMcpTestDatabases,
@@ -14,6 +16,31 @@ import {
 } from "./mcp-test-helpers";
 import type { RpcResponse } from "./mcp-test-helpers";
 import { MCP_MAX_BODY_BYTES } from "../src/routes/mcp";
+import { SUPPORTED_PROTOCOL_VERSIONS, serverInfo } from "../src/mcp/protocol";
+
+/** The SPA's static assets, served from the app origin. */
+const publicDir = fileURLToPath(
+  new URL("../../frontend/public/", import.meta.url),
+);
+
+/** The icons `initialize` advertises for the test origin. */
+const EXPECTED_ICONS = [
+  {
+    src: `${ORIGIN}/icon-512.png`,
+    mimeType: "image/png",
+    sizes: ["512x512"],
+  },
+  {
+    src: `${ORIGIN}/icon-192.png`,
+    mimeType: "image/png",
+    sizes: ["192x192"],
+  },
+  {
+    src: `${ORIGIN}/favicon.svg`,
+    mimeType: "image/svg+xml",
+    sizes: ["any"],
+  },
+];
 
 afterEach(closeMcpTestDatabases);
 
@@ -203,6 +230,50 @@ describe("MCP methods", () => {
     const { app } = createMcpTestEnv();
     const res = await rpc(app, "initialize", {});
     expect(res.error?.code).toBe(-32602);
+  });
+
+  it("initialize advertises the app's icons for every supported version", async () => {
+    const { app } = createMcpTestEnv();
+    for (const protocolVersion of SUPPORTED_PROTOCOL_VERSIONS) {
+      const res = await rpc(app, "initialize", {
+        protocolVersion,
+        capabilities: {},
+        clientInfo: { name: "test", version: "1" },
+      });
+      expect(res.result?.serverInfo).toEqual({
+        name: "jivedrive",
+        version: "0.1.0",
+        icons: EXPECTED_ICONS,
+      });
+    }
+  });
+
+  it("serverInfo builds icon URLs on the origin it is given", () => {
+    expect(
+      serverInfo("https://drive.grimes.id.au").icons.map((icon) => icon.src),
+    ).toEqual([
+      "https://drive.grimes.id.au/icon-512.png",
+      "https://drive.grimes.id.au/icon-192.png",
+      "https://drive.grimes.id.au/favicon.svg",
+    ]);
+  });
+
+  it("every advertised icon is a static asset matching its declared type and size", () => {
+    for (const icon of serverInfo(ORIGIN).icons) {
+      const bytes = readFileSync(
+        publicDir + new URL(icon.src).pathname.slice(1),
+      );
+      if (icon.mimeType === "image/png") {
+        // PNG signature, then the IHDR chunk's big-endian width and height.
+        expect(bytes.subarray(1, 4).toString("latin1")).toBe("PNG");
+        const size = `${bytes.readUInt32BE(16)}x${bytes.readUInt32BE(20)}`;
+        expect(icon.sizes).toEqual([size]);
+      } else {
+        expect(icon.mimeType).toBe("image/svg+xml");
+        expect(bytes.toString("utf8")).toStartWith("<svg");
+        expect(icon.sizes).toEqual(["any"]);
+      }
+    }
   });
 
   it("ping returns an empty result", async () => {
