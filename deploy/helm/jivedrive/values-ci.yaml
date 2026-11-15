@@ -1,10 +1,12 @@
 # CI values for the automated deploy (deploy job in
-# .github/workflows/quality-and-deploy.yml). Applied on top of values.yaml;
-# the image tag, S3 credentials and the bootstrap-admin enrollment token are
-# passed via --set from GitHub secrets. All jivedrive.config variables (rate
-# limits, session idle days, JIVEDRIVE_TRUST_PROXY, ...) and the hardened
-# resources/securityContext defaults come from values.yaml automatically -
-# only image, persistence and the bootstrap admin are overridden here.
+# .github/workflows/quality-and-deploy.yml) to drive.grimes.id.au. Applied
+# on top of values.yaml; the image tag, S3 credentials and the
+# bootstrap-admin enrollment token are passed via --set from GitHub
+# secrets. All other jivedrive.config variables (rate limits, session idle
+# days, JIVEDRIVE_TRUST_PROXY, ...) and the hardened resources/securityContext
+# defaults come from values.yaml automatically - only image, persistence,
+# the S3 endpoint, WebAuthn, the bootstrap admin and ingress are overridden
+# here.
 jivedrive:
   image:
     repository: ghcr.io/johngrimes/jivedrive
@@ -21,7 +23,14 @@ jivedrive:
   # by JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN, which the deploy job
   # injects via --set from the JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN
   # GitHub secret (kept out of git like the S3 credentials).
+  #
+  # The S3 endpoint is OVHcloud SGP; WebAuthn is bound to the production
+  # domain.
   config:
+    JIVEDRIVE_S3_ENDPOINT: "https://s3.sgp.io.cloud.ovh.net"
+    JIVEDRIVE_S3_REGION: "sgp"
+    JIVEDRIVE_WEBAUTHN_RP_ID: "drive.grimes.id.au"
+    JIVEDRIVE_WEBAUTHN_ORIGIN: "https://drive.grimes.id.au"
     JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: john
     JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: gc-john
     JIVEDRIVE_BOOTSTRAP_ADMIN_PREFIX: drive/

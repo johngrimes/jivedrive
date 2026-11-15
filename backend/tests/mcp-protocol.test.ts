@@ -250,11 +250,11 @@ describe("MCP methods", () => {
 
   it("serverInfo builds icon URLs on the origin it is given", () => {
     expect(
-      serverInfo("https://drive.grimes.id.au").icons.map((icon) => icon.src),
+      serverInfo("https://drive.example.com").icons.map((icon) => icon.src),
     ).toEqual([
-      "https://drive.grimes.id.au/icon-512.png",
-      "https://drive.grimes.id.au/icon-192.png",
-      "https://drive.grimes.id.au/favicon.svg",
+      "https://drive.example.com/icon-512.png",
+      "https://drive.example.com/icon-192.png",
+      "https://drive.example.com/favicon.svg",
     ]);
   });
 

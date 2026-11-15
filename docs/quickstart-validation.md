@@ -1,7 +1,7 @@
 # Quickstart validation
 
-Validation of the scenarios in
-[`.local/specs/001-ovhcloud-file-browser/quickstart.md`](../.local/specs/001-ovhcloud-file-browser/quickstart.md)
+Validation of the scenarios in the spec
+`001-ovhcloud-file-browser` quickstart (specs are not published)
 against a local instance with a mock S3 layer and a seeded database, plus
 chart validation for the deployment path. Updated for spec
 `005-security-hardening`: first-passkey enrollment is token-gated only
@@ -106,7 +106,7 @@ Not validated here:
   `prod-values.yaml` (example in
   [`deploy/helm/jivedrive/README.md`](../deploy/helm/jivedrive/README.md)),
   then open the registration link for the provisioned admin at
-  `https://drive.grimes.id.au/register?token=...`.
+  `https://drive.example.com/register?token=...`.
 
 ## Scenario 2 - Invite, register, browse, upload, share, delete
 
@@ -433,7 +433,7 @@ scripts/verify-admin.sh           -> all checks pass (incl. passkey reset)
 ## Feature 006 - Folder sharing (persistent user-to-user grants)
 
 Spec
-[`006-folder-sharing/quickstart.md`](../.local/specs/006-folder-sharing/quickstart.md)
+`006-folder-sharing` (quickstart)
 adds persistent, revocable folder grants between users (FR-016/FR-017): an
 owner shares a subfolder with a recipient via a searchable picker, the
 recipient sees a mount labelled "Shared by \<owner\>" at their space root with
@@ -573,7 +573,7 @@ Not validated here (same environment limits as spec 005):
 
 ## Feature 007 - File search (T032)
 
-Spec [`007-file-search/quickstart.md`](../.local/specs/007-file-search/quickstart.md)
+Spec `007-file-search` (quickstart)
 adds a whole-space file search: filename matches (FR-002) and content
 matches with snippets for text/PDF/DOCX (FR-004/FR-005), scoped to the
 caller's own space plus every live incoming share (FR-010/FR-011), with an
@@ -809,7 +809,7 @@ extraction regression fails the backend suite. Full backend suite green:
 ## Feature 009 - Short share links (T025)
 
 Spec
-[`009-short-share-links/quickstart.md`](../.local/specs/009-short-share-links/quickstart.md)
+`009-short-share-links` (quickstart)
 replaces presigned-URL share links with short app-origin links
 (`<origin>/s/<12-char base62 token>`): a stored `share_links` row resolves
 the token, the public `GET /s/:token` route 302-redirects to a fresh

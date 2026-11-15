@@ -53,8 +53,8 @@ describe("loadConfig", () => {
       JIVEDRIVE_DB_PATH: "/var/lib/jivedrive/jivedrive.db",
       JIVEDRIVE_S3_REGION: "sbg",
       NODE_ENV: "production",
-      JIVEDRIVE_WEBAUTHN_RP_ID: "drive.grimes.id.au",
-      JIVEDRIVE_WEBAUTHN_ORIGIN: "https://drive.grimes.id.au",
+      JIVEDRIVE_WEBAUTHN_RP_ID: "drive.example.com",
+      JIVEDRIVE_WEBAUTHN_ORIGIN: "https://drive.example.com",
     });
 
     expect(config.port).toBe(8080);
@@ -130,12 +130,12 @@ describe("loadConfig", () => {
   it("parses WebAuthn relying party configuration", () => {
     const config = loadConfig({
       ...minimalEnv,
-      JIVEDRIVE_WEBAUTHN_RP_ID: "drive.grimes.id.au",
-      JIVEDRIVE_WEBAUTHN_ORIGIN: "https://drive.grimes.id.au",
+      JIVEDRIVE_WEBAUTHN_RP_ID: "drive.example.com",
+      JIVEDRIVE_WEBAUTHN_ORIGIN: "https://drive.example.com",
     });
 
-    expect(config.webauthn.rpId).toBe("drive.grimes.id.au");
-    expect(config.webauthn.origin).toBe("https://drive.grimes.id.au");
+    expect(config.webauthn.rpId).toBe("drive.example.com");
+    expect(config.webauthn.origin).toBe("https://drive.example.com");
   });
 
   it("rejects a missing S3 endpoint", () => {
@@ -395,8 +395,8 @@ describe("loadConfig", () => {
       loadConfig({
         ...minimalEnv,
         NODE_ENV: "production",
-        JIVEDRIVE_WEBAUTHN_RP_ID: "drive.grimes.id.au",
-        JIVEDRIVE_WEBAUTHN_ORIGIN: "http://drive.grimes.id.au",
+        JIVEDRIVE_WEBAUTHN_RP_ID: "drive.example.com",
+        JIVEDRIVE_WEBAUTHN_ORIGIN: "http://drive.example.com",
       }),
     ).toThrow(/JIVEDRIVE_WEBAUTHN_ORIGIN/);
   });
@@ -409,7 +409,7 @@ describe("loadConfig OVH sync settings", () => {
     JIVEDRIVE_OVH_APPLICATION_KEY: "app-key",
     JIVEDRIVE_OVH_APPLICATION_SECRET: "app-secret",
     JIVEDRIVE_OVH_CONSUMER_KEY: "consumer-key",
-    JIVEDRIVE_OVH_PROJECT_ID: "b4d5ce269b194d08a7b41d0fb10e3a3b",
+    JIVEDRIVE_OVH_PROJECT_ID: "0123456789abcdef0123456789abcdef",
   };
 
   it("is disabled (null) when every OVH variable is unset", () => {
@@ -434,7 +434,7 @@ describe("loadConfig OVH sync settings", () => {
       loadConfig({
         ...minimalEnv,
         JIVEDRIVE_OVH_ENDPOINT: "ovh-ca",
-        JIVEDRIVE_OVH_PROJECT_ID: "b4d5ce269b194d08a7b41d0fb10e3a3b",
+        JIVEDRIVE_OVH_PROJECT_ID: "0123456789abcdef0123456789abcdef",
         JIVEDRIVE_OVH_APPLICATION_KEY: "",
         JIVEDRIVE_OVH_APPLICATION_SECRET: "",
         JIVEDRIVE_OVH_CONSUMER_KEY: "",
@@ -454,7 +454,7 @@ describe("loadConfig OVH sync settings", () => {
       applicationKey: "app-key",
       applicationSecret: "app-secret",
       consumerKey: "consumer-key",
-      projectId: "b4d5ce269b194d08a7b41d0fb10e3a3b",
+      projectId: "0123456789abcdef0123456789abcdef",
     });
   });
 

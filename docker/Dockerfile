@@ -47,6 +47,9 @@ COPY --from=build /app/node_modules ./node_modules
 # The Hono server listens on this port (Phase 2 config default).
 EXPOSE 3000
 
+# Apache 2.0 section 4: redistributions carry the license and NOTICE.
+COPY LICENSE NOTICE ./
+
 USER bun
 
 CMD ["bun", "run", "./backend/src/server.ts"]

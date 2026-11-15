@@ -3,9 +3,9 @@
 # of every value; inline comments here are kept minimal.
 
 jivedrive:
-  # Container image for the JiveDrive server, built from docker/Dockerfile.
-  # The image is not published yet: build and push it before deploying, or
-  # point these values at your registry (see the chart README).
+  # Container image for the JiveDrive server, built from docker/Dockerfile
+  # and published to GHCR by CI on push to main. Point these values at your
+  # own registry to run a custom build (see the chart README).
   image:
     repository: "ghcr.io/johngrimes/jivedrive"
     tag: "0.1.0"
@@ -44,10 +44,10 @@ jivedrive:
   affinity: {}
 
   # Non-sensitive environment variables for the server, passed via a
-  # ConfigMap. Defaults match the backend's own defaults, except the
-  # WebAuthn and S3 values which default to the production deployment
-  # (drive.grimes.id.au, OVHcloud SGP). See the chart README for the full
-  # list of JIVEDRIVE_* variables.
+  # ConfigMap. Defaults match the backend's own defaults, except the S3
+  # endpoint and WebAuthn values, which have no usable default: set them for
+  # your deployment. See the chart README for the full list of JIVEDRIVE_*
+  # variables.
   config:
     JIVEDRIVE_PORT: "3000"
     # The database file lives on the volume mounted at
@@ -74,19 +74,23 @@ jivedrive:
     # TLS is terminated in front of the service, which sets X-Forwarded-For;
     # trusting it lets the rate limiter key on the real client address.
     JIVEDRIVE_TRUST_PROXY: "true"
-    JIVEDRIVE_S3_ENDPOINT: "https://s3.sgp.io.cloud.ovh.net"
-    JIVEDRIVE_S3_REGION: "sgp"
-    JIVEDRIVE_WEBAUTHN_RP_ID: "drive.grimes.id.au"
-    JIVEDRIVE_WEBAUTHN_ORIGIN: "https://drive.grimes.id.au"
+    # REQUIRED: the S3 endpoint and region of your OVHcloud Object Storage,
+    # e.g. "https://s3.gra.io.cloud.ovh.net" and "gra".
+    JIVEDRIVE_S3_ENDPOINT: ""
+    JIVEDRIVE_S3_REGION: "gra"
+    # REQUIRED: the WebAuthn relying party id (the site's domain, e.g.
+    # "drive.example.com") and the https origin users sign in from (e.g.
+    # "https://drive.example.com"). Passkeys only work at that origin.
+    JIVEDRIVE_WEBAUTHN_RP_ID: ""
+    JIVEDRIVE_WEBAUTHN_ORIGIN: ""
     # rclone sync credentials (Settings > Sync with rclone), optional and
     # all-or-nothing: set these two AND the three OVH API credentials in
     # secretConfig, or none (any partial set stops the app from starting).
     # The OVHcloud API endpoint (ovh-eu, ovh-ca, ovh-us or a base URL) and
     # the Public Cloud project that owns the Object Storage users are not
-    # secret; production uses ovh-ca and b4d5ce269b194d08a7b41d0fb10e3a3b
-    # (the CI deploy passes them from repository variables):
-    # JIVEDRIVE_OVH_ENDPOINT: "ovh-ca"
-    # JIVEDRIVE_OVH_PROJECT_ID: "b4d5ce269b194d08a7b41d0fb10e3a3b"
+    # secret:
+    # JIVEDRIVE_OVH_ENDPOINT: "ovh-eu"
+    # JIVEDRIVE_OVH_PROJECT_ID: "<public cloud project id>"
     # Optional bootstrap admin provisioned at first start. Unset by default;
     # to provision one, uncomment and set these (the enrollment token below
     # is REQUIRED whenever the username is set - see the chart README):
@@ -127,14 +131,14 @@ jivedrive:
     className: ""
     annotations: {}
     # hosts:
-    #   - host: drive.grimes.id.au
+    #   - host: drive.example.com
     #     paths:
     #       - path: /
     #         pathType: Prefix
     # tls:
     #   - secretName: jivedrive-tls
     #     hosts:
-    #       - drive.grimes.id.au
+    #       - drive.example.com
     hosts: []
     tls: []
 

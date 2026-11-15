@@ -34,9 +34,9 @@ export interface BootstrapAdminConfig {
 
 /** WebAuthn relying party settings. */
 export interface WebAuthnConfig {
-  /** Relying party ID, e.g. "drive.grimes.id.au" or "localhost". */
+  /** Relying party ID, e.g. "drive.example.com" or "localhost". */
   rpId: string;
-  /** Relying party origin, e.g. "https://drive.grimes.id.au". */
+  /** Relying party origin, e.g. "https://drive.example.com". */
   origin: string;
 }
 

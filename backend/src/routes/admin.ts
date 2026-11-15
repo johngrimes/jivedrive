@@ -159,7 +159,7 @@ function toAdminInvite(invite: Invite, now: Date): AdminInviteResponse {
 
 /**
  * Build the full registration URL for an invite token, derived from the
- * configured WebAuthn origin (https://drive.grimes.id.au in production,
+ * configured WebAuthn origin (e.g. https://drive.example.com in production,
  * http://localhost:5173 in development).
  *
  * @param config - application configuration
