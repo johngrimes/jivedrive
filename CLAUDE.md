@@ -39,15 +39,8 @@ Before every push, the full local quality gate MUST pass against the exact code 
 - Anonymous share links are generated, displayed, and stored only until expiry: never listed, never revoked early. User-to-user folder grants (shares) are the opposite: stored in the database, listed back to the owner, and revocable at any time.
 - Sessions are opaque tokens in httpOnly, Secure, SameSite=Lax cookies. Secrets come from environment configuration, never from the repository.
 
-### Sprites
-
-- The project has ONE sprite for all tasks: `jivedrive-dev`. Never create a new sprite per task or per feature, and never name a sprite after a task.
-- If `jivedrive-dev` does not exist, provision it from the base image with `BASE_SPRITE=jivedrive-dev SKIP_CHECKPOINT=1 scripts/provision-base.sh` from the `~/Code/omp-sprites` checkout. Never call `create_sprite` directly for project work.
-- Reuse its installed dependencies across tasks: sync only changed files (via sprite file tools or `git`), not tarballs of the whole tree. Keep the app at `/home/sprite/app` (the platform denies `access()` under `/root`, which breaks vite).
-- Take a checkpoint before large installs or risky changes; destroy nothing without explicit user intent.
-
 ### Deployment
 
 - The app is deployable on Kubernetes from the Helm chart in `deploy/helm/jivedrive/`: one container serving the built SPA and the API, SQLite on a PVC, single replica with a Recreate strategy.
 - Deployment artifacts ship with every feature that changes runtime behaviour.
-- The WebAuthn relying party is `drive.grimes.id.au` in production and localhost in development.
+- The WebAuthn relying party is the deployment's own domain in production (`drive.grimes.id.au` for the reference deployment, configured in `deploy/helm/jivedrive/values-ci.yaml`) and localhost in development.

@@ -144,10 +144,10 @@ seeded users, or after an admin resets passkeys).
 Two settings must match what the browser sees:
 
 - `JIVEDRIVE_WEBAUTHN_RP_ID` is the relying party id: the registrable domain
-  of the site. In production this is `drive.grimes.id.au`; in development it
-  is `localhost`.
-- `JIVEDRIVE_WEBAUTHN_ORIGIN` is the exact origin users sign in from:
-  `https://drive.grimes.id.au` in production, `http://localhost:5173` in
+  of the site, e.g. `drive.example.com` in production and `localhost` in
+  development.
+- `JIVEDRIVE_WEBAUTHN_ORIGIN` is the exact origin users sign in from, e.g.
+  `https://drive.example.com` in production and `http://localhost:5173` in
   development.
 
 WebAuthn only works in a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts):
@@ -263,13 +263,13 @@ deleting files through rclone breaks existing share links to them.
 ## MCP server (AI assistants)
 
 JiveDrive is a remote [Model Context Protocol](https://modelcontextprotocol.io)
-server at `<origin>/mcp` (`https://drive.grimes.id.au/mcp` in production),
+server at `<origin>/mcp` (e.g. `https://drive.example.com/mcp`),
 so an AI assistant can work with a user's drive on their behalf.
 
 ### Connecting Claude
 
 In Claude (claude.ai or Claude Desktop), open Settings → Connectors → Add
-custom connector, and enter `https://drive.grimes.id.au/mcp` as the URL
+custom connector, and enter your `<origin>/mcp` URL
 (leave the OAuth client fields empty). Claude opens a JiveDrive consent
 page: sign in with your passkey if prompted, check the app name and the
 list of what it can do, and choose **Allow**. Any MCP client that supports
@@ -339,8 +339,8 @@ The app deploys to Kubernetes as a single replica (SQLite-backed) via the
 Helm chart in `deploy/helm/jivedrive/`. The chart creates a Deployment
 (`Recreate` strategy), a Service, an optional PVC for the database, a
 ConfigMap for non-secret configuration, and a Secret for S3 credentials. It
-creates no Ingress; expose the Service with your own Ingress at
-`https://drive.grimes.id.au`.
+creates no Ingress by default; enable `jivedrive.ingress` or expose the
+Service with your own Ingress at the configured WebAuthn origin.
 
 ### Bucket setup (once per bucket)
 
@@ -353,7 +353,7 @@ log. In the OVHcloud console, set the bucket CORS policy to:
 <?xml version="1.0" encoding="UTF-8"?>
 <CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
   <CORSRule>
-    <AllowedOrigin>https://drive.grimes.id.au</AllowedOrigin>
+    <AllowedOrigin>https://drive.example.com</AllowedOrigin>
     <AllowedMethod>GET</AllowedMethod>
     <AllowedMethod>PUT</AllowedMethod>
     <AllowedHeader>Content-Type</AllowedHeader>
@@ -363,7 +363,8 @@ log. In the OVHcloud console, set the bucket CORS policy to:
 </CORSConfiguration>
 ```
 
-Use `http://localhost:5173` as the origin in development. (The e2e mock S3
+Use your own app origin in place of `https://drive.example.com`, and
+`http://localhost:5173` in development. (The e2e mock S3
 server applies an equivalent policy itself.)
 
 ### 1. Build and push the image
@@ -385,6 +386,10 @@ docker push ghcr.io/johngrimes/jivedrive:0.1.0
 helm install jivedrive deploy/helm/jivedrive \
   --namespace jivedrive --create-namespace \
   --set jivedrive.persistence.enabled=true \
+  --set jivedrive.config.JIVEDRIVE_S3_ENDPOINT="https://s3.gra.io.cloud.ovh.net" \
+  --set jivedrive.config.JIVEDRIVE_S3_REGION="gra" \
+  --set jivedrive.config.JIVEDRIVE_WEBAUTHN_RP_ID="drive.example.com" \
+  --set jivedrive.config.JIVEDRIVE_WEBAUTHN_ORIGIN="https://drive.example.com" \
   --set jivedrive.secretConfig.JIVEDRIVE_S3_ACCESS_KEY_ID="<access key>" \
   --set jivedrive.secretConfig.JIVEDRIVE_S3_SECRET_ACCESS_KEY="<secret key>"
 ```
@@ -395,7 +400,7 @@ complete configuration reference and examples.
 
 ### 3. First sign-in
 
-Sign in at `https://drive.grimes.id.au` with a single "Sign in with passkey"
+Sign in at your configured origin with a single "Sign in with passkey"
 click. On first sign-in an account has no passkey yet, so click "First time?
 Use your username" and enter your username (the bootstrap admin's, or a user
 invited by an admin) to create the first passkey; subsequent sign-ins are
@@ -433,4 +438,13 @@ The favicon and app icons are generated from `frontend/public/favicon.svg`:
 after changing the SVG, run `bun run icons` to re-render the PNG and ICO
 files with Playwright's Chromium, and commit the results.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report security vulnerabilities
+privately, as described in [SECURITY.md](SECURITY.md).
+
+## License
+
 Copyright © 2026, John Grimes.
+
+Licensed under the [Apache License, Version 2.0](LICENSE).

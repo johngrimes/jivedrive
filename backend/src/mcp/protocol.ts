@@ -231,7 +231,7 @@ const ICONS = [
  * ignore it. Icon URLs are absolute on the app's own origin, the same
  * origin as `/mcp`, as the spec advises.
  *
- * @param origin - the app's origin, e.g. "https://drive.grimes.id.au"
+ * @param origin - the app's origin, e.g. "https://drive.example.com"
  * @returns name, version and icons
  */
 export function serverInfo(origin: string): ServerInfo {

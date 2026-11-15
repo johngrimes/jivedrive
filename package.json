@@ -1,6 +1,11 @@
 {
   "name": "jivedrive",
   "version": "0.1.0",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johngrimes/jivedrive.git"
+  },
   "private": true,
   "type": "module",
   "workspaces": [

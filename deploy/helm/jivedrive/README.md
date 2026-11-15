@@ -2,7 +2,7 @@
 
 ## Introduction
 
-The `jivedrive` chart deploys [JiveDrive](https://drive.grimes.id.au), a
+The `jivedrive` chart deploys [JiveDrive](https://github.com/johngrimes/jivedrive), a
 passkey-authenticated file browser for OVHcloud Object Storage, as a single
 container serving both the web UI and the REST API. The app stores its SQLite
 database (users, passkey credentials, invites, sessions) on a persistent
@@ -45,14 +45,13 @@ accessed over the S3 API.
   secret access key).
 - A bucket CORS policy allowing the app origin: uploads PUT files directly
   from the browser to the S3 endpoint (FR-008), so the bucket must allow
-  `PUT` and `Content-Type` from the app origin (default
-  `https://drive.grimes.id.au`; use `http://localhost:5173` in development).
+  `PUT` and `Content-Type` from the app origin (e.g.
+  `https://drive.example.com`; use `http://localhost:5173` in development).
   See the CORS policy in the root [README](../README.md) "Bucket setup".
 - A domain whose TLS is terminated in front of the service. This chart
-  intentionally creates no Ingress; for the WebAuthn relying party to work,
+  creates no Ingress by default; for the WebAuthn relying party to work,
   the app must be reachable at the origin configured via
-  `jivedrive.config.JIVEDRIVE_WEBAUTHN_ORIGIN` (default
-  `https://drive.grimes.id.au`).
+  `jivedrive.config.JIVEDRIVE_WEBAUTHN_ORIGIN` (required, no default).
 
 ## Installation
 
@@ -90,13 +89,17 @@ repository secrets; see `values-ci.yaml`).
 
 ### 2. Install the chart
 
-Provide the required S3 credentials and enable persistent storage. You can
-pass values with `--set`:
+Provide the S3 endpoint and credentials, the WebAuthn domain and origin,
+and enable persistent storage. You can pass values with `--set`:
 
 ```bash
 helm install jivedrive deploy/helm/jivedrive \
   --namespace jivedrive --create-namespace \
   --set jivedrive.persistence.enabled=true \
+  --set jivedrive.config.JIVEDRIVE_S3_ENDPOINT="https://s3.gra.io.cloud.ovh.net" \
+  --set jivedrive.config.JIVEDRIVE_S3_REGION="gra" \
+  --set jivedrive.config.JIVEDRIVE_WEBAUTHN_RP_ID="drive.example.com" \
+  --set jivedrive.config.JIVEDRIVE_WEBAUTHN_ORIGIN="https://drive.example.com" \
   --set jivedrive.secretConfig.JIVEDRIVE_S3_ACCESS_KEY_ID="<access key>" \
   --set jivedrive.secretConfig.JIVEDRIVE_S3_SECRET_ACCESS_KEY="<secret key>"
 ```
@@ -112,7 +115,8 @@ helm install jivedrive deploy/helm/jivedrive \
 
 The CI workflow deploys to minikube with
 `deploy/helm/jivedrive/values-ci.yaml` (persistence enabled, image from
-GHCR) plus `--set` overrides for the image tag and S3 credentials; see
+GHCR, the production S3 endpoint, WebAuthn domain and ingress) plus `--set`
+overrides for the image tag and S3 credentials; see
 `.github/workflows/quality-and-deploy.yml` for the exact command.
 
 ### 3. First sign-in
@@ -121,7 +125,7 @@ Enrollment is token-gated: a username alone never registers an account. If
 you configured a bootstrap admin (see [Examples](#examples)), set
 `JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN` (a secret, so put it in
 `jivedrive.secretConfig`), then open the registration link carrying that
-token — `https://drive.grimes.id.au/register?token=<token>` — and complete
+token — `https://drive.example.com/register?token=<token>` — and complete
 the passkey prompt. This registers the account's first (discoverable)
 passkey; subsequent sign-ins are username-less with a single "Sign in with
 passkey" click. New users enroll the same way, through an invite link
@@ -166,8 +170,8 @@ All values live under the `jivedrive` top-level key. Values are grouped as
 The following `JIVEDRIVE_*` variables are read by the backend
 (`backend/src/config.ts`). Non-secret variables belong in `jivedrive.config`;
 secrets belong in `jivedrive.secretConfig`. Defaults below match the backend's
-defaults, except where the chart defaults to the production deployment
-(`drive.grimes.id.au`, OVHcloud SGP).
+defaults, except the S3 endpoint and WebAuthn values, which the chart leaves
+empty so the app refuses to start until they are set.
 
 | Variable | Description | Chart default |
 | -------- | ----------- | ------------- |
@@ -183,8 +187,8 @@ defaults, except where the chart defaults to the production deployment
 | `JIVEDRIVE_RATE_LIMIT_SHARE_LINKS_PER_MINUTE` | Token-bucket refill per minute for `/s/<token>` anonymous share links | `60` |
 | `JIVEDRIVE_RATE_LIMIT_SHARE_LINKS_BURST` | Token-bucket burst capacity for `/s/<token>` anonymous share links | `30` |
 | `JIVEDRIVE_TRUST_PROXY` | Trust the TLS terminator's `X-Forwarded-For` header for rate-limit client identity (the backend itself defaults to `false`) | `true` (chart) |
-| `JIVEDRIVE_S3_ENDPOINT` | OVHcloud Object Storage S3 endpoint URL | `https://s3.sgp.io.cloud.ovh.net` |
-| `JIVEDRIVE_S3_REGION` | OVHcloud region | `sgp` |
+| `JIVEDRIVE_S3_ENDPOINT` | OVHcloud Object Storage S3 endpoint URL, e.g. `https://s3.gra.io.cloud.ovh.net` (required) | `""` |
+| `JIVEDRIVE_S3_REGION` | OVHcloud region | `gra` |
 | `JIVEDRIVE_S3_ACCESS_KEY_ID` | S3 access key id (secret; required) | `""` |
 | `JIVEDRIVE_S3_SECRET_ACCESS_KEY` | S3 secret access key (secret; required) | `""` |
 | `JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME` | Bootstrap admin username, provisioned at first start (optional) | unset |
@@ -192,18 +196,18 @@ defaults, except where the chart defaults to the production deployment
 | `JIVEDRIVE_BOOTSTRAP_ADMIN_PREFIX` | Prefix for the bootstrap admin | unset |
 | `JIVEDRIVE_BOOTSTRAP_ADMIN_IS_ADMIN` | Whether the bootstrap account is an admin (`true`/`false`) | `true` |
 | `JIVEDRIVE_BOOTSTRAP_ADMIN_ENROLLMENT_TOKEN` | Bootstrap admin enrollment token. A secret: put it in `jivedrive.secretConfig`, not `jivedrive.config`. REQUIRED (at least 16 characters) whenever `JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME` is set; enroll the admin by opening `/register?token=<token>` | unset (none) |
-| `JIVEDRIVE_WEBAUTHN_RP_ID` | WebAuthn relying party id; must match the site's registrable domain | `drive.grimes.id.au` |
-| `JIVEDRIVE_WEBAUTHN_ORIGIN` | WebAuthn relying party origin; must be the https origin users sign in from | `https://drive.grimes.id.au` |
-| `JIVEDRIVE_OVH_ENDPOINT` | OVHcloud API for rclone sync credentials: `ovh-eu`, `ovh-ca`, `ovh-us` or an http(s) base URL (production: `ovh-ca`) | unset (commented example) |
-| `JIVEDRIVE_OVH_PROJECT_ID` | Public Cloud project that owns the per-key Object Storage users; not a secret (production: `b4d5ce269b194d08a7b41d0fb10e3a3b`) | unset (commented example) |
+| `JIVEDRIVE_WEBAUTHN_RP_ID` | WebAuthn relying party id; must match the site's registrable domain, e.g. `drive.example.com` (required) | `""` |
+| `JIVEDRIVE_WEBAUTHN_ORIGIN` | WebAuthn relying party origin; must be the https origin users sign in from, e.g. `https://drive.example.com` (required) | `""` |
+| `JIVEDRIVE_OVH_ENDPOINT` | OVHcloud API for rclone sync credentials: `ovh-eu`, `ovh-ca`, `ovh-us` or an http(s) base URL | unset (commented example) |
+| `JIVEDRIVE_OVH_PROJECT_ID` | Public Cloud project that owns the per-key Object Storage users; not a secret | unset (commented example) |
 | `JIVEDRIVE_OVH_APPLICATION_KEY` | OVHcloud API application key (secret; in `secretConfig`) | `""` |
 | `JIVEDRIVE_OVH_APPLICATION_SECRET` | OVHcloud API application secret (secret; in `secretConfig`) | `""` |
 | `JIVEDRIVE_OVH_CONSUMER_KEY` | OVHcloud API consumer key (secret; in `secretConfig`) | `""` |
 
-The app refuses to start when `JIVEDRIVE_S3_ACCESS_KEY_ID` or
-`JIVEDRIVE_S3_SECRET_ACCESS_KEY` is missing, and in production
-(`NODE_ENV=production`, set by the image) when the WebAuthn variables are
-missing or not https. The five `JIVEDRIVE_OVH_*` variables are
+The app refuses to start when `JIVEDRIVE_S3_ENDPOINT`,
+`JIVEDRIVE_S3_ACCESS_KEY_ID` or `JIVEDRIVE_S3_SECRET_ACCESS_KEY` is
+missing, and in production (`NODE_ENV=production`, set by the image) when
+the WebAuthn variables are missing or not https. The five `JIVEDRIVE_OVH_*` variables are
 all-or-nothing: with all of them empty or unset rclone sync is disabled;
 if any is set, all five must be, or the app refuses to start.
 
@@ -278,10 +282,10 @@ jivedrive:
     pullPolicy: "IfNotPresent"
 
   config:
-    JIVEDRIVE_S3_ENDPOINT: "https://s3.sgp.io.cloud.ovh.net"
-    JIVEDRIVE_S3_REGION: "sgp"
-    JIVEDRIVE_WEBAUTHN_RP_ID: "drive.grimes.id.au"
-    JIVEDRIVE_WEBAUTHN_ORIGIN: "https://drive.grimes.id.au"
+    JIVEDRIVE_S3_ENDPOINT: "https://s3.gra.io.cloud.ovh.net"
+    JIVEDRIVE_S3_REGION: "gra"
+    JIVEDRIVE_WEBAUTHN_RP_ID: "drive.example.com"
+    JIVEDRIVE_WEBAUTHN_ORIGIN: "https://drive.example.com"
     JIVEDRIVE_BOOTSTRAP_ADMIN_USERNAME: "admin"
     JIVEDRIVE_BOOTSTRAP_ADMIN_BUCKET: "jivedrive-prod"
     JIVEDRIVE_BOOTSTRAP_ADMIN_PREFIX: "users/admin/"
