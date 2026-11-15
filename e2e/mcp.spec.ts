@@ -122,6 +122,7 @@ interface McpResponse {
  *
  * @param request - API request context
  * @param token - the access token
+ * @param method - JSON-RPC method
  * @param params - JSON-RPC params
  * @param protocolVersion - the `MCP-Protocol-Version` header to send
  * @returns the HTTP status and parsed body (null for an empty body)
