@@ -156,12 +156,60 @@ describe("POST /mcp transport", () => {
 
   it("refuses an unsupported MCP-Protocol-Version header with 400", async () => {
     const { app } = createMcpTestEnv();
+    for (const message of [
+      { jsonrpc: "2.0", id: 1, method: "ping" },
+      { jsonrpc: "2.0", method: "notifications/initialized" },
+    ]) {
+      const res = await postRaw(app, JSON.stringify(message), {
+        headers: { "mcp-protocol-version": "1999-01-01" },
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({
+        code: "unsupported_protocol_version",
+      });
+    }
+  });
+
+  it("negotiates initialize despite an unsupported MCP-Protocol-Version header", async () => {
+    const { app } = createMcpTestEnv();
     const res = await postRaw(
       app,
-      JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
-      { headers: { "mcp-protocol-version": "1999-01-01" } },
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "test", version: "1" },
+        },
+      }),
+      { headers: { "mcp-protocol-version": "2025-11-25" } },
     );
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as RpcResponse;
+    expect(body.result?.protocolVersion).toBe("2025-06-18");
+  });
+
+  it("negotiates initialize from the body, not a supported header", async () => {
+    const { app } = createMcpTestEnv();
+    const res = await postRaw(
+      app,
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "test", version: "1" },
+        },
+      }),
+      { headers: { "mcp-protocol-version": "2025-06-18" } },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as RpcResponse;
+    expect(body.result?.protocolVersion).toBe("2025-03-26");
   });
 
   it("accepts every supported MCP-Protocol-Version header", async () => {
