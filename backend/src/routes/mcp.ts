@@ -8,10 +8,11 @@
  *
  * Transport rules: an `Origin` header other than the app's own origin is
  * refused with 403 (DNS-rebinding guard); an unsupported
- * `MCP-Protocol-Version` header with 400; notifications and responses
- * are acknowledged with 202 and no body; malformed messages get a
- * JSON-RPC error with HTTP 400; `GET` and `DELETE` answer 405 (no SSE
- * stream, no sessions to end).
+ * `MCP-Protocol-Version` header with 400, except on `initialize`, which
+ * precedes negotiation and is answered with a version this server
+ * speaks; notifications and responses are acknowledged with 202 and no
+ * body; malformed messages get a JSON-RPC error with HTTP 400; `GET` and
+ * `DELETE` answer 405 (no SSE stream, no sessions to end).
  */
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
@@ -109,8 +110,17 @@ export function mcpRoutes(deps: McpRouteDeps): Hono<ServerEnv> {
         ),
     }),
     async (c) => {
+      const message = parseMessage(await c.req.text());
+      // The header carries the negotiated version, so it only binds
+      // requests after `initialize`; `initialize` negotiates from its body.
       const version = c.req.header("mcp-protocol-version");
-      if (version !== undefined && !isSupportedVersion(version)) {
+      const isInitialize =
+        message.kind === "request" && message.method === "initialize";
+      if (
+        !isInitialize &&
+        version !== undefined &&
+        !isSupportedVersion(version)
+      ) {
         return c.json(
           {
             error: `Unsupported MCP-Protocol-Version: ${version}`,
@@ -119,7 +129,6 @@ export function mcpRoutes(deps: McpRouteDeps): Hono<ServerEnv> {
           400,
         );
       }
-      const message = parseMessage(await c.req.text());
       if (message.kind === "invalid") {
         // Errors to well-formed requests (e.g. bad params) keep the
         // request's id and are ordinary JSON-RPC responses (200); parse

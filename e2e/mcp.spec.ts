@@ -124,6 +124,7 @@ interface McpResponse {
  * @param token - the access token
  * @param method - JSON-RPC method
  * @param params - JSON-RPC params
+ * @param protocolVersion - the `MCP-Protocol-Version` header to send
  * @returns the HTTP status and parsed body (null for an empty body)
  */
 async function mcp(
@@ -131,12 +132,13 @@ async function mcp(
   token: string,
   method: string,
   params: Record<string, unknown> = {},
+  protocolVersion = "2025-06-18",
 ): Promise<{ status: number; body: McpResponse | null }> {
   const res = await request.post("/mcp", {
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/json, text/event-stream",
-      "MCP-Protocol-Version": "2025-06-18",
+      "MCP-Protocol-Version": protocolVersion,
     },
     data: { jsonrpc: "2.0", id: 1, method, params },
   });
@@ -242,14 +244,26 @@ test("a user connects an MCP client, it uses the drive, and revoking cuts it off
     refresh_token: string;
   };
 
-  const init = await mcp(request, tokens.access_token, "initialize", {
-    protocolVersion: "2025-06-18",
-    capabilities: {},
-    clientInfo: { name: "e2e", version: "1" },
-  });
+  // A client newer than the server (Hermes) sends its own version in both
+  // the header and the body; the server answers with one it speaks, which
+  // the client then sends on later requests.
+  const init = await mcp(
+    request,
+    tokens.access_token,
+    "initialize",
+    {
+      protocolVersion: "2025-11-25",
+      capabilities: {},
+      clientInfo: { name: "e2e", version: "1" },
+    },
+    "2025-11-25",
+  );
   expect(init.status).toBe(200);
   expect(init.body).toMatchObject({
-    result: { serverInfo: { name: "jivedrive" } },
+    result: {
+      protocolVersion: "2025-06-18",
+      serverInfo: { name: "jivedrive" },
+    },
   });
   // The advertised icons are served, unauthenticated, from the app origin.
   const icons = init.body?.result?.serverInfo?.icons ?? [];
